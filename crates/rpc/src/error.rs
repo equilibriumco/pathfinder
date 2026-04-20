@@ -564,7 +564,7 @@ mod tests {
     mod rpc_error_subset {
         use assert_matches::assert_matches;
 
-        use super::super::{generate_rpc_error_subset, ApplicationError};
+        use super::super::ApplicationError;
 
         #[test]
         fn no_variant() {

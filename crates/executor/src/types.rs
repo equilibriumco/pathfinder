@@ -128,11 +128,9 @@ impl ConsensusPriceConverter {
     pub fn eth_l2_gas_price(&self) -> u128 {
         // Derive WEI price from the FRI price using the L1 gas price ratio.
         // l2_gas_price_wei = l2_gas_price_fri * l1_gas_price_wei / l1_gas_price_fri
-        if self.l1_gas_price_fri == 0 {
-            0
-        } else {
-            self.l2_gas_price_fri * self.l1_gas_price_wei / self.l1_gas_price_fri
-        }
+        (self.l2_gas_price_fri * self.l1_gas_price_wei)
+            .checked_div(self.l1_gas_price_fri)
+            .unwrap_or_default()
     }
 }
 

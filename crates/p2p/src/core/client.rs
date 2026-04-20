@@ -77,7 +77,7 @@ impl<C> Client<C> {
         while let Some(partial_result) = receiver.recv().await {
             let more_peers =
                 partial_result.with_context(|| format!("Getting closest peers to {peer}"))?;
-            peers.extend(more_peers.into_iter());
+            peers.extend(more_peers);
         }
 
         Ok(peers)

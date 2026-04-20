@@ -782,7 +782,7 @@ pub async fn download_new_classes(
 
         let missing = new_classes
             .into_iter()
-            .zip(exists.into_iter())
+            .zip(exists)
             .filter_map(|(class, exist)| (!exist).then_some(class))
             .collect::<HashSet<_>>();
 

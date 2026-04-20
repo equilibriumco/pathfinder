@@ -237,7 +237,7 @@ pub async fn trace_block_transactions(
             let traces = trace
                 .traces
                 .into_iter()
-                .zip(transactions.into_iter())
+                .zip(transactions)
                 .map(|(trace, tx)| Ok((tx.hash, map_gateway_trace(tx, trace)?)))
                 .collect::<Result<Vec<_>, TraceBlockTransactionsError>>()?;
             let output_format = if return_initial_reads {
