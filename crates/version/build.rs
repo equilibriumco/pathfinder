@@ -1,6 +1,6 @@
 //! Pathfinder build script.
 //!
-//! Just sets up `vergen` to query our git information for the build.
+//! Just sets up `vergen_gitcl` to query our git information for the build.
 
 pub fn main() {
     let force_version_env_var_name = "PATHFINDER_FORCE_VERSION";
@@ -14,12 +14,16 @@ pub fn main() {
         }
     }
 
-    // at 7.0.0 default enables everything compiled in, selected with feature-flags
     const ENABLE_DIRTY: bool = true;
     const ENABLE_TAGS: bool = true;
-    vergen::EmitBuilder::builder()
+    let gitcl = vergen_gitcl::GitclBuilder::default()
+        .describe(ENABLE_TAGS, ENABLE_DIRTY, None)
+        .build()
+        .expect("vergen failed; this is probably due to missing .git directory");
+    vergen_gitcl::Emitter::new()
+        .add_instructions(&gitcl)
+        .expect("vergen failed; this is probably due to missing .git directory")
         .fail_on_error()
-        .git_describe(ENABLE_DIRTY, ENABLE_TAGS, None)
         .emit()
         .expect("vergen failed; this is probably due to missing .git directory");
 }

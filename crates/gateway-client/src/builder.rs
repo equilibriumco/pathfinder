@@ -555,9 +555,10 @@ mod tests {
         use warp::Filter;
 
         use crate::builder::{retry0, retry_condition};
+        use crate::tests::bind_ephemeral;
 
         // A test helper
-        fn status_queue_server(
+        async fn status_queue_server(
             statuses: VecDeque<(StatusCode, &'static str)>,
         ) -> (JoinHandle<()>, SocketAddr) {
             use std::cell::RefCell;
@@ -572,19 +573,21 @@ mod tests {
                 }
             });
 
-            let (addr, run_srv) = warp::serve(any).bind_ephemeral(([127, 0, 0, 1], 0));
-            let server_handle = tokio::spawn(run_srv);
+            let (addr, listener) = bind_ephemeral().await;
+            let server = warp::serve(any).incoming(listener);
+            let server_handle = tokio::spawn(server.run());
             (server_handle, addr)
         }
 
         // A test helper
-        fn slow_server() -> (tokio::task::JoinHandle<()>, std::net::SocketAddr) {
+        async fn slow_server() -> (tokio::task::JoinHandle<()>, std::net::SocketAddr) {
             let any = warp::any().then(|| async {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 Result::<_, Infallible>::Ok(Builder::new().status(200).body(""))
             });
-            let (addr, run_srv) = warp::serve(any).bind_ephemeral(([127, 0, 0, 1], 0));
-            let server_handle = tokio::spawn(run_srv);
+            let (addr, listener) = bind_ephemeral().await;
+            let server = warp::serve(any).incoming(listener);
+            let server_handle = tokio::spawn(server.run());
             (server_handle, addr)
         }
 
@@ -605,7 +608,7 @@ mod tests {
                 (StatusCode::SERVICE_UNAVAILABLE, ""),
             ]);
 
-            let (_jh, addr) = status_queue_server(statuses);
+            let (_jh, addr) = status_queue_server(statuses).await;
             let result = retry0(
                 || async {
                     let mut url = reqwest::Url::parse("http://localhost/").unwrap();
@@ -642,7 +645,7 @@ mod tests {
                 (StatusCode::SERVICE_UNAVAILABLE, ""),
             ]);
 
-            let (_jh, addr) = status_queue_server(statuses);
+            let (_jh, addr) = status_queue_server(statuses).await;
             let error = retry0(
                 || async {
                     let mut url = reqwest::Url::parse("http://localhost/").unwrap();
@@ -668,7 +671,7 @@ mod tests {
 
             tokio::time::pause();
 
-            let (_jh, addr) = slow_server();
+            let (_jh, addr) = slow_server().await;
             static CNT: AtomicUsize = AtomicUsize::new(0);
 
             let fut = retry0(
@@ -707,18 +710,20 @@ mod tests {
         use warp::http::response::Builder;
         use warp::Filter;
 
+        use crate::tests::bind_ephemeral;
         use crate::{BlockId, Client, GatewayApi};
 
-        fn server() -> (tokio::task::JoinHandle<()>, std::net::SocketAddr) {
+        async fn server() -> (tokio::task::JoinHandle<()>, std::net::SocketAddr) {
             let any = warp::any().then(|| async { Builder::new().status(500).body("whatever") });
-            let (addr, run_srv) = warp::serve(any).bind_ephemeral(([127, 0, 0, 1], 0));
-            let server_handle = tokio::spawn(run_srv);
+            let (addr, listener) = bind_ephemeral().await;
+            let server = warp::serve(any).incoming(listener);
+            let server_handle = tokio::spawn(server.run());
             (server_handle, addr)
         }
 
         #[tokio::test]
         async fn causes_short_reply() {
-            let (_jh, addr) = server();
+            let (_jh, addr) = server().await;
             let mut url = reqwest::Url::parse("http://localhost/").unwrap();
             url.set_port(Some(addr.port())).unwrap();
             let client = Client::for_test(url).unwrap().disable_retry_for_tests();

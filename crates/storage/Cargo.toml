@@ -17,7 +17,7 @@ bitvec = { workspace = true }
 cached = { workspace = true }
 const_format = { workspace = true }
 fake = { workspace = true }
-flume = { version = "0.11.1", default-features = false, features = ["eventual-fairness"] }
+flume = { version = "0.12.0", default-features = false, features = ["eventual-fairness"] }
 hex = { workspace = true }
 metrics = { workspace = true }
 paste = { workspace = true }
@@ -33,7 +33,7 @@ r2d2 = { workspace = true }
 r2d2_sqlite = { workspace = true }
 rand = { workspace = true }
 rayon = { workspace = true }
-rusqlite = { workspace = true, features = ["bundled", "array", "hooks"] }
+rusqlite = { workspace = true, features = ["bundled", "array", "hooks", "fallible_uint"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["arbitrary_precision", "raw_value"] }
 serde_with = { workspace = true }

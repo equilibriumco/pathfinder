@@ -1,4 +1,3 @@
-use proc_macro2::{TokenStream, TokenTree};
 use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{parse_macro_input, Data, DeriveInput};
@@ -42,40 +41,23 @@ fn parse_attribute(
 
     // Find matching attribute and parse the "name" parameter as a string
     for attr in attrs {
-        if attr.path.is_ident("protobuf") {
-            match attr.parse_meta() {
-                Ok(syn::Meta::List(meta)) => {
-                    for meta_item in meta.nested.iter() {
-                        match meta_item {
-                            syn::NestedMeta::Meta(syn::Meta::NameValue(m))
-                                if m.path.is_ident("name") =>
-                            {
-                                if let syn::Lit::Str(lit) = &m.lit {
-                                    protobuf_type_name = lit.value();
-                                }
-                            }
-                            _ => {
-                                return Err(syn::Error::new(
-                                    meta_item.span(),
-                                    "expected name-value pairs",
-                                ))
-                            }
-                        }
-                    }
+        if attr.path().is_ident("protobuf") {
+            let Ok(meta_list) = attr.meta.require_list() else {
+                return Err(syn::Error::new(
+                    attr.meta.span(),
+                    "expected a list of name-value pairs",
+                ));
+            };
+            meta_list.parse_nested_meta(|meta| {
+                if meta.path.is_ident("name") {
+                    let value = meta.value()?;
+                    let s: syn::LitStr = value.parse()?;
+                    protobuf_type_name = s.value();
+                    Ok(())
+                } else {
+                    Err(meta.error("expected `name = \"value\"` pairs"))
                 }
-                Ok(_) => {
-                    return Err(syn::Error::new(
-                        attr.span(),
-                        "expected a list of name-value pairs",
-                    ))
-                }
-                Err(_) => {
-                    return Err(syn::Error::new(
-                        attr.span(),
-                        "failed to parse content of the attribute",
-                    ))
-                }
-            }
+            })?;
         }
     }
 
@@ -91,13 +73,18 @@ fn iterate_to_protobuf(data: &Data) -> Result<proc_macro2::TokenStream, syn::Err
     match *data {
         Data::Struct(ref data) => match data.fields {
             syn::Fields::Named(ref fields) => {
-                let recurse = fields.named.iter().map(|f| {
-                    let name = &f.ident;
-                    let name_in_proto = get_field_name_in_proto(f).or(name.clone());
-                    quote_spanned! {f.span()=>
-                        #name_in_proto: crate::ToProtobuf::to_protobuf(self.#name).into()
-                    }
-                });
+                let recurse: Vec<_> = fields
+                    .named
+                    .iter()
+                    .map(|f| {
+                        let name = &f.ident;
+                        let name_in_proto = get_field_name_in_proto(f)?.or(name.clone());
+                        Ok(quote_spanned! {f.span()=>
+                            #name_in_proto: crate::ToProtobuf::to_protobuf(self.#name).into()
+                        })
+                    })
+                    .collect::<Result<_, syn::Error>>()?;
+
                 Ok(quote! {
                     #(#recurse),*
                 })
@@ -150,12 +137,12 @@ fn iterate_try_from_protobuf(data: &Data) -> Result<proc_macro2::TokenStream, sy
     match *data {
         Data::Struct(ref data) => match data.fields {
             syn::Fields::Named(ref fields) => {
-                let recurse = fields.named.iter().map(|f| {
+                let recurse: Vec<_> = fields.named.iter().map(|f| {
                     let name = &f.ident;
-                    let is_optional = f.attrs.iter().any(|a| a.path.is_ident("optional"));
-                    let name_in_proto = get_field_name_in_proto(f).or(name.clone());
+                    let is_optional = f.attrs.iter().any(|a| a.path().is_ident("optional"));
+                    let name_in_proto = get_field_name_in_proto(f)?.or(name.clone());
 
-                    if is_optional {
+                    let res = if is_optional {
                         quote_spanned! {f.span()=>
                             #name: match input.#name_in_proto {
                                 Some(x) => Some(crate::TryFromProtobuf::try_from_protobuf(x, stringify!(#name_in_proto))?),
@@ -166,8 +153,11 @@ fn iterate_try_from_protobuf(data: &Data) -> Result<proc_macro2::TokenStream, sy
                         quote_spanned! {f.span()=>
                             #name: crate::TryFromProtobuf::try_from_protobuf(input.#name_in_proto, stringify!(#name_in_proto))?
                         }
-                    }
-                });
+                    };
+
+                    Ok(res)
+                }).collect::<Result<_, syn::Error>>()?;
+
                 Ok(quote! {
                     #(#recurse),*
                 })
@@ -205,30 +195,24 @@ fn iterate_try_from_protobuf(data: &Data) -> Result<proc_macro2::TokenStream, sy
 ///     pub new_name: u32,
 /// }
 /// ```
-fn get_field_name_in_proto(f: &syn::Field) -> Option<proc_macro2::Ident> {
-    f.attrs.iter().find_map(|a| {
-        if a.path.is_ident("rename") {
-            let tt = try_into_one_token_tree(a.tokens.clone());
-            match tt {
-                Some(proc_macro2::TokenTree::Group(g)) => match try_into_one_token_tree(g.stream())
-                {
-                    Some(proc_macro2::TokenTree::Ident(i)) => Some(i),
-                    Some(_) | None => None,
-                },
-                Some(_) | None => None,
-            }
-        } else {
-            None
-        }
-    })
-}
+fn get_field_name_in_proto(f: &syn::Field) -> Result<Option<proc_macro2::Ident>, syn::Error> {
+    let mut original_name = None;
+    let mut renames_count = 0;
 
-fn try_into_one_token_tree(stream: TokenStream) -> Option<TokenTree> {
-    let mut it = stream.into_iter();
-    let token = it.next();
-    if it.next().is_some() {
-        None
-    } else {
-        token
+    for a in &f.attrs {
+        if a.path().is_ident("rename") {
+            a.parse_nested_meta(|meta| {
+                renames_count += 1;
+
+                if renames_count > 1 {
+                    return Err(meta.error("expected at most one `rename(name)` attribute"));
+                }
+
+                original_name = Some(meta.path.require_ident()?.clone());
+                Ok(())
+            })?;
+        }
     }
+
+    Ok(original_name)
 }

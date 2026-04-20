@@ -43,8 +43,5 @@ serde_with = { workspace = true }
 sha3 = { workspace = true }
 thiserror = { workspace = true }
 
-[build-dependencies]
-vergen = { workspace = true, features = ["git", "gitcl"] }
-
 [dev-dependencies]
 rstest = { workspace = true }

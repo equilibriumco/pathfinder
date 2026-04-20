@@ -159,8 +159,7 @@ impl StorageAddress {
         .unwrap();
 
         let value = value.rem(max_address);
-        let mut b = [0u8; 32];
-        value.to_big_endian(&mut b);
+        let b = value.to_big_endian();
         Self(Felt::from_be_slice(&b).expect("Truncated value should fit into a felt"))
     }
 }

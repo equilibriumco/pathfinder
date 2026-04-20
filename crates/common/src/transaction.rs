@@ -1083,7 +1083,6 @@ mod tests {
     });
 
     #[rstest::rstest]
-    #[test]
     #[case::declare_v0(declare_v0(), GOERLI_TESTNET)]
     #[case::declare_v1(declare_v1(), ChainId::SEPOLIA_TESTNET)]
     #[case::declare_v2(declare_v2(), ChainId::SEPOLIA_TESTNET)]

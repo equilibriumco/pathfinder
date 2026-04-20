@@ -22,6 +22,7 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::future::Future;
+use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -576,7 +577,11 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
         )
         .with(warp::filters::trace::request());
 
-    let (socket_addr, server_fut) = warp::serve(handler).bind_ephemeral(([127, 0, 0, 1], cli.port));
+    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], cli.port)))
+        .await
+        .context("Binding server")?;
+    let socket_addr = listener.local_addr().context("Getting local address")?;
+    let server = warp::serve(handler).incoming(listener);
     let span = tracing::info_span!("Server::run", ?socket_addr);
     tracing::info!(parent: &span, "listening on http://{}", socket_addr);
 
@@ -587,7 +592,7 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
 
     debug_create_port_marker_file("feeder_gateway", socket_addr.port(), data_directory);
 
-    server_fut.instrument(span).await;
+    server.run().instrument(span).await;
 
     Ok(())
 }

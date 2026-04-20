@@ -43,7 +43,7 @@ pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
             drop_rename_create_index_stmt_batch: r"
                 DROP TABLE block_signatures;
                 ALTER TABLE block_signatures_new RENAME TO block_signatures;
-                CREATE UNIQUE INDEX block_signatures_block_number 
+                CREATE UNIQUE INDEX block_signatures_block_number
                     ON block_signatures(block_number);
             ",
         },
@@ -60,7 +60,7 @@ pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
             drop_rename_create_index_stmt_batch: r"
                 DROP TABLE class_definitions;
                 ALTER TABLE class_definitions_new RENAME TO class_definitions;
-                CREATE INDEX class_definitions_block_number 
+                CREATE INDEX class_definitions_block_number
                     ON class_definitions(block_number);
             ",
         },
@@ -99,9 +99,9 @@ pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
             drop_rename_create_index_stmt_batch: r"
                 DROP TABLE contract_updates;
                 ALTER TABLE contract_updates_new RENAME TO contract_updates;
-                CREATE INDEX contract_updates_block_number 
+                CREATE INDEX contract_updates_block_number
                     ON contract_updates(block_number);
-                CREATE INDEX contract_updates_address_block_number 
+                CREATE INDEX contract_updates_address_block_number
                     ON contract_updates(contract_address, block_number);
             ",
         },
@@ -118,9 +118,9 @@ pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
             drop_rename_create_index_stmt_batch: r"
                 DROP TABLE nonce_updates;
                 ALTER TABLE nonce_updates_new RENAME TO nonce_updates;
-                CREATE INDEX nonce_updates_block_number 
+                CREATE INDEX nonce_updates_block_number
                     ON nonce_updates(block_number);
-                CREATE INDEX nonce_updates_contract_address_id_block_number 
+                CREATE INDEX nonce_updates_contract_address_id_block_number
                     ON nonce_updates(contract_address_id, block_number);
             ",
         },
@@ -138,9 +138,9 @@ pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
             drop_rename_create_index_stmt_batch: r"
                 DROP TABLE storage_updates;
                 ALTER TABLE storage_updates_new RENAME TO storage_updates;
-                CREATE INDEX storage_updates_block_number 
+                CREATE INDEX storage_updates_block_number
                     ON storage_updates(block_number);
-                CREATE INDEX storage_updates_contract_address_id_storage_address_id_block_number 
+                CREATE INDEX storage_updates_contract_address_id_storage_address_id_block_number
                     ON storage_updates(contract_address_id, storage_address_id, block_number);
             ",
         },
@@ -158,7 +158,7 @@ pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
 
             false
         }),
-    );
+    )?;
 
     tracing::info!("Creating new tables and transferring data");
 
