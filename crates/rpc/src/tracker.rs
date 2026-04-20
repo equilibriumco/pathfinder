@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use cached::{Cached, TimedSizedCache};
 use pathfinder_common::transaction::TransactionVariant;
@@ -91,8 +92,9 @@ impl SubmittedTransactionTracker {
 impl TrackerState {
     fn new(limit_size: usize, limit_sec: u64) -> Self {
         let (sender, _receiver) = watch::channel(Default::default());
+        let limit = Duration::from_secs(limit_sec);
         Self {
-            cache: TimedSizedCache::with_size_and_lifespan(limit_size, limit_sec),
+            cache: TimedSizedCache::with_size_and_lifespan(limit_size, limit),
             sender,
         }
     }

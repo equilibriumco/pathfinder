@@ -357,9 +357,7 @@ mod pathfinder_primitives {
 
     impl SerializeForVersion for U256Hex {
         fn serialize(&self, serializer: Serializer) -> Result<crate::dto::Ok, crate::dto::Error> {
-            serializer.serialize_str(&hex_str::bytes_to_hex_str_stripped(&<[u8; 32]>::from(
-                self.0,
-            )))
+            serializer.serialize_str(&hex_str::bytes_to_hex_str_stripped(&self.0.to_big_endian()))
         }
     }
 

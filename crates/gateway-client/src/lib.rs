@@ -753,6 +753,8 @@ impl GatewayApi for Client {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use assert_matches::assert_matches;
     use pathfinder_common::macro_prelude::*;
     use pathfinder_common::prelude::*;
@@ -760,9 +762,19 @@ mod tests {
     use starknet_gateway_test_fixtures::testnet::*;
     use starknet_gateway_types::error::{test_response_from, KnownStarknetErrorCode};
     use starknet_gateway_types::request::add_transaction::ContractDefinition;
+    use tokio::net::TcpListener;
     use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
     use super::*;
+
+    pub async fn bind_ephemeral() -> (SocketAddr, TcpListener) {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("Failed to bind");
+        let addr = listener.local_addr().expect("Failed to get local address");
+
+        (addr, listener)
+    }
 
     fn response_body_from(code: KnownStarknetErrorCode) -> serde_json::Value {
         let (s, _) = test_response_from(code);
@@ -790,11 +802,11 @@ mod tests {
         );
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-        let (addr, run_srv) =
-            warp::serve(filter).bind_with_graceful_shutdown(([127, 0, 0, 1], 0), async {
-                shutdown_rx.await.ok();
-            });
-        let server_handle = tokio::spawn(run_srv);
+        let (addr, listener) = bind_ephemeral().await;
+        let server = warp::serve(filter).incoming(listener).graceful(async {
+            shutdown_rx.await.ok();
+        });
+        let server_handle = tokio::spawn(server.run());
 
         let url = format!("http://{addr}");
         let url = Url::parse(&url).unwrap();
@@ -1168,7 +1180,7 @@ mod tests {
             const EXPECTED_TOKEN: &str = "magic token value";
             const EXPECTED_ERROR_MESSAGE: &str = "error message";
 
-            fn test_server() -> (tokio::task::JoinHandle<()>, std::net::SocketAddr) {
+            async fn test_server() -> (tokio::task::JoinHandle<()>, std::net::SocketAddr) {
                 fn token_check(params: HashMap<String, String>) -> impl warp::Reply {
                     match params.get("token") {
                         Some(token) if token == EXPECTED_TOKEN => Response::builder().status(StatusCode::OK).body(serde_json::to_vec(&serde_json::json!({
@@ -1186,8 +1198,9 @@ mod tests {
                 let route = warp::any()
                     .and(warp::query::<HashMap<String, String>>())
                     .map(token_check);
-                let (addr, run_srv) = warp::serve(route).bind_ephemeral(([127, 0, 0, 1], 0));
-                let server_handle = tokio::spawn(run_srv);
+                let (addr, listener) = bind_ephemeral().await;
+                let server = warp::serve(route).incoming(listener);
+                let server_handle = tokio::spawn(server.run());
                 (server_handle, addr)
             }
 
@@ -1195,7 +1208,7 @@ mod tests {
             async fn test_token_is_passed_to_sequencer_api() {
                 use request::add_transaction::{Declare, DeclareV0V1V2};
 
-                let (_jh, addr) = test_server();
+                let (_jh, addr) = test_server().await;
                 let mut url = reqwest::Url::parse("http://localhost/").unwrap();
                 url.set_port(Some(addr.port())).unwrap();
                 let client = Client::for_test(url).unwrap();
@@ -1224,7 +1237,7 @@ mod tests {
             async fn test_declare_fails_with_no_token() {
                 use request::add_transaction::{Declare, DeclareV0V1V2};
 
-                let (_jh, addr) = test_server();
+                let (_jh, addr) = test_server().await;
                 let mut url = reqwest::Url::parse("http://localhost/").unwrap();
                 url.set_port(Some(addr.port())).unwrap();
                 let client = Client::for_test(url).unwrap();
@@ -1490,11 +1503,13 @@ mod tests {
                 .with(warp::filters::compression::gzip());
 
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-            let (server_addr, server_future) = warp::serve(server_filter)
-                .bind_with_graceful_shutdown(([127, 0, 0, 1], 0), async {
+            let (server_addr, listener) = bind_ephemeral().await;
+            let server = warp::serve(server_filter)
+                .incoming(listener)
+                .graceful(async {
                     shutdown_rx.await.ok();
                 });
-            let server_handle = tokio::spawn(server_future);
+            let server_handle = tokio::spawn(server.run());
 
             let server_url = Url::parse(&format!("http://{server_addr}")).unwrap();
             let client = Client::for_test(server_url)

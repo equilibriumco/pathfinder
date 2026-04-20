@@ -217,8 +217,8 @@ impl<'de> DeserializeAs<'de, BlockNumber> for StarknetBlockNumberAsHexStr {
 serde_with::serde_conv!(
     pub U256AsHexStr,
     primitive_types::U256,
-    |u: &U256| { let mut b = [0u8; 32]; u.to_big_endian(&mut b); bytes_to_hex_str(&b) },
-    |s: &str| bytes_from_hex_str::<32>(s).map(U256::from)
+    |u: &U256| { let b = u.to_big_endian(); bytes_to_hex_str(&b) },
+    |s: &str| bytes_from_hex_str::<32>(s).map(|b| U256::from_big_endian(&b))
 );
 
 serde_with::serde_conv!(

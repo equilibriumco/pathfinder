@@ -51,16 +51,17 @@ apollo_versioned_constants = { package = "apollo_versioned_constants", git = "ht
 ark-ff = "0.5.0"
 assert_matches = "1.5.0"
 async-trait = "0.1.89"
-axum = "0.8.8"
+axum = "0.8.9"
 base64 = "0.22.1"
-bincode = "2.0.1"
+# TODO: bincode development stopped, we should probably replace it. 3.0.0 is just a compile_error! in lib.rs
+bincode = "=2.0.1"
 bitvec = "1.0.1"
 blockifier = { version = "0.18.0-rc.1", features = [
     "node_api",
     "reexecution",
 ] }
 bytes = "1.11.1"
-cached = "0.44.0"
+cached = "0.59.0"
 # This one needs to match the version used by blockifier
 cairo-lang-starknet-classes = "=2.17.0-rc.4"
 # This one needs to match the version used by blockifier
@@ -71,12 +72,13 @@ casm-compiler-v1_0_0-alpha6 = { package = "cairo-lang-starknet", git = "https://
 casm-compiler-v1_0_0-rc0 = { package = "cairo-lang-starknet", git = "https://github.com/starkware-libs/cairo", tag = "v1.0.0-rc0" }
 casm-compiler-v1_1_1 = { package = "cairo-lang-starknet", version = "=1.1.1" }
 casm-compiler-v2 = { package = "cairo-lang-starknet", version = "=2.17.0-rc.4" }
-clap = "4.6.0"
+clap = "4.6.1"
 console-subscriber = "0.5"
 const-decoder = "0.4.0"
-const_format = "0.2.35"
-criterion = "0.5.1"
+const_format = "0.2.36"
+criterion = "0.8.2"
 dashmap = "6.1"
+# upgrade once `rand` is upgraded
 fake = "2.10.0"
 ff = "0.13"
 flate2 = "1.1.9"
@@ -86,75 +88,75 @@ governor = "0.10.4"
 hex = "0.4.3"
 http = "1.4.0"
 http-body = "1.0.1"
-hyper = "1.8.1"
+hyper = "1.9.0"
 ipnet = "2.12.0"
 jemallocator = "0.5.4"
-libc = "0.2.183"
+libc = "0.2.185"
 libp2p = { version = "0.56.0", default-features = false }
 libp2p-identity = "0.2.13"
 libp2p-plaintext = "0.43.0"
 libp2p-swarm-test = "0.6.0"
-metrics = "0.24.3"
-metrics-exporter-prometheus = { version = "0.18.1", default-features = false }
+metrics = "0.24.5"
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 mime = "0.3"
-mockall = "0.11.4"
+mockall = "0.14.0"
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
 paste = "1.0.15"
 pretty_assertions_sorted = "1.2.3"
-primitive-types = "0.12.2"
+primitive-types = "0.14.0"
 proc-macro2 = "1.0.106"
 proptest = "1.11.0"
-prost = "0.13.5"
-prost-build = "0.13.5"
-prost-types = "0.13.5"
+prost = "0.14.3"
+prost-build = "0.14.3"
+prost-types = "0.14.3"
 quote = "1.0"
 r2d2 = "0.8.10"
-r2d2_sqlite = "0.31.0"
+r2d2_sqlite = "0.33.0"
+# upgrade once supported by `primitive-types`
 rand = "0.8.5"
 rand_chacha = "0.3.1"
-rayon = "1.11.0"
-reqwest = { version = "0.12.28", default-features = false, features = [
+rayon = "1.12.0"
+reqwest = { version = "0.13.3", default-features = false, features = [
     "http2",
-    "rustls-tls-native-roots",
     "charset",
     "gzip",
     "deflate",
 ] }
-rstest = "0.18.2"
-rusqlite = "0.37.0"
-rustls = "0.23.37"
-semver = "1.0.27"
+rstest = "0.26.1"
+rusqlite = "0.39.0"
+rustls = "0.23.38"
+semver = "1.0.28"
 serde = "1.0.228"
 serde_json = "1.0.149"
-serde_with = "3.18.0"
-sha2 = "0.10.9"
-sha3 = "0.10"
-siphasher = "1.0.2"
+serde_with = "3.19.0"
+sha2 = "0.11.0"
+sha3 = "0.11"
+siphasher = "1.0.3"
 smallvec = "1.15.1"
 # This one needs to match the version used by blockifier
 starknet-types-core = "=0.2.4"
 # This one needs to match the version used by blockifier
 starknet_api = { version = "0.18.0-rc.1" }
-syn = "1.0"
+syn = "2.0"
 tempfile = "3.27"
-test-log = { version = "0.2.19", features = ["trace"] }
+test-log = { version = "0.2.20", features = ["trace"] }
 thiserror = "2.0.18"
 time = "0.3.47"
-tokio = "1.50"
-tokio-retry = "0.3.0"
+tokio = "1.52"
+tokio-retry = "0.3.1"
 tokio-stream = "0.1.18"
-tokio-tungstenite = "0.27"
+tokio-tungstenite = "0.29"
 tokio-util = { version = "0.7.18", features = ["rt"] }
-tower = { version = "0.4.13", default-features = false }
-tower-http = { version = "0.5.2", default-features = false }
+tower = { version = "0.5.3", default-features = false }
+tower-http = { version = "0.6.10", default-features = false }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["json"] }
 unsigned-varint = "0.8.0"
 url = "2.5.8"
-vergen = { version = "8", default-features = false }
+vergen-gitcl = { version = "9", default-features = false }
 void = "1.0.2"
-warp = "0.3.7"
+warp = { version = "0.4.3", features = ["server"] }
 wiremock = "0.6.5"
 zeroize = "1.8.2"
 zstd = "0.13.3"

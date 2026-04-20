@@ -7,7 +7,7 @@ license = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
-alloy = { version = "1.8", default-features = false, features = ["contract", "eips", "rpc-types", "provider-ws", "reqwest-rustls-tls"] }
+alloy = { version = "2.0", default-features = false, features = ["contract", "eips", "rpc-types", "provider-ws", "reqwest-rustls-tls"] }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 const-decoder = { workspace = true }
