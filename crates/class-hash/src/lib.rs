@@ -466,17 +466,15 @@ pub fn prepare_json_contract_definition(
                 .context("Program attribute was not an object")?;
 
             match vals.get_mut("accessible_scopes") {
-                Some(serde_json::Value::Array(array)) => {
-                    if array.is_empty() {
-                        vals.remove("accessible_scopes");
-                    }
+                Some(serde_json::Value::Array(array)) if array.is_empty() => {
+                    vals.remove("accessible_scopes");
                 }
+                Some(serde_json::Value::Array(_)) | None => {}
                 Some(_other) => {
                     anyhow::bail!(
                         r#"A program's attribute["accessible_scopes"] was not an array type."#
                     );
                 }
-                None => {}
             }
             // We don't know what this type is supposed to be, but if its missing it is
             // null.

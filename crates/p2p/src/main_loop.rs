@@ -433,14 +433,12 @@ where
                 }
                 kad::Event::RoutingUpdated {
                     peer, is_new_peer, ..
-                } => {
-                    if is_new_peer {
-                        send_test_event(
-                            &self._core_test_event_sender,
-                            TestEvent::PeerAddedToDHT { remote: peer },
-                        )
-                        .await
-                    }
+                } if is_new_peer => {
+                    send_test_event(
+                        &self._core_test_event_sender,
+                        TestEvent::PeerAddedToDHT { remote: peer },
+                    )
+                    .await
                 }
                 _ => {}
             },

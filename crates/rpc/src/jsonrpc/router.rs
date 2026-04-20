@@ -383,7 +383,7 @@ where
         indexed_results.push(indexed_result)
     }
 
-    indexed_results.sort_by(|(index_a, _), (index_b, _)| index_a.cmp(index_b));
+    indexed_results.sort_by_key(|(index, _)| *index);
 
     indexed_results.into_iter().map(|(_index, result)| result)
 }
@@ -543,21 +543,21 @@ mod tests {
         )]
         #[case::invalid_request_object(
             json!({"jsonrpc": "2.0", "method": 1, "params": "bar"}),
-            json!({"jsonrpc": "2.0", "id": null, 
+            json!({"jsonrpc": "2.0", "id": null,
                 "error": {"code": -32600, "message": "Invalid request", "data": {
                     "reason": "invalid type: integer `1`, expected a string at line 1 column 27"
                 }}}),
         )]
         #[case::empty_batch(
             json!([]),
-            json!({"jsonrpc": "2.0", "id": null, 
+            json!({"jsonrpc": "2.0", "id": null,
                 "error": {"code": -32600, "message": "Invalid request", "data": {
                     "reason": "A batch request must contain at least one request"
                 }}}),
         )]
         #[case::invalid_batch_single(
             json!([1]),
-            json!([{"jsonrpc": "2.0", "id": null, 
+            json!([{"jsonrpc": "2.0", "id": null,
                 "error": {"code": -32600, "message": "Invalid request", "data": {
                     "reason": "invalid type: integer `1`, expected struct Helper at line 1 column 1"
                 }}}
@@ -566,15 +566,15 @@ mod tests {
         #[case::invalid_batch_multiple(
             json!([1, 2, 3]),
             json!([
-                {"jsonrpc": "2.0", "id": null, 
+                {"jsonrpc": "2.0", "id": null,
                     "error": {"code": -32600, "message": "Invalid request", "data": {
                         "reason": "invalid type: integer `1`, expected struct Helper at line 1 column 1"
                     }}},
-                {"jsonrpc": "2.0", "id": null, 
+                {"jsonrpc": "2.0", "id": null,
                     "error": {"code": -32600, "message": "Invalid request", "data": {
                         "reason": "invalid type: integer `2`, expected struct Helper at line 1 column 1"
                     }}},
-                {"jsonrpc": "2.0", "id": null, 
+                {"jsonrpc": "2.0", "id": null,
                     "error": {"code": -32600, "message": "Invalid request", "data": {
                         "reason": "invalid type: integer `3`, expected struct Helper at line 1 column 1"
                     }}},
@@ -592,7 +592,7 @@ mod tests {
             json!([
                 {"jsonrpc": "2.0", "result": 7, "id": "1"},
                 {"jsonrpc": "2.0", "result": 19, "id": "2"},
-                {"jsonrpc": "2.0", "id": null, "error": 
+                {"jsonrpc": "2.0", "id": null, "error":
                     {"code": -32600, "message": "Invalid request", "data": {
                         "reason": "missing field `jsonrpc` at line 1 column 13"
                     }}},

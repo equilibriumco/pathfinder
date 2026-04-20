@@ -10,7 +10,7 @@ pub const fn const_adc(a: u64, b: u64, carry: u64) -> (u64, u64) {
 #[inline(always)]
 pub fn adc(a: &mut u64, b: u64, carry: u8) -> u8 {
     #[cfg(target_arch = "x86_64")]
-    unsafe {
+    {
         core::arch::x86_64::_addcarry_u64(carry, *a, b, a)
     }
 
@@ -42,7 +42,7 @@ pub const fn const_sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
 #[inline(always)]
 pub fn sbb(a: &mut u64, b: u64, borrow: u8) -> u8 {
     #[cfg(target_arch = "x86_64")]
-    unsafe {
+    {
         core::arch::x86_64::_subborrow_u64(borrow, *a, b, a)
     }
 

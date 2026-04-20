@@ -228,8 +228,8 @@ impl Transaction<'_> {
         // cater for them here. This works because the sql only updates the row
         // if it is null.
         let deployed = contract_updates
-            .iter()
-            .filter_map(|(_, update)| match update.class {
+            .values()
+            .filter_map(|update| match update.class {
                 Some(ContractClassUpdate::Deploy(x)) => Some(x),
                 _ => None,
             });
@@ -266,7 +266,7 @@ impl Transaction<'_> {
         const PREFIX: &str = r"
             SELECT b1.number, b1.hash, b1.state_commitment, b2.state_commitment
             FROM block_headers b1
-            LEFT OUTER JOIN block_headers b2 
+            LEFT OUTER JOIN block_headers b2
             ON b2.number = b1.number - 1
         ";
 
@@ -436,7 +436,7 @@ impl Transaction<'_> {
             SELECT
                 ch1.hash AS class_hash,
                 ch1.compiled_class_hash AS casm_hash
-            FROM 
+            FROM
                 casm_class_hashes ch1
             LEFT OUTER JOIN
                 casm_class_hashes ch2 ON ch1.hash = ch2.hash AND ch2.block_number < ch1.block_number
@@ -504,7 +504,7 @@ impl Transaction<'_> {
     pub fn highest_block_with_state_update(&self) -> anyhow::Result<Option<BlockNumber>> {
         let mut stmt = self.inner().prepare_cached(
             r"
-            SELECT max(storage_update.last_block, nonce_update.last_block, class_definition.last_block) 
+            SELECT max(storage_update.last_block, nonce_update.last_block, class_definition.last_block)
             FROM
                 (SELECT max(block_number) last_block FROM storage_updates) storage_update,
                 (SELECT max(block_number) last_block FROM nonce_updates) nonce_update,
