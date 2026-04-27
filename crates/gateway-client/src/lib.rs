@@ -61,6 +61,8 @@ pub trait GatewayApi: Sync {
     async fn preconfirmed_block(
         &self,
         block: BlockId,
+        round: u64,
+        transaction_count: u64,
     ) -> Result<PreConfirmedBlock, SequencerError> {
         unimplemented!();
     }
@@ -157,8 +159,12 @@ impl<T: GatewayApi + Sync + Send> GatewayApi for Arc<T> {
     async fn preconfirmed_block(
         &self,
         block: BlockId,
+        round: u64,
+        transaction_count: u64,
     ) -> Result<PreConfirmedBlock, SequencerError> {
-        self.as_ref().preconfirmed_block(block).await
+        self.as_ref()
+            .preconfirmed_block(block, round, transaction_count)
+            .await
     }
 
     async fn block_header(
@@ -504,6 +510,8 @@ impl GatewayApi for Client {
     async fn preconfirmed_block(
         &self,
         block: BlockId,
+        round: u64,
+        transaction_count: u64,
     ) -> Result<PreConfirmedBlock, SequencerError> {
         // Note that we don't do retries here.
         // The pre-confirmed block is polled continuously by the sync logic,
@@ -512,6 +520,8 @@ impl GatewayApi for Client {
             .feeder_gateway_request()
             .get_preconfirmed_block()
             .block(block)
+            .param("round", &round.to_string())
+            .param("transactionCount", &transaction_count.to_string())
             .retry(false)
             .get()
             .await?;
