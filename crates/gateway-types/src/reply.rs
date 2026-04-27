@@ -2573,5 +2573,45 @@ mod tests {
 
             let _pre_confirmed_block: PreConfirmedBlock = serde_json::from_str(json).unwrap();
         }
+
+        mod round_field {
+            use super::super::super::PreConfirmedBlock;
+
+            fn pre_confirmed_block_json(round: Option<u64>) -> serde_json::Value {
+                let mut body = serde_json::json!({
+                    "l1_gas_price":     {"price_in_wei": "0x0", "price_in_fri": "0x0"},
+                    "l1_data_gas_price":{"price_in_wei": "0x0", "price_in_fri": "0x0"},
+                    "l2_gas_price":     {"price_in_wei": "0x0", "price_in_fri": "0x0"},
+                    "sequencer_address": "0x0",
+                    "status":            "PRE_CONFIRMED",
+                    "timestamp":         0,
+                    "starknet_version":  "0.14.3",
+                    "l1_da_mode":        "BLOB",
+                    "transactions":          [],
+                    "transaction_receipts":  [],
+                    "transaction_state_diffs": [],
+                });
+                if let Some(r) = round {
+                    body.as_object_mut()
+                        .unwrap()
+                        .insert("round".into(), r.into());
+                }
+                body
+            }
+
+            #[test]
+            fn round_present_parses_to_some() {
+                let body = pre_confirmed_block_json(Some(5));
+                let block: PreConfirmedBlock = serde_json::from_value(body).unwrap();
+                assert_eq!(block.round, Some(5));
+            }
+
+            #[test]
+            fn round_absent_parses_to_none() {
+                let body = pre_confirmed_block_json(None);
+                let block: PreConfirmedBlock = serde_json::from_value(body).unwrap();
+                assert_eq!(block.round, None);
+            }
+        }
     }
 }
