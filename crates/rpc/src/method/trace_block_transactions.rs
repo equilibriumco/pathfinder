@@ -1278,6 +1278,7 @@ pub(crate) mod tests {
                 starknet_version: last_block_header.starknet_version,
                 l1_da_mode: L1DataAvailabilityMode::Blob,
                 transaction_state_diffs: vec![],
+                ..Default::default()
             };
 
             tx.commit()?;
@@ -1408,6 +1409,7 @@ pub(crate) mod tests {
                 starknet_version: last_block_header.starknet_version,
                 l1_da_mode: L1DataAvailabilityMode::Blob,
                 transaction_state_diffs: vec![],
+                ..Default::default()
             };
 
             tx.commit()?;

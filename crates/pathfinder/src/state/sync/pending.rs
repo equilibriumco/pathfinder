@@ -342,6 +342,7 @@ mod tests {
                 }),
                 None,
             ],
+            round: None,
         });
 
     /// Arbitrary timeout for receiving emits on the tokio channel. Otherwise

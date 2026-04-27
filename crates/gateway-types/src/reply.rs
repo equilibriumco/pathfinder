@@ -117,6 +117,14 @@ pub struct PreConfirmedBlock {
     >,
 
     pub transaction_state_diffs: Vec<Option<state_update::StateDiff>>,
+
+    /// Current consensus round at this height (TODO: Pending spec confirmation)
+    ///
+    /// From Starknet 0.14.3 onward, the pre-confirmed block endpoint returns
+    /// transactions added after the caller-supplied `transaction_count`.
+    /// Will default to `None` for earlier versions.
+    #[serde(default)]
+    pub round: Option<u64>,
 }
 
 #[derive(Copy, Clone, Debug, Default, Deserialize, PartialEq, Eq, serde::Serialize)]
