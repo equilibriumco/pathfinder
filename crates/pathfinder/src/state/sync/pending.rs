@@ -86,7 +86,7 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             latest_number + 1
         };
         let pre_confirmed_block = match sequencer
-            .preconfirmed_block(pre_confirmed_block_number.into())
+            .preconfirmed_block(pre_confirmed_block_number.into(), 0, 0)
             .await
         {
             Ok(r) => r,
@@ -359,7 +359,7 @@ mod tests {
             .returning(|| Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
         sequencer
             .expect_preconfirmed_block()
-            .returning(move |_| Ok(PRE_CONFIRMED_BLOCK.clone()));
+            .returning(move |_, _, _| Ok(PRE_CONFIRMED_BLOCK.clone()));
 
         let latest_hash = PRE_LATEST_BLOCK.parent_hash;
         let latest_block_number = BlockNumber::new_or_panic(1);
@@ -433,18 +433,20 @@ mod tests {
         sequencer
             .expect_pending_block()
             .returning(move || Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
-        sequencer.expect_preconfirmed_block().returning(move |_| {
-            let mut count = COUNT.lock().unwrap();
-            *count += 1;
+        sequencer
+            .expect_preconfirmed_block()
+            .returning(move |_, _, _| {
+                let mut count = COUNT.lock().unwrap();
+                *count += 1;
 
-            let block = match *count {
-                1 => b0_copy.clone(),
-                2 => PRE_CONFIRMED_BLOCK.clone(),
-                _ => b1_copy.clone(),
-            };
+                let block = match *count {
+                    1 => b0_copy.clone(),
+                    2 => PRE_CONFIRMED_BLOCK.clone(),
+                    _ => b1_copy.clone(),
+                };
 
-            Ok(block)
-        });
+                Ok(block)
+            });
 
         let sequencer = Arc::new(sequencer);
         let latest_hash = PRE_LATEST_BLOCK.parent_hash;
@@ -571,28 +573,30 @@ mod tests {
         sequencer
             .expect_pending_block()
             .returning(move || Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
-        sequencer.expect_preconfirmed_block().returning(move |_| {
-            let mut count = COUNT.lock().unwrap();
-            let block = match *count {
-                0 => {
-                    *count += 1;
-                    // Polling task has default state at the start, so this should produce an
-                    // event.
-                    PRE_CONFIRMED_BLOCK.clone()
-                }
-                1 => {
-                    *count += 1;
-                    // Same transaction count as before, should be ignored.
-                    PRE_CONFIRMED_BLOCK.clone()
-                }
-                _ => {
-                    // Lower transaction count than before, should be ignored.
-                    stale_pre_confirmed.clone()
-                }
-            };
+        sequencer
+            .expect_preconfirmed_block()
+            .returning(move |_, _, _| {
+                let mut count = COUNT.lock().unwrap();
+                let block = match *count {
+                    0 => {
+                        *count += 1;
+                        // Polling task has default state at the start, so this should produce an
+                        // event.
+                        PRE_CONFIRMED_BLOCK.clone()
+                    }
+                    1 => {
+                        *count += 1;
+                        // Same transaction count as before, should be ignored.
+                        PRE_CONFIRMED_BLOCK.clone()
+                    }
+                    _ => {
+                        // Lower transaction count than before, should be ignored.
+                        stale_pre_confirmed.clone()
+                    }
+                };
 
-            Ok(block)
-        });
+                Ok(block)
+            });
 
         let latest_block_number = BlockNumber::new_or_panic(10);
 
@@ -679,7 +683,7 @@ mod tests {
         });
         sequencer
             .expect_preconfirmed_block()
-            .returning(move |_| Ok(PRE_CONFIRMED_BLOCK.clone()));
+            .returning(move |_, _, _| Ok(PRE_CONFIRMED_BLOCK.clone()));
 
         let latest_block_number = BlockNumber::new_or_panic(10);
 
