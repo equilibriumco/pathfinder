@@ -529,6 +529,7 @@ impl StarknetVersion {
     // Poseidon hash, even when `class_commitment` is zero.
     pub const V_0_14_0: Self = Self::new(0, 14, 0, 0);
     pub const V_0_14_1: Self = Self::new(0, 14, 1, 0);
+    pub const V_0_14_3: Self = Self::new(0, 14, 3, 0);
 }
 
 impl FromStr for StarknetVersion {
