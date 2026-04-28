@@ -1,10 +1,146 @@
 use anyhow::Context;
-use pathfinder_common::{BlockHash, BlockNumber};
+use pathfinder_common::{BlockHash, BlockNumber, StarknetVersion};
 use starknet_gateway_client::GatewayApi;
+use starknet_gateway_types::reply::PreConfirmedBlock;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::state::sync::SyncEvent;
+
+/// Maximum gap, in blocks, between `current` and `latest` for pre-confirmed
+/// polling. Beyond this we skip as the node is still catching up.
+const IN_SYNC_THRESHOLD: u64 = 6;
+
+#[derive(Debug)]
+struct State {
+    /// Height we're currently polling.
+    block_number: BlockNumber,
+    /// `None` until we've seen a 0.14.3+ response for this height. Once
+    /// set, we track the round we're currently following and treat
+    /// any response with a higher round as a full reset.
+    round: Option<u64>,
+    /// Running merged view of the preconfirmed block at `block_number`.
+    /// `None` until we've received our first response for this height.
+    accumulated: Option<PreConfirmedBlock>,
+    /// Whether the pre-latest block was present at the last poll.
+    pre_latest_data_present: bool,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            block_number: BlockNumber::GENESIS,
+            round: None,
+            accumulated: None,
+            pre_latest_data_present: false,
+        }
+    }
+}
+
+impl State {
+    fn tx_count(&self) -> u64 {
+        self.accumulated
+            .as_ref()
+            .map(|b| b.transactions.len() as u64)
+            .unwrap_or(0)
+    }
+
+    /// Apply a fresh poll response, given the pre-latest presence
+    /// observed for this poll. Returns `true` if `accumulated` was
+    /// updated and the caller should emit the new view.
+    fn apply(&mut self, response: PreConfirmedBlock, new_pre_latest: bool) -> bool {
+        use std::cmp::Ordering;
+
+        let prev_pre_latest = self.pre_latest_data_present;
+        self.pre_latest_data_present = new_pre_latest;
+
+        // Starknet 0.14.3 introduced the incremental API: responses carry a
+        // `round` field and contain only the transactions added since the
+        // count we sent.
+        let is_delta_capable = response.starknet_version >= StarknetVersion::V_0_14_3;
+
+        if !is_delta_capable {
+            // Pre-0.14.3: response is always the full current view, but the
+            // gateway may re-serve the same view across polls. Suppress
+            // emissions that carry no new information.
+            let prev_tx_count = self.tx_count();
+            let new_tx_count = response.transactions.len() as u64;
+
+            let should_update = match new_tx_count.cmp(&prev_tx_count) {
+                Ordering::Greater => true,
+                Ordering::Less => false, // stale: same height, fewer txs
+                Ordering::Equal => prev_pre_latest && !new_pre_latest,
+            };
+
+            if should_update {
+                self.round = None;
+                self.accumulated = Some(response);
+            }
+            return should_update;
+        }
+
+        match (self.round, response.round) {
+            (_, None) => {
+                // Server claims ≥ 0.14.3 but omitted `round`. Treat as a
+                // malformed payload: full-replace, but don't advance our
+                // tracked round so we keep retrying without committing to
+                // a phantom round number.
+                tracing::warn!(
+                    "pre-confirmed response claims version {} but omits round; falling back to \
+                     full replace",
+                    response.starknet_version
+                );
+                self.round = None;
+                self.accumulated = Some(response);
+                true
+            }
+            (None, Some(r)) => {
+                // First 0.14.3 response for this height. Adopt verbatim.
+                self.round = Some(r);
+                self.accumulated = Some(response);
+                true
+            }
+            (Some(ours), Some(r)) => match r.cmp(&ours) {
+                Ordering::Greater => {
+                    // Round bumped: the sequencer abandoned the prior
+                    // proposal at this height, so any txs/header we'd
+                    // accumulated are no longer valid.
+                    self.round = Some(r);
+                    self.accumulated = Some(response);
+                    true
+                }
+                Ordering::Equal => {
+                    if response.transactions.is_empty() {
+                        false
+                    } else {
+                        // Delta at the same round — append.
+                        let acc = self
+                            .accumulated
+                            .as_mut()
+                            .expect("accumulated block present whenever round is Some");
+                        acc.transactions.extend(response.transactions);
+                        acc.transaction_receipts
+                            .extend(response.transaction_receipts);
+                        acc.transaction_state_diffs
+                            .extend(response.transaction_state_diffs);
+                        true
+                    }
+                }
+                Ordering::Less => {
+                    // Server is on an older round than we are; this should
+                    // never happen in normal operation. Hold our state
+                    // and wait for a fresh response.
+                    tracing::warn!(
+                        our_round = ours,
+                        server_round = r,
+                        "pre-confirmed response carries an older round than ours; ignoring"
+                    );
+                    false
+                }
+            },
+        }
+    }
+}
 
 /// Emits new pending data events while the current block is close to the latest
 /// block.
@@ -16,42 +152,6 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
     latest: watch::Receiver<(BlockNumber, BlockHash)>,
     current: watch::Receiver<(BlockNumber, BlockHash)>,
 ) {
-    const IN_SYNC_THRESHOLD: u64 = 6;
-
-    #[derive(Debug, Default)]
-    struct State {
-        block_number: BlockNumber,
-        tx_count: usize,
-        pre_latest_data_present: bool,
-    }
-
-    impl State {
-        /// Returns `true` if the state was updated, `false` otherwise.
-        fn update(&mut self, new_state: Self) -> bool {
-            use std::cmp::Ordering;
-
-            let should_update = match new_state.block_number.get().cmp(&self.block_number.get()) {
-                Ordering::Less => false,   // Stale pre-confirmed data (older block).
-                Ordering::Greater => true, // New pre-confirmed block.
-                Ordering::Equal => match new_state.tx_count.cmp(&self.tx_count) {
-                    Ordering::Less => false,   // Stale pre-confirmed data (fewer txs).
-                    Ordering::Greater => true, // New transactions available.
-                    Ordering::Equal => {
-                        // Check if pre-latest data got cleared (because it has been finalized),
-                        // which is a valid update if both block number and transaction count are
-                        // same.
-                        self.pre_latest_data_present && !new_state.pre_latest_data_present
-                    }
-                },
-            };
-
-            if should_update {
-                *self = new_state;
-            }
-            should_update
-        }
-    }
-
     let mut state = State::default();
 
     loop {
@@ -69,6 +169,9 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             continue;
         }
 
+        // Fetch the pre-latest block.
+        // Its presence determines the pre-confirmed block number we poll below,
+        // and it is later forwarded downstream in the emitted event.
         let pre_latest_data = match fetch_pre_latest(&sequencer, latest_number, latest_hash).await {
             Ok(r) => r.map(Box::new),
             Err(e) => {
@@ -85,8 +188,34 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
         } else {
             latest_number + 1
         };
-        let pre_confirmed_block = match sequencer
-            .preconfirmed_block(pre_confirmed_block_number.into(), 0, 0)
+
+        // A transient gateway inconsistency (e.g. the pre-latest block briefly
+        // disappears) can cause this poll's pre-confirmed block number to drop
+        // below the height we're already tracking. Just skip the poll, the state
+        // we've accumulated for the higher height is still valid for later.
+        if pre_confirmed_block_number < state.block_number {
+            tracing::debug!(
+                pre_confirmed_block_number = %pre_confirmed_block_number,
+                current = %state.block_number,
+                "Pre-confirmed block number stepped backwards; skipping poll"
+            );
+            tokio::time::sleep_until(t_fetch + poll_interval).await;
+            continue;
+        }
+
+        // New height. Invalidate any state from prior height.
+        if pre_confirmed_block_number > state.block_number {
+            state = State {
+                block_number: pre_confirmed_block_number,
+                ..State::default()
+            };
+        }
+
+        let req_round = state.round.unwrap_or(0);
+        let req_count = state.tx_count();
+
+        let response = match sequencer
+            .preconfirmed_block(pre_confirmed_block_number.into(), req_round, req_count)
             .await
         {
             Ok(r) => r,
@@ -97,17 +226,16 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             }
         };
 
-        let new_state = State {
-            block_number: pre_confirmed_block_number,
-            tx_count: pre_confirmed_block.transactions.len(),
-            pre_latest_data_present: pre_latest_data.is_some(),
-        };
-        if state.update(new_state) {
+        if state.apply(response, pre_latest_data.is_some()) {
+            let accumulated = state
+                .accumulated
+                .as_ref()
+                .expect("accumulated block present after a successful update");
             tracing::trace!("Emitting a pre-confirmed update");
             if let Err(e) = tx_event
                 .send(SyncEvent::PreConfirmed {
                     number: pre_confirmed_block_number,
-                    block: pre_confirmed_block.into(),
+                    block: accumulated.clone().into(),
                     pre_latest_data,
                 })
                 .await
