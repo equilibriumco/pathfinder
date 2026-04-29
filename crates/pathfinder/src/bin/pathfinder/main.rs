@@ -323,6 +323,18 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
     )
     .await;
 
+    let (preconfirmed_p2p_handle, _preconfirmed_p2p_client_and_event_rx) =
+        if config.preconfirmed_p2p.enable {
+            p2p_network::preconfirmed::start(
+                chain_id,
+                config.preconfirmed_p2p.clone(),
+                config.data_directory.clone(),
+            )
+            .await
+        } else {
+            (tokio::task::spawn(futures::future::pending()), None)
+        };
+
     let integration_testing_config = config.integration_testing;
 
     // Create L1 gas price provider and sync task if consensus is enabled
@@ -514,6 +526,7 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
         result = rpc_handle => handle_critical_task_result("RPC", result),
         result = sync_p2p_handle => handle_critical_task_result("Sync P2P network and handlers", result),
         result = consensus_p2p_handle => handle_critical_task_result("Consensus P2P network", result),
+        result = preconfirmed_p2p_handle => handle_critical_task_result("Preconfirmed P2P network", result),
         result = consensus_p2p_event_processing_handle => handle_critical_task_result("Consensus P2P event processing", result),
         result = consensus_engine_handle => handle_critical_task_result("Consensus engine", result),
         result = http_client_refresh_handle => handle_critical_task_result("HTTP client refresh", result),

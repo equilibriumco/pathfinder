@@ -214,4 +214,13 @@ pub struct P2PConsensusCli {
 pub struct P2PPreconfirmedCli {
     #[clap(flatten)]
     pub(super) core: P2PPreconfirmedCoreCli,
+
+    #[arg(
+        long = "p2p.preconfirmed.enable",
+        long_help = "Enable the preconfirmed P2P network.",
+        action = clap::ArgAction::Set,
+        default_value = "false",
+        env = "PATHFINDER_P2P_PRECONFIRMED_ENABLE",
+    )]
+    pub enable: bool,
 }

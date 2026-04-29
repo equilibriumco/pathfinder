@@ -18,7 +18,9 @@ pub struct P2PConsensusConfig;
 
 #[cfg(not(feature = "p2p"))]
 #[derive(Clone)]
-pub struct P2PPreconfirmedConfig;
+pub struct P2PPreconfirmedConfig {
+    pub enable: bool,
+}
 
 #[cfg(not(feature = "p2p"))]
 impl P2PSyncConfig {
@@ -37,6 +39,6 @@ impl P2PConsensusConfig {
 #[cfg(not(feature = "p2p"))]
 impl P2PPreconfirmedConfig {
     pub(super) fn parse_or_exit(_: ()) -> Self {
-        Self
+        Self { enable: false }
     }
 }

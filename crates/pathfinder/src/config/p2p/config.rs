@@ -50,6 +50,7 @@ pub struct P2PConsensusConfig {
 #[derive(Clone)]
 pub struct P2PPreconfirmedConfig {
     pub core: P2PCoreConfig,
+    pub enable: bool,
 }
 
 /// Generates an `impl From` implementation for a given `target` that converts
@@ -221,6 +222,7 @@ impl P2PPreconfirmedConfig {
         Self {
             // SAFETY: core conversion is safe because we exit the process on error
             core: args.core.into(),
+            enable: args.enable,
         }
     }
 }
