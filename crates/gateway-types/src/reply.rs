@@ -117,14 +117,160 @@ pub struct PreConfirmedBlock {
     >,
 
     pub transaction_state_diffs: Vec<Option<state_update::StateDiff>>,
+}
 
-    /// Current consensus round at this height (TODO: Pending spec confirmation)
-    ///
-    /// From Starknet 0.14.3 onward, the pre-confirmed block endpoint returns
-    /// transactions added after the caller-supplied `transaction_count`.
-    /// Will default to `None` for earlier versions.
+/// Flat wire struct that deserializes all response shapes returned by the
+/// feeder gateway's `get_preconfirmed_block` endpoint.
+///
+/// The `changed` field is the discriminant:
+/// - absent: legacy 0.14.2 full block (no `known_block_identifier`)
+/// - `false`: `Unchanged`
+/// - `true` + `status` present: new-style `Full`
+/// - `true` + `status` absent: `Delta`
+#[serde_as]
+#[derive(Debug, Deserialize)]
+struct PreConfirmedPollResponseWire {
     #[serde(default)]
-    pub round: Option<u64>,
+    changed: Option<bool>,
+
+    #[serde(default)]
+    known_block_identifier: Option<String>,
+
+    // Block-header fields: present on legacy and new-style Full responses.
+    #[serde(default)]
+    l1_gas_price: Option<GasPrices>,
+    #[serde(default)]
+    l1_data_gas_price: Option<GasPrices>,
+    #[serde(default)]
+    l2_gas_price: Option<GasPrices>,
+    #[serde(default)]
+    sequencer_address: Option<SequencerAddress>,
+    #[serde(default)]
+    status: Option<Status>,
+    #[serde(default)]
+    timestamp: Option<BlockTimestamp>,
+    #[serde(default)]
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    starknet_version: Option<StarknetVersion>,
+    #[serde(default)]
+    l1_da_mode: Option<L1DataAvailabilityMode>,
+
+    // Transaction vecs: present on Delta and Full responses.
+    #[serde(default)]
+    #[serde_as(as = "Vec<transaction::Transaction>")]
+    transactions: Vec<pathfinder_common::transaction::Transaction>,
+    #[serde(default)]
+    #[serde_as(as = "Vec<Option<transaction::Receipt>>")]
+    transaction_receipts: Vec<
+        Option<(
+            pathfinder_common::receipt::Receipt,
+            Vec<pathfinder_common::event::Event>,
+        )>,
+    >,
+    #[serde(default)]
+    transaction_state_diffs: Vec<Option<state_update::StateDiff>>,
+}
+
+/// The result of polling `get_preconfirmed_block`.
+///
+/// Three modes are possible:
+/// - `Unchanged` — the server confirms the caller's view is still current.
+/// - `Delta`     — the identifier matches; only new transactions are returned.
+/// - `Full`      — a complete block view is returned (identifier mismatch,
+///   first poll, or legacy 0.14.2 response).
+///
+/// Note: `Full` responses converted from the legacy 0.14.2 wire shape (no
+/// `changed` field) will have an empty string as `identifier`.
+#[derive(Debug, PartialEq)]
+pub enum PreConfirmedPollResponse {
+    Unchanged,
+
+    Delta {
+        identifier: String,
+        new_transactions: Vec<pathfinder_common::transaction::Transaction>,
+        new_receipts: Vec<
+            Option<(
+                pathfinder_common::receipt::Receipt,
+                Vec<pathfinder_common::event::Event>,
+            )>,
+        >,
+        new_state_diffs: Vec<Option<state_update::StateDiff>>,
+    },
+
+    Full {
+        identifier: String,
+        block: PreConfirmedBlock,
+    },
+}
+
+fn build_block(wire: &mut PreConfirmedPollResponseWire) -> PreConfirmedBlock {
+    PreConfirmedBlock {
+        l1_gas_price: wire
+            .l1_gas_price
+            .take()
+            .expect("l1_gas_price missing in pre-confirmed full block"),
+        l1_data_gas_price: wire
+            .l1_data_gas_price
+            .take()
+            .expect("l1_data_gas_price missing in pre-confirmed full block"),
+        l2_gas_price: wire
+            .l2_gas_price
+            .take()
+            .expect("l2_gas_price missing in pre-confirmed full block"),
+        sequencer_address: wire
+            .sequencer_address
+            .take()
+            .expect("sequencer_address missing in pre-confirmed full block"),
+        status: wire
+            .status
+            .take()
+            .expect("status missing in pre-confirmed full block"),
+        timestamp: wire
+            .timestamp
+            .take()
+            .expect("timestamp missing in pre-confirmed full block"),
+        starknet_version: wire
+            .starknet_version
+            .take()
+            .expect("starknet_version missing in pre-confirmed full block"),
+        l1_da_mode: wire
+            .l1_da_mode
+            .take()
+            .expect("l1_da_mode missing in pre-confirmed full block"),
+        transactions: std::mem::take(&mut wire.transactions),
+        transaction_receipts: std::mem::take(&mut wire.transaction_receipts),
+        transaction_state_diffs: std::mem::take(&mut wire.transaction_state_diffs),
+    }
+}
+
+impl From<PreConfirmedPollResponseWire> for PreConfirmedPollResponse {
+    fn from(mut wire: PreConfirmedPollResponseWire) -> Self {
+        match wire.changed {
+            // Legacy 0.14.2 shape: no `changed` field, all block fields present.
+            None => Self::Full {
+                identifier: String::new(),
+                block: build_block(&mut wire),
+            },
+            Some(false) => Self::Unchanged,
+            Some(true) if wire.status.is_some() => {
+                // New-style Full: block-header fields are present.
+                let identifier = wire.known_block_identifier.take().unwrap_or_default();
+                Self::Full {
+                    identifier,
+                    block: build_block(&mut wire),
+                }
+            }
+            Some(true) => {
+                // Delta: only transaction vecs are present; no block-header fields.
+                Self::Delta {
+                    identifier: wire.known_block_identifier.take().unwrap_or_default(),
+                    new_transactions: wire.transactions,
+                    new_receipts: wire.transaction_receipts,
+                    new_state_diffs: wire.transaction_state_diffs,
+                }
+            }
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default, Deserialize, PartialEq, Eq, serde::Serialize)]
@@ -2573,45 +2719,135 @@ mod tests {
 
             let _pre_confirmed_block: PreConfirmedBlock = serde_json::from_str(json).unwrap();
         }
+    }
 
-        mod round_field {
-            use super::super::super::PreConfirmedBlock;
+    mod preconfirmed_poll_response {
+        use pathfinder_common::{felt, GasPrice, TransactionHash};
 
-            fn pre_confirmed_block_json(round: Option<u64>) -> serde_json::Value {
-                let mut body = serde_json::json!({
-                    "l1_gas_price":     {"price_in_wei": "0x0", "price_in_fri": "0x0"},
-                    "l1_data_gas_price":{"price_in_wei": "0x0", "price_in_fri": "0x0"},
-                    "l2_gas_price":     {"price_in_wei": "0x0", "price_in_fri": "0x0"},
-                    "sequencer_address": "0x0",
-                    "status":            "PRE_CONFIRMED",
-                    "timestamp":         0,
-                    "starknet_version":  "0.14.3",
-                    "l1_da_mode":        "BLOB",
-                    "transactions":          [],
-                    "transaction_receipts":  [],
-                    "transaction_state_diffs": [],
-                });
-                if let Some(r) = round {
-                    body.as_object_mut()
-                        .unwrap()
-                        .insert("round".into(), r.into());
+        use super::super::{
+            GasPrices,
+            PreConfirmedPollResponse,
+            PreConfirmedPollResponseWire,
+            Status,
+        };
+
+        fn minimal_block_json() -> serde_json::Value {
+            serde_json::json!({
+                "l1_gas_price":       {"price_in_wei": "0xabcdef", "price_in_fri": "0x123456"},
+                "l1_data_gas_price":  {"price_in_wei": "0x0", "price_in_fri": "0x0"},
+                "l2_gas_price":       {"price_in_wei": "0x0", "price_in_fri": "0x0"},
+                "sequencer_address":  "0x0",
+                "status":             "PRE_CONFIRMED",
+                "timestamp":          42,
+                "starknet_version":   "0.14.3",
+                "l1_da_mode":         "BLOB",
+                "transactions":           [],
+                "transaction_receipts":   [],
+                "transaction_state_diffs": []
+            })
+        }
+
+        #[test]
+        fn unchanged() {
+            let wire: PreConfirmedPollResponseWire =
+                serde_json::from_value(serde_json::json!({"changed": false})).unwrap();
+            assert_eq!(
+                PreConfirmedPollResponse::from(wire),
+                PreConfirmedPollResponse::Unchanged
+            );
+        }
+
+        #[test]
+        fn delta() {
+            let json = serde_json::json!({
+                "changed": true,
+                "known_block_identifier": "abc",
+                "transactions": [
+                    {
+                        "type": "INVOKE_FUNCTION",
+                        "version": "0x1",
+                        "transaction_hash": "0x1",
+                        "sender_address": "0x1",
+                        "calldata": ["1"],
+                        "max_fee": "0x0",
+                        "signature": [],
+                        "nonce": "0x0"
+                    }
+                ],
+                "transaction_receipts": [],
+                "transaction_state_diffs": []
+            });
+            let wire: PreConfirmedPollResponseWire = serde_json::from_value(json).unwrap();
+            let response = PreConfirmedPollResponse::from(wire);
+
+            match response {
+                PreConfirmedPollResponse::Delta {
+                    identifier,
+                    new_transactions,
+                    new_receipts,
+                    new_state_diffs,
+                } => {
+                    assert_eq!(identifier, "abc");
+                    assert_eq!(new_transactions.len(), 1);
+                    assert_eq!(new_transactions[0].hash, TransactionHash(felt!("0x1")));
+                    assert_eq!(new_receipts.len(), 0);
+                    assert_eq!(new_state_diffs.len(), 0);
                 }
-                body
-            }
-
-            #[test]
-            fn round_present_parses_to_some() {
-                let body = pre_confirmed_block_json(Some(5));
-                let block: PreConfirmedBlock = serde_json::from_value(body).unwrap();
-                assert_eq!(block.round, Some(5));
-            }
-
-            #[test]
-            fn round_absent_parses_to_none() {
-                let body = pre_confirmed_block_json(None);
-                let block: PreConfirmedBlock = serde_json::from_value(body).unwrap();
-                assert_eq!(block.round, None);
+                other => panic!("expected Delta, got {other:?}"),
             }
         }
+
+        #[test]
+        fn full_new_style() {
+            let mut json = minimal_block_json();
+            json.as_object_mut()
+                .unwrap()
+                .insert("changed".into(), true.into());
+            json.as_object_mut()
+                .unwrap()
+                .insert("known_block_identifier".into(), "xyz".into());
+
+            let wire: PreConfirmedPollResponseWire = serde_json::from_value(json).unwrap();
+            let response = PreConfirmedPollResponse::from(wire);
+
+            match response {
+                PreConfirmedPollResponse::Full { identifier, block } => {
+                    assert_eq!(identifier, "xyz");
+                    assert_eq!(
+                        block.l1_gas_price,
+                        GasPrices {
+                            price_in_wei: GasPrice(0xabcdef),
+                            price_in_fri: GasPrice(0x123456),
+                        }
+                    );
+                    assert_eq!(block.timestamp.get(), 42);
+                    assert_eq!(block.starknet_version.to_string(), "0.14.3");
+                }
+                other => panic!("expected Full, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn legacy_full_no_identifier() {
+            let json = minimal_block_json();
+            let wire: PreConfirmedPollResponseWire = serde_json::from_value(json).unwrap();
+            let response = PreConfirmedPollResponse::from(wire);
+
+            match response {
+                PreConfirmedPollResponse::Full { identifier, block } => {
+                    assert!(identifier.is_empty());
+                    assert_eq!(
+                        block.l1_gas_price,
+                        GasPrices {
+                            price_in_wei: GasPrice(0xabcdef),
+                            price_in_fri: GasPrice(0x123456),
+                        }
+                    );
+                    assert_eq!(block.starknet_version.to_string(), "0.14.3");
+                }
+                other => panic!("expected Full, got {other:?}"),
+            }
+        }
+
     }
 }
