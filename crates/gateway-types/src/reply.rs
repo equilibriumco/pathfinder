@@ -129,7 +129,7 @@ pub struct PreConfirmedBlock {
 /// - `true` + `status` absent: `Delta`
 #[serde_as]
 #[derive(Debug, Deserialize)]
-struct PreConfirmedPollResponseWire {
+pub struct PreConfirmedPollResponseWire {
     #[serde(default)]
     changed: Option<bool>,
 
@@ -2848,6 +2848,5 @@ mod tests {
                 other => panic!("expected Full, got {other:?}"),
             }
         }
-
     }
 }

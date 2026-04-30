@@ -12,7 +12,11 @@ use pathfinder_common::class_definition::{
 use pathfinder_common::prelude::*;
 use reqwest::Url;
 use starknet_gateway_types::error::SequencerError;
-use starknet_gateway_types::reply::{PreConfirmedBlock, PreLatestBlock};
+use starknet_gateway_types::reply::{
+    PreConfirmedPollResponse,
+    PreConfirmedPollResponseWire,
+    PreLatestBlock,
+};
 use starknet_gateway_types::trace::{BlockTrace, TransactionTrace};
 use starknet_gateway_types::{reply, request};
 
@@ -61,9 +65,9 @@ pub trait GatewayApi: Sync {
     async fn preconfirmed_block(
         &self,
         block: BlockId,
-        round: u64,
-        transaction_count: u64,
-    ) -> Result<PreConfirmedBlock, SequencerError> {
+        known_block_identifier: Option<String>,
+        known_transaction_count: u64,
+    ) -> Result<PreConfirmedPollResponse, SequencerError> {
         unimplemented!();
     }
 
@@ -159,11 +163,11 @@ impl<T: GatewayApi + Sync + Send> GatewayApi for Arc<T> {
     async fn preconfirmed_block(
         &self,
         block: BlockId,
-        round: u64,
-        transaction_count: u64,
-    ) -> Result<PreConfirmedBlock, SequencerError> {
+        known_block_identifier: Option<String>,
+        known_transaction_count: u64,
+    ) -> Result<PreConfirmedPollResponse, SequencerError> {
         self.as_ref()
-            .preconfirmed_block(block, round, transaction_count)
+            .preconfirmed_block(block, known_block_identifier, known_transaction_count)
             .await
     }
 
@@ -510,23 +514,27 @@ impl GatewayApi for Client {
     async fn preconfirmed_block(
         &self,
         block: BlockId,
-        round: u64,
-        transaction_count: u64,
-    ) -> Result<PreConfirmedBlock, SequencerError> {
+        known_block_identifier: Option<String>,
+        known_transaction_count: u64,
+    ) -> Result<PreConfirmedPollResponse, SequencerError> {
         // Note that we don't do retries here.
         // The pre-confirmed block is polled continuously by the sync logic,
         // so retries are not needed.
-        let result = self
+        let id = known_block_identifier.as_deref().unwrap_or("");
+        let wire: PreConfirmedPollResponseWire = self
             .feeder_gateway_request()
             .get_preconfirmed_block()
             .block(block)
-            .param("round", &round.to_string())
-            .param("transactionCount", &transaction_count.to_string())
+            .param("knownBlockIdentifier", id)
+            .param(
+                "knownTransactionCount",
+                &known_transaction_count.to_string(),
+            )
             .retry(false)
             .get()
             .await?;
 
-        Ok(result)
+        Ok(wire.into())
     }
 
     #[tracing::instrument(skip(self))]
