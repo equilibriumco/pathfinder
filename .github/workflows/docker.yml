@@ -90,3 +90,18 @@ jobs:
       - name: Tag image with 'latest'
         if: ${{ !github.event.release.prerelease }}
         run: docker buildx imagetools create -t eqlabs/pathfinder:latest eqlabs/pathfinder:snapshot-${{ github.sha }}
+
+  # Dispatch the version bump workflow on pathfinder-infra
+  update-infra:
+    if: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
+    needs: tag-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch pathfinder-infra version bump
+        env:
+          GH_TOKEN: ${{ secrets.PATHFINDER_INFRA_DISPATCH_TOKEN }}
+        run: |
+          gh workflow run update-pathfinder-version.yml \
+            --repo equilibriumco/pathfinder-infra \
+            --ref main \
+            --field version=${{ github.event.release.tag_name }}
