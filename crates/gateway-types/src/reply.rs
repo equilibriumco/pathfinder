@@ -2724,12 +2724,7 @@ mod tests {
     mod preconfirmed_poll_response {
         use pathfinder_common::{felt, GasPrice, TransactionHash};
 
-        use super::super::{
-            GasPrices,
-            PreConfirmedPollResponse,
-            PreConfirmedPollResponseWire,
-            Status,
-        };
+        use super::super::{GasPrices, PreConfirmedPollResponse, PreConfirmedPollResponseWire};
 
         fn minimal_block_json() -> serde_json::Value {
             serde_json::json!({
