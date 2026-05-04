@@ -1,7 +1,7 @@
 use anyhow::Context;
-use pathfinder_common::{BlockHash, BlockNumber, StarknetVersion};
+use pathfinder_common::{BlockHash, BlockNumber};
 use starknet_gateway_client::GatewayApi;
-use starknet_gateway_types::reply::PreConfirmedBlock;
+use starknet_gateway_types::reply::{PreConfirmedBlock, PreConfirmedPollResponse};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -15,10 +15,10 @@ const IN_SYNC_THRESHOLD: u64 = 6;
 struct State {
     /// Height we're currently polling.
     block_number: BlockNumber,
-    /// `None` until we've seen a 0.14.3+ response for this height. Once
-    /// set, we track the round we're currently following and treat
-    /// any response with a higher round as a full reset.
-    round: Option<u64>,
+    /// Server-given block identifier from the last successful poll. `None`
+    /// until we've completed our first poll for this height. The server uses
+    /// this to detect when our view is stale and needs a full rebuild.
+    block_identifier: Option<String>,
     /// Running merged view of the preconfirmed block at `block_number`.
     /// `None` until we've received our first response for this height.
     accumulated: Option<PreConfirmedBlock>,
@@ -30,7 +30,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             block_number: BlockNumber::GENESIS,
-            round: None,
+            block_identifier: None,
             accumulated: None,
             pre_latest_data_present: false,
         }
@@ -48,96 +48,63 @@ impl State {
     /// Apply a fresh poll response, given the pre-latest presence
     /// observed for this poll. Returns `true` if `accumulated` was
     /// updated and the caller should emit the new view.
-    fn apply(&mut self, response: PreConfirmedBlock, new_pre_latest: bool) -> bool {
-        use std::cmp::Ordering;
-
+    fn apply(&mut self, response: PreConfirmedPollResponse, new_pre_latest: bool) -> bool {
         let prev_pre_latest = self.pre_latest_data_present;
         self.pre_latest_data_present = new_pre_latest;
 
-        // Starknet 0.14.3 introduced the incremental API: responses carry a
-        // `round` field and contain only the transactions added since the
-        // count we sent.
-        let is_delta_capable = response.starknet_version >= StarknetVersion::V_0_14_3;
+        match response {
+            PreConfirmedPollResponse::Unchanged => false,
 
-        if !is_delta_capable {
-            // Pre-0.14.3: response is always the full current view, but the
-            // gateway may re-serve the same view across polls. Suppress
-            // emissions that carry no new information.
-            let prev_tx_count = self.tx_count();
-            let new_tx_count = response.transactions.len() as u64;
-
-            let should_update = match new_tx_count.cmp(&prev_tx_count) {
-                Ordering::Greater => true,
-                Ordering::Less => false, // stale: same height, fewer txs
-                Ordering::Equal => prev_pre_latest && !new_pre_latest,
-            };
-
-            if should_update {
-                self.round = None;
-                self.accumulated = Some(response);
-            }
-            return should_update;
-        }
-
-        match (self.round, response.round) {
-            (_, None) => {
-                // Server claims ≥ 0.14.3 but omitted `round`. Treat as a
-                // malformed payload: full-replace, but don't advance our
-                // tracked round so we keep retrying without committing to
-                // a phantom round number.
-                tracing::warn!(
-                    "pre-confirmed response claims version {} but omits round; falling back to \
-                     full replace",
-                    response.starknet_version
-                );
-                self.round = None;
-                self.accumulated = Some(response);
-                true
-            }
-            (None, Some(r)) => {
-                // First 0.14.3 response for this height. Adopt verbatim.
-                self.round = Some(r);
-                self.accumulated = Some(response);
-                true
-            }
-            (Some(ours), Some(r)) => match r.cmp(&ours) {
-                Ordering::Greater => {
-                    // Round bumped: the sequencer abandoned the prior
-                    // proposal at this height, so any txs/header we'd
-                    // accumulated are no longer valid.
-                    self.round = Some(r);
-                    self.accumulated = Some(response);
-                    true
-                }
-                Ordering::Equal => {
-                    if response.transactions.is_empty() {
-                        false
-                    } else {
-                        // Delta at the same round — append.
-                        let acc = self
-                            .accumulated
-                            .as_mut()
-                            .expect("accumulated block present whenever round is Some");
-                        acc.transactions.extend(response.transactions);
-                        acc.transaction_receipts
-                            .extend(response.transaction_receipts);
-                        acc.transaction_state_diffs
-                            .extend(response.transaction_state_diffs);
-                        true
-                    }
-                }
-                Ordering::Less => {
-                    // Server is on an older round than we are; this should
-                    // never happen in normal operation. Hold our state
-                    // and wait for a fresh response.
+            PreConfirmedPollResponse::Delta {
+                identifier,
+                new_transactions,
+                new_receipts,
+                new_state_diffs,
+            } => {
+                // Per spec, the server only sends a delta when its identifier matches
+                // ours. A mismatch indicates a server bug or local state corruption;
+                // skip defensively and wait for the next poll (which our stored identifier
+                // will not match server's, triggering a full rebuild).
+                if self.block_identifier.as_ref() != Some(&identifier) {
                     tracing::warn!(
-                        our_round = ours,
-                        server_round = r,
-                        "pre-confirmed response carries an older round than ours; ignoring"
+                        ours = ?self.block_identifier,
+                        theirs = %identifier,
+                        "delta response identifier doesn't match ours; skipping"
                     );
+                    return false;
+                }
+                if new_transactions.is_empty() {
+                    return false;
+                }
+                let acc = self
+                    .accumulated
+                    .as_mut()
+                    .expect("accumulated present whenever block_identifier is Some");
+                acc.transactions.extend(new_transactions);
+                acc.transaction_receipts.extend(new_receipts);
+                acc.transaction_state_diffs.extend(new_state_diffs);
+                true
+            }
+
+            PreConfirmedPollResponse::Full { identifier, block } => {
+                // Emit on any of three independent signals:
+                //  - the server's identifier changed (round bump, new height, or first poll)
+                //  - new transactions arrived
+                //  - pre-latest just finalised
+                // Otherwise suppress: pre-0.14.3 gateways re-serve the same view across
+                // polls and we don't want to bombard downstream with redundant events.
+                let identifier_changed = self.block_identifier.as_ref() != Some(&identifier);
+                let new_txs_arrived = (block.transactions.len() as u64) > self.tx_count();
+                let pre_latest_finalised = prev_pre_latest && !new_pre_latest;
+
+                if identifier_changed || new_txs_arrived || pre_latest_finalised {
+                    self.block_identifier = Some(identifier);
+                    self.accumulated = Some(block);
+                    true
+                } else {
                     false
                 }
-            },
+            }
         }
     }
 }
@@ -211,11 +178,12 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             };
         }
 
-        let req_round = state.round.unwrap_or(0);
-        let req_count = state.tx_count();
-
         let response = match sequencer
-            .preconfirmed_block(pre_confirmed_block_number.into(), req_round, req_count)
+            .preconfirmed_block(
+                pre_confirmed_block_number.into(),
+                state.block_identifier.clone(),
+                state.tx_count(),
+            )
             .await
         {
             Ok(r) => r,
@@ -310,6 +278,7 @@ mod tests {
         GasPrices,
         L1DataAvailabilityMode,
         PreConfirmedBlock,
+        PreConfirmedPollResponse,
         PreLatestBlock,
         Status,
     };
@@ -470,7 +439,6 @@ mod tests {
                 }),
                 None,
             ],
-            round: None,
         });
 
     /// Arbitrary timeout for receiving emits on the tokio channel. Otherwise
@@ -487,7 +455,12 @@ mod tests {
             .returning(|| Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
         sequencer
             .expect_preconfirmed_block()
-            .returning(move |_, _, _| Ok(PRE_CONFIRMED_BLOCK.clone()));
+            .returning(move |_, _, _| {
+                Ok(PreConfirmedPollResponse::Full {
+                    identifier: String::new(),
+                    block: PRE_CONFIRMED_BLOCK.clone(),
+                })
+            });
 
         let latest_hash = PRE_LATEST_BLOCK.parent_hash;
         let latest_block_number = BlockNumber::new_or_panic(1);
@@ -573,7 +546,10 @@ mod tests {
                     _ => b1_copy.clone(),
                 };
 
-                Ok(block)
+                Ok(PreConfirmedPollResponse::Full {
+                    identifier: String::new(),
+                    block,
+                })
             });
 
         let sequencer = Arc::new(sequencer);
@@ -723,7 +699,10 @@ mod tests {
                     }
                 };
 
-                Ok(block)
+                Ok(PreConfirmedPollResponse::Full {
+                    identifier: String::new(),
+                    block,
+                })
             });
 
         let latest_block_number = BlockNumber::new_or_panic(10);
@@ -811,7 +790,12 @@ mod tests {
         });
         sequencer
             .expect_preconfirmed_block()
-            .returning(move |_, _, _| Ok(PRE_CONFIRMED_BLOCK.clone()));
+            .returning(move |_, _, _| {
+                Ok(PreConfirmedPollResponse::Full {
+                    identifier: String::new(),
+                    block: PRE_CONFIRMED_BLOCK.clone(),
+                })
+            });
 
         let latest_block_number = BlockNumber::new_or_panic(10);
 
