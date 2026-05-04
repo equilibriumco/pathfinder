@@ -729,6 +729,233 @@ mod tests {
         assert!(result.is_err(), "No event should be emitted for stale data");
     }
 
+    mod apply {
+        use pathfinder_common::macro_prelude::*;
+        use pathfinder_common::transaction::{
+            L1HandlerTransaction,
+            Transaction,
+            TransactionVariant,
+        };
+        use starknet_gateway_types::reply::{PreConfirmedBlock, PreConfirmedPollResponse};
+
+        use super::super::{BlockNumber, State};
+
+        fn placeholder_tx(index: usize) -> Transaction {
+            let hash = match index {
+                0 => transaction_hash!("0x1"),
+                1 => transaction_hash!("0x2"),
+                _ => transaction_hash!("0x3"),
+            };
+            Transaction {
+                hash,
+                variant: TransactionVariant::L1Handler(L1HandlerTransaction {
+                    contract_address: contract_address!("0x1"),
+                    entry_point_selector: entry_point!("0x55"),
+                    nonce: transaction_nonce!("0x0"),
+                    calldata: Vec::new(),
+                }),
+            }
+        }
+
+        /// Build a minimal `PreConfirmedBlock` with `n` placeholder
+        /// transactions and matching empty receipt/state-diff slots.
+        /// Other fields use `Default`.
+        fn block_with_txs(n: usize) -> PreConfirmedBlock {
+            let txs: Vec<Transaction> = (0..n).map(placeholder_tx).collect();
+            let receipts = vec![None; n];
+            let state_diffs = vec![None; n];
+            PreConfirmedBlock {
+                transactions: txs,
+                transaction_receipts: receipts,
+                transaction_state_diffs: state_diffs,
+                ..Default::default()
+            }
+        }
+
+        fn state(identifier: Option<&str>, txs: usize, pre_latest: bool) -> State {
+            State {
+                block_number: BlockNumber::new_or_panic(10),
+                block_identifier: identifier.map(String::from),
+                accumulated: if identifier.is_some() {
+                    Some(block_with_txs(txs))
+                } else {
+                    None
+                },
+                pre_latest_data_present: pre_latest,
+            }
+        }
+
+        #[test]
+        fn unchanged_response_is_noop() {
+            let mut s = state(Some("abc"), 1, false);
+            let original_accumulated = s.accumulated.clone();
+            let original_identifier = s.block_identifier.clone();
+            let original_number = s.block_number;
+
+            let emitted = s.apply(PreConfirmedPollResponse::Unchanged, true);
+
+            assert!(!emitted);
+            assert_eq!(s.accumulated, original_accumulated);
+            assert_eq!(s.block_identifier, original_identifier);
+            assert_eq!(s.block_number, original_number);
+            // apply always writes the new pre-latest presence
+            assert!(s.pre_latest_data_present);
+        }
+
+        #[test]
+        fn delta_with_mismatching_identifier_is_skipped() {
+            let mut s = state(Some("abc"), 1, false);
+            let original_accumulated = s.accumulated.clone();
+
+            let emitted = s.apply(
+                PreConfirmedPollResponse::Delta {
+                    identifier: "xyz".into(),
+                    new_transactions: vec![Transaction {
+                        hash: transaction_hash!("0x99"),
+                        variant: TransactionVariant::L1Handler(L1HandlerTransaction {
+                            contract_address: contract_address!("0x1"),
+                            entry_point_selector: entry_point!("0x55"),
+                            nonce: transaction_nonce!("0x0"),
+                            calldata: Vec::new(),
+                        }),
+                    }],
+                    new_receipts: vec![None],
+                    new_state_diffs: vec![None],
+                },
+                false,
+            );
+
+            assert!(!emitted);
+            assert_eq!(s.accumulated, original_accumulated);
+            assert_eq!(s.block_identifier, Some("abc".into()));
+        }
+
+        #[test]
+        fn delta_with_matching_identifier_and_empty_transactions_is_noop() {
+            let mut s = state(Some("abc"), 1, false);
+            let original_accumulated = s.accumulated.clone();
+
+            let emitted = s.apply(
+                PreConfirmedPollResponse::Delta {
+                    identifier: "abc".into(),
+                    new_transactions: vec![],
+                    new_receipts: vec![],
+                    new_state_diffs: vec![],
+                },
+                false,
+            );
+
+            assert!(!emitted);
+            assert_eq!(s.accumulated, original_accumulated);
+            assert_eq!(s.block_identifier, Some("abc".into()));
+        }
+
+        #[test]
+        fn delta_with_matching_identifier_appends() {
+            let mut s = state(Some("abc"), 1, false);
+
+            let new_tx = Transaction {
+                hash: transaction_hash!("0x99"),
+                variant: TransactionVariant::L1Handler(L1HandlerTransaction {
+                    contract_address: contract_address!("0x1"),
+                    entry_point_selector: entry_point!("0x55"),
+                    nonce: transaction_nonce!("0x0"),
+                    calldata: Vec::new(),
+                }),
+            };
+
+            let emitted = s.apply(
+                PreConfirmedPollResponse::Delta {
+                    identifier: "abc".into(),
+                    new_transactions: vec![new_tx],
+                    new_receipts: vec![None],
+                    new_state_diffs: vec![None],
+                },
+                false,
+            );
+
+            assert!(emitted);
+            let acc = s.accumulated.as_ref().unwrap();
+            assert_eq!(acc.transactions.len(), 2);
+            assert_eq!(acc.transaction_receipts.len(), 2);
+            assert_eq!(acc.transaction_state_diffs.len(), 2);
+            assert_eq!(s.block_identifier, Some("abc".into()));
+        }
+
+        #[test]
+        fn full_with_changed_identifier_emits() {
+            let mut s = state(Some("abc"), 1, false);
+            let new_block = block_with_txs(1);
+
+            let emitted = s.apply(
+                PreConfirmedPollResponse::Full {
+                    identifier: "xyz".into(),
+                    block: new_block.clone(),
+                },
+                false,
+            );
+
+            assert!(emitted);
+            assert_eq!(s.block_identifier, Some("xyz".into()));
+            assert_eq!(s.accumulated, Some(new_block));
+        }
+
+        #[test]
+        fn full_with_more_transactions_emits() {
+            let mut s = state(Some("abc"), 1, false);
+            let new_block = block_with_txs(2);
+
+            let emitted = s.apply(
+                PreConfirmedPollResponse::Full {
+                    identifier: "abc".into(),
+                    block: new_block.clone(),
+                },
+                false,
+            );
+
+            assert!(emitted);
+            assert_eq!(s.accumulated.as_ref().unwrap().transactions.len(), 2);
+        }
+
+        #[test]
+        fn full_with_pre_latest_finalised_emits() {
+            let mut s = state(Some("abc"), 2, true);
+            let same_block = block_with_txs(2);
+
+            // pre_latest transitions true → false: should force an emit
+            let emitted = s.apply(
+                PreConfirmedPollResponse::Full {
+                    identifier: "abc".into(),
+                    block: same_block.clone(),
+                },
+                false,
+            );
+
+            assert!(emitted);
+            assert_eq!(s.accumulated, Some(same_block));
+        }
+
+        #[test]
+        fn full_with_no_signals_is_deduped() {
+            let mut s = state(Some("abc"), 2, false);
+            let same_block = block_with_txs(2);
+            let original_accumulated = s.accumulated.clone();
+
+            // Same identifier, no new txs, no pre-latest transition: nothing to emit
+            let emitted = s.apply(
+                PreConfirmedPollResponse::Full {
+                    identifier: "abc".into(),
+                    block: same_block,
+                },
+                false,
+            );
+
+            assert!(!emitted);
+            assert_eq!(s.accumulated, original_accumulated);
+            assert_eq!(s.block_identifier, Some("abc".into()));
+        }
+    }
+
     /// The expected sequence for Starknet v0.14.0+ goes something like this:
     ///   1) Node is on block N
     ///   2) Sequencer is producing pre-confirmed block N + 1 (N is still
