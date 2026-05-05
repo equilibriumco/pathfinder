@@ -171,10 +171,6 @@ impl std::fmt::Display for ConsensusValue {
 /// the validator logic and storage usage patterns currently require a finalized
 /// block to be created even for empty proposals. For now, we create a (mostly)
 /// default block header with the necessary fields filled in.
-///
-/// NOTE: Until timestamps become part of an empty proposal, disseminating an
-/// empty proposal will cause timestamp discrepancies between nodes and
-/// validation errors.
 pub(crate) fn create_empty_block(
     height: u64,
     starknet_version: StarknetVersion,
