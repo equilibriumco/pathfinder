@@ -95,6 +95,7 @@ impl TestEnvironment {
         let (handle, worker_pool) = p2p_task::spawn(
             chain_id,
             P2PTaskConfig {
+                my_starknet_version: StarknetVersion::V_0_14_0,
                 my_validator_address: validator_address,
                 history_depth: Self::HISTORY_DEPTH,
             },

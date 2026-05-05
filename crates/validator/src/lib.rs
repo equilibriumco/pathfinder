@@ -50,12 +50,6 @@ use pathfinder_storage::{Storage, Transaction as DbTransaction};
 use rayon::prelude::*;
 use tracing::debug;
 
-/// Currently supported Starknet version for validation.
-///
-/// TODO: This is a temporary measure until we have a better way to provide
-/// validators with the Starknet version to validate against.
-const SUPPORTED_STARKNET_VERSION: StarknetVersion = StarknetVersion::new(0, 14, 0, 0);
-
 /// Type alias for the worker pool used by the concurrent executor.
 pub type ValidatorWorkerPool = Arc<
     pathfinder_executor::blockifier_reexports::WorkerPool<
@@ -176,6 +170,7 @@ impl ValidatorBlockInfoStage {
         l1_to_fri_validator: Option<&L1ToFriValidator>,
         l2_gas_price_provider: Option<&L2GasPriceProvider>,
         worker_pool: ValidatorWorkerPool,
+        my_starknet_version: StarknetVersion,
     ) -> Result<ValidatorTransactionBatchStage, ProposalHandlingError> {
         let Self {
             chain_id,
@@ -194,7 +189,7 @@ impl ValidatorBlockInfoStage {
             l1_data_gas_price_fri,
             l1_gas_price_wei,
             l1_data_gas_price_wei,
-            starknet_version: _,
+            starknet_version,
             version_constant_commitment: _,
         } = proposal_init;
         let _span = tracing::debug_span!(
@@ -205,6 +200,7 @@ impl ValidatorBlockInfoStage {
         )
         .entered();
 
+        let starknet_version = validate_starknet_version(starknet_version, my_starknet_version)?;
         validate_block_info_timestamp(height, timestamp, &main_storage, decided_blocks.clone())?;
 
         // Validate L1 gas prices if a provider is available
@@ -243,7 +239,7 @@ impl ValidatorBlockInfoStage {
                 l1_gas_price_wei,
                 l1_data_gas_price_wei,
             ),
-            SUPPORTED_STARKNET_VERSION,
+            starknet_version,
         )
         .context("Creating internal BlockInfo representation")
         .map_err(ProposalHandlingError::recoverable)?;
@@ -289,7 +285,7 @@ impl ValidatorBlockInfoStage {
             l1_data_gas_price_fri,
             l1_gas_price_wei,
             l1_data_gas_price_wei,
-            starknet_version: _,
+            starknet_version,
             version_constant_commitment: _,
         } = proposal_init;
         let _span = tracing::debug_span!(
@@ -301,6 +297,10 @@ impl ValidatorBlockInfoStage {
         .entered();
 
         tracing::debug!("Skipping block info validation for height {}", height);
+
+        let starknet_version: StarknetVersion = starknet_version
+            .parse()
+            .map_err(ProposalHandlingError::recoverable)?;
 
         let builder = SequencerAddress(builder.0);
         let l1_da_mode = match l1_da_mode {
@@ -321,7 +321,7 @@ impl ValidatorBlockInfoStage {
             builder,
             l1_da_mode,
             price_converter,
-            SUPPORTED_STARKNET_VERSION,
+            starknet_version,
         )
         .context("Creating internal BlockInfo representation")
         .map_err(ProposalHandlingError::recoverable)?;
@@ -339,6 +339,26 @@ impl ValidatorBlockInfoStage {
             decided_blocks,
         })
     }
+}
+
+fn validate_starknet_version(
+    proposal_starknet_version: String,
+    my_starknet_version: StarknetVersion,
+) -> Result<StarknetVersion, ProposalHandlingError> {
+    let starknet_version: StarknetVersion = proposal_starknet_version
+        .parse()
+        .context("parsing starknet version")
+        .map_err(ProposalHandlingError::recoverable)?;
+
+    if starknet_version != my_starknet_version {
+        let msg = format!(
+            "Starknet version mismatch: proposed {}; expected {}",
+            starknet_version, my_starknet_version
+        );
+        return Err(ProposalHandlingError::recoverable_msg(msg));
+    }
+
+    Ok(starknet_version)
 }
 
 fn validate_block_info_timestamp(
@@ -1217,7 +1237,7 @@ mod tests {
             l1_data_gas_price_wei: 0,
             l1_gas_price_fri: 0,
             l1_data_gas_price_fri: 0,
-            starknet_version: "".to_string(),
+            starknet_version: StarknetVersion::V_0_14_0.to_string(),
             version_constant_commitment: Default::default(),
         }
     }
@@ -1493,7 +1513,7 @@ mod tests {
             l1_data_gas_price_fri: 1,
             l1_gas_price_wei: 1_000_000_000,
             l1_data_gas_price_wei: 1,
-            starknet_version: "".to_string(),
+            starknet_version: StarknetVersion::V_0_14_0.to_string(),
             version_constant_commitment: Default::default(),
         };
 
@@ -1509,6 +1529,7 @@ mod tests {
                 None,
                 None,
                 worker_pool,
+                StarknetVersion::V_0_14_0,
             )
             .expect("Failed to validate block info");
 
@@ -1617,7 +1638,7 @@ mod tests {
             l1_data_gas_price_fri: 1,
             l1_gas_price_wei: 1_000_000_000,
             l1_data_gas_price_wei: 1,
-            starknet_version: "".to_string(),
+            starknet_version: StarknetVersion::V_0_14_0.to_string(),
             version_constant_commitment: Default::default(),
         };
 
@@ -1631,6 +1652,7 @@ mod tests {
             None,
             None,
             worker_pool,
+            StarknetVersion::V_0_14_0,
         );
 
         if let Some(expected_error_message) = expected_error_message {
@@ -1672,7 +1694,7 @@ mod tests {
             l1_data_gas_price_fri: 1,
             l1_gas_price_wei: 1_000_000_000,
             l1_data_gas_price_wei: 1,
-            starknet_version: "".to_string(),
+            starknet_version: StarknetVersion::V_0_14_0.to_string(),
             version_constant_commitment: Default::default(),
         };
 
@@ -1690,7 +1712,8 @@ mod tests {
                         None,
                         None,
                         None,
-                        worker_pool
+                        worker_pool,
+                        StarknetVersion::V_0_14_0,
                     )
                     .is_ok(),
                 "Genesis block timestamp validation should pass even without parent"
@@ -1704,6 +1727,7 @@ mod tests {
                     None,
                     None,
                     worker_pool,
+                    StarknetVersion::V_0_14_0,
                 )
                 .unwrap_err();
             let expected_err_message = format!(

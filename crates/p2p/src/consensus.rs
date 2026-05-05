@@ -253,6 +253,7 @@ mod tests {
         VoteType,
     };
     use p2p_proto::transaction::L1HandlerV0;
+    use pathfinder_common::StarknetVersion;
     use pathfinder_crypto::Felt;
 
     use super::*;
@@ -308,7 +309,7 @@ mod tests {
             l1_data_gas_price_fri: 3000,
             l1_gas_price_wei: 4000,
             l1_data_gas_price_wei: 5000,
-            starknet_version: "".to_string(),
+            starknet_version: StarknetVersion::V_0_14_0.to_string(),
             version_constant_commitment: Default::default(),
         };
         let proposal = ProposalPart::Init(proposal_init);
@@ -354,7 +355,7 @@ mod tests {
             l1_data_gas_price_fri: 3000,
             l1_gas_price_wei: 4000,
             l1_data_gas_price_wei: 5000,
-            starknet_version: "".to_string(),
+            starknet_version: StarknetVersion::V_0_14_0.to_string(),
             version_constant_commitment: Default::default(),
         };
         let proposal = ProposalPart::Init(proposal_init);
@@ -590,7 +591,7 @@ mod tests {
             l1_data_gas_price_fri: 3000 + base as u128,
             l1_gas_price_wei: 4000 + base as u128,
             l1_data_gas_price_wei: 5000 + base as u128,
-            starknet_version: "".to_string(),
+            starknet_version: StarknetVersion::V_0_14_0.to_string(),
             version_constant_commitment: Default::default(),
         }));
 

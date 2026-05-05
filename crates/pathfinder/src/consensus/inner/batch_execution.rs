@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Context;
 use p2p::consensus::HeightAndRound;
 use p2p_proto::consensus as proto_consensus;
-use pathfinder_common::DecidedBlocks;
+use pathfinder_common::{DecidedBlocks, StarknetVersion};
 use pathfinder_gas_price::{L1GasPriceProvider, L2GasPriceProvider};
 use pathfinder_storage::Storage;
 use pathfinder_validator::error::ProposalHandlingError;
@@ -36,6 +36,7 @@ pub struct BatchExecutionManager {
     worker_pool: ValidatorWorkerPool,
     compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
+    my_starknet_version: StarknetVersion,
 }
 
 impl BatchExecutionManager {
@@ -46,6 +47,7 @@ impl BatchExecutionManager {
         worker_pool: ValidatorWorkerPool,
         compiler_resource_limits: pathfinder_compiler::ResourceLimits,
         blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
+        my_starknet_version: StarknetVersion,
     ) -> Self {
         Self {
             executing: HashSet::new(),
@@ -54,6 +56,7 @@ impl BatchExecutionManager {
             worker_pool,
             compiler_resource_limits,
             blockifier_libfuncs,
+            my_starknet_version,
         }
     }
 
@@ -132,6 +135,7 @@ impl BatchExecutionManager {
                         None, // TODO: Add L1ToFriValidator when oracle is available
                         self.l2_gas_price_provider.as_ref(),
                         self.worker_pool.clone(),
+                        self.my_starknet_version,
                     )?
                 }
                 ValidatorStage::TransactionBatch(stage) => stage,
@@ -382,7 +386,7 @@ mod tests {
             l1_data_gas_price_wei: 0,
             l1_gas_price_fri: 0,
             l1_data_gas_price_fri: 0,
-            starknet_version: "".to_string(),
+            starknet_version: StarknetVersion::V_0_14_0.to_string(),
             version_constant_commitment: Default::default(),
         }
     }
@@ -407,6 +411,7 @@ mod tests {
             worker_pool,
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
+            StarknetVersion::V_0_14_0,
         );
         let height_and_round = HeightAndRound::new(2, 1);
 
@@ -480,7 +485,7 @@ mod tests {
             l1_data_gas_price_fri: 0,
             l1_gas_price_wei: 0,
             l1_data_gas_price_wei: 0,
-            starknet_version: "".to_string(),
+            starknet_version: StarknetVersion::V_0_14_0.to_string(),
             version_constant_commitment: Default::default(),
         };
 
@@ -491,6 +496,7 @@ mod tests {
             worker_pool,
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
+            StarknetVersion::V_0_14_0,
         );
 
         let mut deferred_executions: std::collections::HashMap<HeightAndRound, DeferredExecution> =
@@ -589,6 +595,7 @@ mod tests {
             worker_pool.clone(),
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
+            StarknetVersion::V_0_14_0,
         );
 
         let mut deferred_executions: std::collections::HashMap<HeightAndRound, DeferredExecution> =
@@ -735,6 +742,7 @@ mod tests {
             worker_pool,
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
+            StarknetVersion::V_0_14_0,
         );
         let height_and_round = HeightAndRound::new(2, 1);
 
@@ -858,6 +866,7 @@ mod tests {
             worker_pool,
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
+            StarknetVersion::V_0_14_0,
         );
         let height_and_round = HeightAndRound::new(2, 1);
 
@@ -911,6 +920,7 @@ mod tests {
             worker_pool,
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
+            StarknetVersion::V_0_14_0,
         );
         let height_and_round = HeightAndRound::new(2, 1);
 
@@ -968,6 +978,7 @@ mod tests {
             worker_pool,
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
+            StarknetVersion::V_0_14_0,
         );
         let height_and_round = HeightAndRound::new(2, 1);
 

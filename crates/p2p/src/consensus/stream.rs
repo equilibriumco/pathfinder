@@ -133,6 +133,7 @@ impl<T> OutgoingStreamState<T> {
 #[cfg(test)]
 mod tests {
     use p2p_proto::common::{Address, L1DataAvailabilityMode};
+    use pathfinder_common::StarknetVersion;
     use pathfinder_crypto::Felt;
 
     use super::*;
@@ -153,7 +154,7 @@ mod tests {
             l1_data_gas_price_fri: 3000,
             l1_gas_price_wei: 4000,
             l1_data_gas_price_wei: 5000,
-            starknet_version: "".to_string(),
+            starknet_version: StarknetVersion::V_0_14_0.to_string(),
             version_constant_commitment: Default::default(),
         };
         let proposal = p2p_proto::consensus::ProposalPart::Init(proposal_init);

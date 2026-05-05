@@ -29,6 +29,7 @@ use pathfinder_common::{
     DecidedBlock,
     DecidedBlocks,
     ProposalCommitment,
+    StarknetVersion,
 };
 use pathfinder_consensus::{
     ConsensusCommand,
@@ -166,6 +167,7 @@ pub fn spawn(
         worker_pool.clone(),
         compiler_resource_limits,
         blockifier_libfuncs,
+        config.my_starknet_version,
     );
     // Keep track of whether we've already emitted a warning about the
     // event channel size exceeding the limit, to avoid spamming the logs.
@@ -288,6 +290,7 @@ pub fn spawn(
                                     l2_gas_price_provider.clone(),
                                     inject_failure,
                                     worker_pool.clone(),
+                                    config.my_starknet_version,
                                 );
                                 match result {
                                     Ok(Some(commitment)) => {
@@ -420,6 +423,7 @@ pub fn spawn(
                                     gas_price_provider.clone(),
                                     &l2_gas_price_provider,
                                     worker_pool.clone(),
+                                    config.my_starknet_version,
                                 )?;
                                 Ok(success)
                             }
@@ -653,6 +657,7 @@ pub fn spawn(
                                 gas_price_provider.clone(),
                                 &l2_gas_price_provider,
                                 worker_pool.clone(),
+                                config.my_starknet_version,
                             )
                         } else {
                             Ok(ComputationSuccess::Continue)
@@ -779,6 +784,7 @@ fn on_finalized_block_decided(
     gas_price_provider: Option<L1GasPriceProvider>,
     l2_gas_price_provider: &Option<L2GasPriceProvider>,
     worker_pool: ValidatorWorkerPool,
+    my_starknet_version: StarknetVersion,
 ) -> Result<ComputationSuccess, anyhow::Error> {
     let exec_success = execute_deferred_for_next_height::<ProdTransactionMapper>(
         height.get(),
@@ -791,6 +797,7 @@ fn on_finalized_block_decided(
         gas_price_provider,
         l2_gas_price_provider.clone(),
         worker_pool,
+        my_starknet_version,
     )?;
     let success = match exec_success {
         Some((hnr, commitment)) => {
@@ -836,6 +843,7 @@ fn execute_deferred_for_next_height<T: TransactionExt>(
     gas_price_provider: Option<L1GasPriceProvider>,
     l2_gas_price_provider: Option<L2GasPriceProvider>,
     worker_pool: ValidatorWorkerPool,
+    my_starknet_version: StarknetVersion,
 ) -> anyhow::Result<Option<(HeightAndRound, ProposalCommitmentWithOrigin)>> {
     // Retrieve and execute any deferred transactions or proposal finalizations
     // for the next height, if any. Sort by (height, round) in ascending order.
@@ -864,6 +872,7 @@ fn execute_deferred_for_next_height<T: TransactionExt>(
                 None, // TODO: Add L1ToFriValidator when oracle is available
                 l2_gas_price_provider.as_ref(),
                 worker_pool,
+                my_starknet_version,
             )?;
 
         // Execute deferred transactions first.
@@ -1052,6 +1061,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
     l2_gas_price_provider: Option<L2GasPriceProvider>,
     inject_failure_config: Option<InjectFailureConfig>,
     worker_pool: ValidatorWorkerPool,
+    my_starknet_version: StarknetVersion,
 ) -> Result<Option<ProposalCommitmentWithOrigin>, ProposalHandlingError> {
     let proposal_validator = incoming_proposals
         .entry(height_and_round)
@@ -1099,6 +1109,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
                 None, // TODO: Add L1ToFriValidator when oracle is available
                 l2_gas_price_provider.as_ref(),
                 worker_pool,
+                my_starknet_version,
             )?;
             validator_cache.insert(
                 height_and_round,
@@ -1140,7 +1151,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
 
             finalized_blocks.insert(
                 height_and_round,
-                create_empty_block(height_and_round.height()),
+                create_empty_block(height_and_round.height(), my_starknet_version),
             );
 
             let proposer_address = proposal_validator.proposer_address().ok_or_else(|| {
@@ -1193,6 +1204,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
                 gas_price_provider.clone(),
                 l2_gas_price_provider.clone(),
                 worker_pool,
+                my_starknet_version,
             )
             // Note: We classify as recoverable by default. If there's a storage error in the
             // chain, it will be automatically detected and converted to fatal.
@@ -1223,6 +1235,7 @@ fn defer_or_execute_proposal_fin<T: TransactionExt>(
     gas_price_provider: Option<L1GasPriceProvider>,
     l2_gas_price_provider: Option<L2GasPriceProvider>,
     worker_pool: ValidatorWorkerPool,
+    my_starknet_version: StarknetVersion,
 ) -> anyhow::Result<Option<ProposalCommitmentWithOrigin>> {
     let commitment = ProposalCommitmentWithOrigin {
         proposal_commitment: ProposalCommitment(proposal_commitment.0),
@@ -1270,6 +1283,7 @@ fn defer_or_execute_proposal_fin<T: TransactionExt>(
                         None, // TODO: Add L1ToFriValidator when oracle is available
                         l2_gas_price_provider.as_ref(),
                         worker_pool,
+                        my_starknet_version,
                     )?
                 }
                 ValidatorStage::TransactionBatch(stage) => stage,
@@ -1511,6 +1525,7 @@ mod tests {
                 worker_pool.clone(),
                 ResourceLimits::for_test(),
                 BlockifierLibfuncs::default(),
+                StarknetVersion::V_0_14_0,
             );
             let dummy_data_dir = PathBuf::new();
 
@@ -1561,6 +1576,7 @@ mod tests {
                             None,
                             None,
                             worker_pool.clone(),
+                            StarknetVersion::V_0_14_0,
                         )
                         .unwrap();
                     if is_fin {

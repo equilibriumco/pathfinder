@@ -382,7 +382,7 @@ pub fn init_proposal_and_validator(
         l1_data_gas_price_fri: GAS_PRICE.0,
         l1_gas_price_wei: GAS_PRICE.0,
         l1_data_gas_price_wei: GAS_PRICE.0,
-        starknet_version: "".to_string(),
+        starknet_version: StarknetVersion::V_0_14_0.to_string(),
         version_constant_commitment: Hash::ZERO,
     };
     let validator = ValidatorBlockInfoStage::new(ChainId::SEPOLIA_TESTNET, proposal_init.clone())
@@ -395,6 +395,7 @@ pub fn init_proposal_and_validator(
         None,
         None,
         worker_pool.clone(),
+        StarknetVersion::V_0_14_0,
     )?;
     Ok((validator, vec![ProposalPart::Init(proposal_init)]))
 }

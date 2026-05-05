@@ -1156,6 +1156,7 @@ pub struct NativeExecutionConfig;
 #[cfg(feature = "p2p")]
 #[derive(Clone)]
 pub struct ConsensusConfig {
+    pub my_starknet_version: StarknetVersion,
     /// The validator address of the current node.
     pub my_validator_address: ContractAddress,
     /// The validator addresses of all validators in the validator set.
@@ -1329,6 +1330,9 @@ impl ConsensusConfig {
             }
 
             Self {
+                // TODO: This is the only supported starknet version for consensus at the moment.
+                // TBD how a node's starknet version should be configured.
+                my_starknet_version: StarknetVersion::V_0_14_0,
                 my_validator_address: ContractAddress(
                     consensus_cli
                         .my_validator_address

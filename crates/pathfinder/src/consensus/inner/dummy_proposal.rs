@@ -17,6 +17,7 @@ use pathfinder_common::{
     ConsensusFinalizedL2Block,
     ContractAddress,
     DecidedBlocks,
+    StarknetVersion,
 };
 use pathfinder_consensus::Round;
 use pathfinder_crypto::Felt;
@@ -353,7 +354,7 @@ pub(crate) fn create_with_invalid_l1_handler_transactions(
         l1_data_gas_price_fri: 1_000_000,
         l1_gas_price_wei: 1_000_000,
         l1_data_gas_price_wei: 1_000_000,
-        starknet_version: "".to_string(),
+        starknet_version: StarknetVersion::V_0_14_0.to_string(),
         version_constant_commitment: Hash::ZERO,
     };
 
@@ -486,7 +487,7 @@ pub(crate) fn create_test_proposal_init(
         l1_data_gas_price_fri: 1,
         l1_gas_price_wei: 1_000_000_000,
         l1_data_gas_price_wei: 1,
-        starknet_version: "".to_string(),
+        starknet_version: StarknetVersion::V_0_14_0.to_string(),
         version_constant_commitment: Default::default(),
     }
 }
