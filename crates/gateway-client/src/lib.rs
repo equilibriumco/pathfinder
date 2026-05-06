@@ -1376,11 +1376,12 @@ mod tests {
 
         #[test_log::test(tokio::test)]
         async fn success() {
-            let body: serde_json::Value = serde_json::from_str(starknet_gateway_test_fixtures::v0_13_1::state_update_with_block::SEPOLIA_INTEGRATION_NUMBER_9703).unwrap();
+            let body: serde_json::Value = serde_json::from_str(starknet_gateway_test_fixtures::v0_13_1::state_update_with_block::SEPOLIA_INTEGRATION_NUMBER_9703_WITH_SIGNATURE).unwrap();
             let server = MockServer::start().await;
             Mock::given(matchers::path("/feeder_gateway/get_state_update"))
                 .and(matchers::query_param("blockNumber", "9703"))
                 .and(matchers::query_param("includeBlock", "true"))
+                .and(matchers::query_param("includeSignature", "true"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(body))
                 .mount(&server)
                 .await;
@@ -1394,11 +1395,12 @@ mod tests {
 
         #[test_log::test(tokio::test)]
         async fn success_0_14_1_with_migrated_compiled_classes() {
-            let body: serde_json::Value = serde_json::from_str(starknet_gateway_test_fixtures::v0_14_1::state_update_with_block::SEPOLIA_INTEGRATION_3077642).unwrap();
+            let body: serde_json::Value = serde_json::from_str(starknet_gateway_test_fixtures::v0_14_1::state_update_with_block::SEPOLIA_INTEGRATION_3077642_WITH_SIGNATURE).unwrap();
             let server = MockServer::start().await;
             Mock::given(matchers::path("/feeder_gateway/get_state_update"))
                 .and(matchers::query_param("blockNumber", "3077642"))
                 .and(matchers::query_param("includeBlock", "true"))
+                .and(matchers::query_param("includeSignature", "true"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(body))
                 .mount(&server)
                 .await;
@@ -1414,11 +1416,12 @@ mod tests {
         // chain.
         #[test_log::test(tokio::test)]
         async fn success_0_14_3_with_invoke_proof_facts() {
-            let body: serde_json::Value = serde_json::from_str(starknet_gateway_test_fixtures::v0_14_3::state_update_with_block::SEPOLIA_INTEGRATION_FAKE).unwrap();
+            let body: serde_json::Value = serde_json::from_str(starknet_gateway_test_fixtures::v0_14_3::state_update_with_block::SEPOLIA_INTEGRATION_FAKE_WITH_SIGNATURE).unwrap();
             let server = MockServer::start().await;
             Mock::given(matchers::path("/feeder_gateway/get_state_update"))
                 .and(matchers::query_param("blockNumber", "3077642"))
                 .and(matchers::query_param("includeBlock", "true"))
+                .and(matchers::query_param("includeSignature", "true"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(body))
                 .mount(&server)
                 .await;
@@ -1440,6 +1443,7 @@ mod tests {
                     BLOCK_NUMBER.to_string(),
                 ))
                 .and(matchers::query_param("includeBlock", "true"))
+                .and(matchers::query_param("includeSignature", "true"))
                 .respond_with(
                     ResponseTemplate::new(500)
                         .set_body_json(response_body_from(KnownStarknetErrorCode::BlockNotFound)),
