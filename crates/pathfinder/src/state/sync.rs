@@ -861,10 +861,8 @@ async fn consumer(
                     let now_timestamp = time::OffsetDateTime::now_utc().unix_timestamp() as u64;
                     let latency = now_timestamp.saturating_sub(block_timestamp.get());
 
-                    let download_time = (timings.block_download
-                        + timings.class_declaration
-                        + timings.signature_download)
-                        .as_secs_f64();
+                    let download_time =
+                        (timings.block_download + timings.class_declaration).as_secs_f64();
 
                     metrics::gauge!("block_download").set(download_time);
                     metrics::gauge!("block_processing").set(update_t.as_secs_f64());
@@ -893,7 +891,7 @@ async fn consumer(
                             tracing::debug!(
                                 "Updated Starknet state with block {} after {:2}s ({:2}s avg). \
                                  contracts ({:2}s), {} storage updates ({:2}s). Block downloaded \
-                                 in {:2}s, signature in {:2}s",
+                                 in {:2}s",
                                 block_number,
                                 block_time.as_secs_f32(),
                                 block_time_avg.as_secs_f32(),
@@ -901,7 +899,6 @@ async fn consumer(
                                 storage_updates,
                                 update_t.as_secs_f32(),
                                 timings.block_download.as_secs_f32(),
-                                timings.signature_download.as_secs_f32(),
                             );
                         }
                     }
