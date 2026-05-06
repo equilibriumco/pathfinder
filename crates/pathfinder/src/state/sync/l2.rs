@@ -28,7 +28,6 @@ use crate::{ConsensusChannels, SyncMessageToConsensus};
 pub struct Timings {
     pub block_download: Duration,
     pub class_declaration: Duration,
-    pub signature_download: Duration,
 }
 
 /// A cache containing the last `N` blocks in the chain. Used to determine reorg
@@ -333,7 +332,6 @@ where
         let timings = Timings {
             block_download: t_block,
             class_declaration: t_declare,
-            signature_download: t_signature,
         };
 
         tx_event
@@ -674,7 +672,6 @@ where
         let timings = Timings {
             block_download: t_block,
             class_declaration: t_declare,
-            signature_download: t_signature,
         };
 
         tx_event
@@ -1044,12 +1041,9 @@ where
 
             async move {
                 let t_block = std::time::Instant::now();
-                let (block, state_update) = sequencer.state_update_with_block(block_number).await?;
+                let (block, state_update, signature) =
+                    sequencer.state_update_with_block(block_number).await?;
                 let t_block = t_block.elapsed();
-
-                let t_signature = std::time::Instant::now();
-                let signature = sequencer.signature(block_number.into()).await?;
-                let t_signature = t_signature.elapsed();
 
                 let span = tracing::Span::current();
 
@@ -1132,7 +1126,6 @@ where
                 let timings = Timings {
                     block_download: t_block,
                     class_declaration: t_declare,
-                    signature_download: t_signature,
                 };
 
                 Ok::<_, anyhow::Error>((
@@ -1254,7 +1247,7 @@ where
                             (transaction_commitment, event_commitment, receipt_commitment),
                         ),
                         Box::new(state_update),
-                        Box::new(signature.signature()),
+                        Box::new(signature),
                         Box::new(state_diff_commitment),
                         timings,
                     ))
