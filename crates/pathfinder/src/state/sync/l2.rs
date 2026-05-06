@@ -1422,11 +1422,10 @@ fn verify_transaction_hashes(
 /// Check block commitment signature.
 fn verify_signature(
     block_hash: BlockHash,
-    signature: &BlockSignature,
+    signature: &BlockCommitmentSignature,
     sequencer_public_key: PublicKey,
     mode: BlockValidationMode,
 ) -> Result<(), pathfinder_crypto::signature::SignatureError> {
-    let signature = signature.signature();
     match mode {
         BlockValidationMode::Strict => signature.verify(sequencer_public_key, block_hash),
         BlockValidationMode::AllowMismatch => Ok(()),
