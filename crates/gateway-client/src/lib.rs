@@ -98,7 +98,7 @@ pub trait GatewayApi: Sync {
     async fn state_update_with_block(
         &self,
         block: BlockNumber,
-    ) -> Result<(reply::Block, StateUpdate), SequencerError> {
+    ) -> Result<(reply::Block, StateUpdate, BlockCommitmentSignature), SequencerError> {
         unimplemented!();
     }
 
@@ -198,7 +198,7 @@ impl<T: GatewayApi + Sync + Send> GatewayApi for Arc<T> {
     async fn state_update_with_block(
         &self,
         block: BlockNumber,
-    ) -> Result<(reply::Block, StateUpdate), SequencerError> {
+    ) -> Result<(reply::Block, StateUpdate, BlockCommitmentSignature), SequencerError> {
         self.as_ref().state_update_with_block(block).await
     }
 
@@ -601,22 +601,19 @@ impl GatewayApi for Client {
             .await
     }
 
-    /// Gets a _block_ and the corresponding _state update_.
-    ///
-    /// Available since Starknet 0.12.2.
-    ///
-    /// This is useful because using fetching both in a single request
-    /// guarantees the consistency of the block and state update information
-    /// for the pending block.
+    /// Gets a committed block, its state update, and the block commitment
+    /// signature in a single request.
+
     #[tracing::instrument(skip(self))]
     async fn state_update_with_block(
         &self,
         block: BlockNumber,
-    ) -> Result<(reply::Block, StateUpdate), SequencerError> {
+    ) -> Result<(reply::Block, StateUpdate, BlockCommitmentSignature), SequencerError> {
         #[derive(serde::Deserialize)]
         struct Dto {
             block: reply::Block,
             state_update: reply::StateUpdate,
+            signature: [BlockCommitmentSignatureElem; 2],
         }
 
         let result: Dto = self
@@ -624,10 +621,16 @@ impl GatewayApi for Client {
             .get_state_update()
             .block(block)
             .param("includeBlock", "true")
+            .param("includeSignature", "true")
             .retry(self.retry)
             .get()
             .await?;
-        Ok((result.block, result.state_update.into()))
+
+        let signature = BlockCommitmentSignature {
+            r: result.signature[0],
+            s: result.signature[1],
+        };
+        Ok((result.block, result.state_update.into(), signature))
     }
 
     /// Gets addresses of the Ethereum contracts crucial to Starknet operation.
