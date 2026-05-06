@@ -16,7 +16,7 @@ use std::time::Duration;
 use anyhow::Context;
 use p2p::consensus::HeightAndRound;
 use p2p_proto::consensus::{ProposalFin, ProposalPart};
-use pathfinder_common::{BlockId, ContractAddress, ProposalCommitment};
+use pathfinder_common::{BlockId, BlockNumber, ContractAddress, ProposalCommitment};
 use pathfinder_consensus::{
     Config,
     Consensus,
@@ -86,28 +86,35 @@ pub fn spawn(
                 highest_committed,
             )?;
 
-        // Compute the next height to work on using all available information:
-        // - max_active_height: highest incomplete/active height being tracked
-        // - last_decided_height: highest decided height (even if not actively tracked)
-        // - highest_committed + 1: next height after what's been committed to main DB
-        let mut next_height = [
-            consensus.max_active_height().unwrap_or(0),
-            consensus.last_decided_height().unwrap_or(0),
-            highest_committed.map(|h| h + 1).unwrap_or(0),
-        ]
-        .into_iter()
-        .max()
-        .unwrap_or(0);
+        {
+            // Compute the next height to work on using all available information:
+            // - max_active_height: highest incomplete/active height being tracked
+            // - last_decided_height: highest decided height (even if not actively tracked)
+            // - highest_committed + 1: next height after what's been committed to main DB
+            let next_height = [
+                consensus.max_active_height().unwrap_or(0),
+                consensus.last_decided_height().unwrap_or(0),
+                highest_committed.map(|h| h + 1).unwrap_or(0),
+            ]
+            .into_iter()
+            .max()
+            .unwrap_or(0);
+            let next_height = BlockNumber::new(next_height)
+                .context("Next height exceeds i64::MAX")?
+                .get();
 
-        tracing::trace!(%next_height, "consensus task started with");
+            tracing::trace!(%next_height, "consensus task started with");
 
-        start_height(
-            &mut consensus,
-            next_height,
-            validator_set_provider
-                .get_validator_set(next_height)
-                .context("Failed to get validator set at startup")?,
-        );
+            start_height_if_inactive(
+                &mut consensus,
+                next_height,
+                validator_set_provider
+                    .get_validator_set(next_height)
+                    .context("Failed to get validator set at startup")?,
+            );
+
+            // The explicit code block is to prohibit reusing `next_height`
+        }
 
         loop {
             let consensus_task_event = tokio::select! {
@@ -262,23 +269,32 @@ pub fn spawn(
                                 .await
                                 .expect("Commit block receiver not to be dropped");
 
-                            let prev_height = next_height;
-                            // Either move to the next height, or catch up if the decided height
-                            // is ahead of our current next_height.
-                            next_height = next_height
-                                .max(height)
-                                .checked_add(1)
-                                .expect("Height never reaches i64::MAX");
+                            // Start the next height if:
+                            // - this decision's height is the latest (highest) decided height by
+                            //   consensus (otherwise this is not the highest decided height due to
+                            //   some race conditions),
+                            // - AND there is no active height that is larger than this last decided
+                            //   height (otherwise the next height has already been started and is
+                            //   actively being worked on).
+                            if consensus
+                                .last_decided_height()
+                                .map_or(true, |last_decided| last_decided == height)
+                                && consensus
+                                    .max_active_height()
+                                    .map_or(true, |max_active| max_active <= height)
+                            {
+                                let next_height = BlockNumber::new(height + 1)
+                                    .context("Next height exceeds i64::MAX")?
+                                    .get();
 
-                            tracing::trace!(%prev_height, %next_height, "Changing height");
-
-                            start_height(
-                                &mut consensus,
-                                next_height,
-                                validator_set_provider
-                                    .get_validator_set(next_height)
-                                    .context("Failed to get validator set")?,
-                            );
+                                start_height_if_inactive(
+                                    &mut consensus,
+                                    next_height,
+                                    validator_set_provider
+                                        .get_validator_set(next_height)
+                                        .context("Failed to get validator set")?,
+                                );
+                            }
                         }
                         ConsensusEvent::Error(error) => {
                             if error.is_recoverable() {
@@ -316,8 +332,13 @@ pub fn spawn(
                         // so we did start a new height upon successful decision, before any p2p
                         // messages for the new height were received.
                         ConsensusCommand::StartHeight(..) | ConsensusCommand::Propose(_) => {
-                            // Commands from P2P should always be for current or future heights.
-                            assert!(
+                            // Commands from P2P should always be for current or
+                            // future heights.
+                            let next_height = consensus
+                                .max_active_height()
+                                .unwrap_or_default()
+                                .max(consensus.last_decided_height().unwrap_or_default() + 1);
+                            debug_assert!(
                                 cmd_height >= next_height,
                                 "Received command for height {cmd_height} < current height \
                                  {next_height}"
@@ -341,25 +362,13 @@ pub fn spawn(
                                 }
                             }
 
-                            // Make sure we don't start older heights that have already been decided
-                            // upon, or are still in progress due to race conditions, or are too old
-                            // to fit in history depth anyway.
-                            let is_decided = consensus
-                                .last_decided_height()
-                                .is_some_and(|last_decided| cmd_height <= last_decided);
-                            if is_decided {
-                                tracing::debug!(
-                                    lower_height=%cmd_height, %next_height, "🧠 🤷  Skipping start consensus for"
-                                );
-                            } else {
-                                start_height(
-                                    &mut consensus,
-                                    cmd_height,
-                                    validator_set_provider
-                                        .get_validator_set(cmd_height)
-                                        .context("Failed to get validator set")?,
-                                );
-                            }
+                            start_height_if_inactive(
+                                &mut consensus,
+                                cmd_height,
+                                validator_set_provider
+                                    .get_validator_set(cmd_height)
+                                    .context("Failed to get validator set")?,
+                            );
                         }
                     }
 
@@ -390,7 +399,7 @@ fn highest_committed(main_storage: &Storage) -> anyhow::Result<Option<u64>> {
 }
 
 /// Starts consensus for the given height if not already active.
-fn start_height(
+fn start_height_if_inactive(
     consensus: &mut Consensus<ConsensusValue, ContractAddress, L2ProposerSelector>,
     height: u64,
     validator_set: ValidatorSet<ContractAddress>,

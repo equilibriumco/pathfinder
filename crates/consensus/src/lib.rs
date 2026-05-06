@@ -853,7 +853,11 @@ impl<
     /// Get the maximum height actively being tracked by the consensus engine.
     ///
     /// This returns the highest height that consensus is currently working on,
-    /// which includes incomplete heights that haven't reached a decision yet.
+    /// which includes:
+    ///  - incomplete heights that haven't reached a decision yet,
+    ///  - finalized heights that have reached a decision but haven't been
+    ///    pruned yet.
+    ///
     /// Returns `None` if there are no actively tracked heights.
     pub fn max_active_height(&self) -> Option<u64> {
         self.internal.keys().max().copied()
