@@ -52,8 +52,9 @@ pub mod v0_12_2 {
 
 pub mod v0_13_1 {
     pub mod state_update_with_block {
-        pub const SEPOLIA_INTEGRATION_NUMBER_9703: &str =
-            str_fixture!("0.13.1/state_update_with_block/sepolia_integration_9703.json");
+        pub const SEPOLIA_INTEGRATION_NUMBER_9703_WITH_SIGNATURE: &str = str_fixture!(
+            "0.13.1/state_update_with_block/sepolia_integration_9703_with_signature.json"
+        );
         pub const SEPOLIA_INTEGRATION_PENDING: &str =
             str_fixture!("0.13.1/state_update_with_block/sepolia_integration_pending.json");
     }
@@ -102,15 +103,15 @@ pub mod v0_14_0 {
 
 pub mod v0_14_1 {
     pub mod state_update_with_block {
-        pub const SEPOLIA_INTEGRATION_3077642: &str =
-            str_fixture!("0.14.1/state_update/sepolia_integration_3077642.json");
+        pub const SEPOLIA_INTEGRATION_3077642_WITH_SIGNATURE: &str =
+            str_fixture!("0.14.1/state_update/sepolia_integration_3077642_with_signature.json");
     }
 }
 
 pub mod v0_14_3 {
     pub mod state_update_with_block {
-        pub const SEPOLIA_INTEGRATION_FAKE: &str =
-            str_fixture!("0.14.3/state_update/sepolia_integration_fake.json");
+        pub const SEPOLIA_INTEGRATION_FAKE_WITH_SIGNATURE: &str =
+            str_fixture!("0.14.3/state_update/sepolia_integration_fake_with_signature.json");
     }
 }
 
