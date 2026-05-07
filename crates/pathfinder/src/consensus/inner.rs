@@ -11,7 +11,6 @@ mod dummy_proposal;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use p2p::consensus::{Event, HeightAndRound};
 use p2p_proto::consensus::ProposalPart;
@@ -173,13 +172,9 @@ impl std::fmt::Display for ConsensusValue {
 /// default block header with the necessary fields filled in.
 pub(crate) fn create_empty_block(
     height: u64,
+    timestamp: u64,
     starknet_version: StarknetVersion,
 ) -> ConsensusFinalizedL2Block {
-    let timestamp = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
     ConsensusFinalizedL2Block {
         header: ConsensusFinalizedBlockHeader {
             number: BlockNumber::new_or_panic(height),
