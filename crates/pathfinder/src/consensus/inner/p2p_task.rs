@@ -1149,9 +1149,28 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
                  proposal)..."
             );
 
+            let Some(ProposalPart::Init(ProposalInit {
+                timestamp,
+                starknet_version,
+                ..
+            })) = proposal_validator.parts().first()
+            else {
+                return Err(ProposalHandlingError::Fatal(anyhow::anyhow!(
+                    "proposal init missing for empty proposal at {height_and_round}"
+                )));
+            };
+            let starknet_version = match starknet_version.parse() {
+                Ok(version) => version,
+                Err(_) => {
+                    return Err(ProposalHandlingError::recoverable_msg(format!(
+                        "invalid proposal starknet version {starknet_version} at \
+                         {height_and_round}"
+                    )));
+                }
+            };
             finalized_blocks.insert(
                 height_and_round,
-                create_empty_block(height_and_round.height(), my_starknet_version),
+                create_empty_block(height_and_round.height(), *timestamp, starknet_version),
             );
 
             let proposer_address = proposal_validator.proposer_address().ok_or_else(|| {
