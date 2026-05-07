@@ -284,7 +284,7 @@ where
             .send(SyncEvent::DownloadedBlock(
                 (block, commitments),
                 state_update,
-                Box::new(signature),
+                signature,
                 Box::new(state_diff_commitment),
                 timings,
             ))
@@ -570,7 +570,7 @@ where
             .send(SyncEvent::DownloadedBlock(
                 (block, commitments),
                 state_update,
-                Box::new(signature),
+                signature,
                 Box::new(state_diff_commitment),
                 timings,
             ))
@@ -708,7 +708,7 @@ enum DownloadBlock {
         Box<Block>,
         (TransactionCommitment, EventCommitment, ReceiptCommitment),
         Box<StateUpdate>,
-        BlockCommitmentSignature,
+        Box<BlockCommitmentSignature>,
         StateDiffCommitment,
     ),
     Wait,
@@ -809,7 +809,7 @@ async fn download_block(
                     block,
                     commitments,
                     state_update,
-                    signature,
+                    Box::new(signature),
                     state_diff_commitment,
                 )),
                 (
@@ -820,7 +820,7 @@ async fn download_block(
                     block,
                     Default::default(),
                     state_update,
-                    signature,
+                    Box::new(signature),
                     state_diff_commitment,
                 )),
                 (_, VerifyResult::Mismatch, BlockValidationMode::Strict) => {
@@ -2084,7 +2084,6 @@ mod tests {
                 assert_matches!(rx_event.recv().await.unwrap(), SyncEvent::DownloadedBlock((block, _), state_update, signature, _, _) => {
                     assert_eq!(*block, *BLOCK0);
                     assert_eq_sorted!(*state_update, *STATE_UPDATE0);
-                    // assert_eq!(*signature, BLOCK0_COMMITMENT_SIGNATURE);
                     assert_eq!(*signature, BLOCK0_SIGNATURE);
                 });
                 assert_matches!(rx_event.recv().await.unwrap(),
@@ -2094,7 +2093,6 @@ mod tests {
                 assert_matches!(rx_event.recv().await.unwrap(), SyncEvent::DownloadedBlock((block, _), state_update, signature, _, _) => {
                     assert_eq!(*block, *BLOCK1);
                     assert_eq_sorted!(*state_update, *STATE_UPDATE1);
-                    // assert_eq!(*signature, BLOCK1_COMMITMENT_SIGNATURE);
                     assert_eq!(*signature, BLOCK1_SIGNATURE);
                 });
             }

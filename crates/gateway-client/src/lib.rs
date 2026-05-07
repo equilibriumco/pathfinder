@@ -143,10 +143,6 @@ pub trait GatewayApi: Sync {
         unimplemented!();
     }
 
-    async fn signature(&self, block: BlockId) -> Result<reply::BlockSignature, SequencerError> {
-        unimplemented!();
-    }
-
     async fn public_key(&self) -> Result<PublicKey, SequencerError> {
         unimplemented!();
     }
@@ -237,10 +233,6 @@ impl<T: GatewayApi + Sync + Send> GatewayApi for Arc<T> {
         transaction: TransactionHash,
     ) -> Result<TransactionTrace, SequencerError> {
         self.as_ref().transaction_trace(transaction).await
-    }
-
-    async fn signature(&self, block: BlockId) -> Result<reply::BlockSignature, SequencerError> {
-        self.as_ref().signature(block).await
     }
 
     async fn public_key(&self) -> Result<PublicKey, SequencerError> {
@@ -726,16 +718,6 @@ impl GatewayApi for Client {
         self.feeder_gateway_request()
             .get_transaction_trace()
             .transaction_hash(transaction)
-            .retry(self.retry)
-            .get()
-            .await
-    }
-
-    #[tracing::instrument(skip(self))]
-    async fn signature(&self, block: BlockId) -> Result<reply::BlockSignature, SequencerError> {
-        self.feeder_gateway_request()
-            .get_signature()
-            .block(block)
             .retry(self.retry)
             .get()
             .await
@@ -1459,30 +1441,6 @@ mod tests {
                 error,
                 SequencerError::StarknetError(e) => assert_eq!(e.code, KnownStarknetErrorCode::BlockNotFound.into())
             );
-        }
-    }
-
-    mod signature {
-        use super::*;
-
-        #[tokio::test]
-        async fn success() {
-            let body: serde_json::Value = serde_json::from_str(
-                starknet_gateway_test_fixtures::v0_13_2::signature::SEPOLIA_INTEGRATION_35748,
-            )
-            .unwrap();
-            let server = MockServer::start().await;
-            Mock::given(matchers::path("/feeder_gateway/get_signature"))
-                .and(matchers::query_param("blockNumber", "350000"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(body))
-                .mount(&server)
-                .await;
-            let client = Client::for_test(server.uri().parse().unwrap()).unwrap();
-
-            client
-                .signature(BlockId::Number(BlockNumber::new_or_panic(350000)))
-                .await
-                .unwrap();
         }
     }
 

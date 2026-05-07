@@ -155,7 +155,6 @@ impl Request<stage::Method> {
         get_contract_addresses,
         get_block_traces,
         get_transaction_trace,
-        get_signature,
         get_public_key,
         get_preconfirmed_block,
     );

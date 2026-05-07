@@ -44,10 +44,6 @@ pub mod v0_12_2 {
     pub mod state_update {
         pub const BLOCK_350000: &str = str_fixture!("0.12.2/state-update/350000.json");
     }
-
-    pub mod signature {
-        pub const BLOCK_350000: &str = str_fixture!("0.12.2/signature/350000.json");
-    }
 }
 
 pub mod v0_13_1 {
