@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The limit for bytecode size in compilation is now defaulting to 81920 bytes and configurable with the new `--max-bytecode-size` CLI option.
+- Committed-block sync now fetches block, state update, and signature in a single feeder-gateway request. Requires a feeder gateway that supports `includeSignature` on `get_state_update`.
 
 ## [0.22.3] - 2026-04-20
 
