@@ -298,6 +298,8 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
         block_hash: Option<BlockHash>,
         #[serde(default, rename = "includeBlock")]
         include_block: Option<bool>,
+        #[serde(default, rename = "includeSignature")]
+        include_signature: Option<bool>,
         #[serde(default, rename = "headerOnly")]
         header_only: Option<bool>,
     }
@@ -432,6 +434,7 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
                 let reorged = reorged.clone();
                 async move {
                     let include_block = block_id.include_block.unwrap_or(false);
+                    let include_signature = block_id.include_signature.unwrap_or(false);
 
                     match block_id.try_into() {
                         Ok(block_id) => {
@@ -439,31 +442,42 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
                                 return Err(storage_unavailable_rejection());
                             };
 
-                            let block_and_state_update = tokio::task::spawn_blocking(move || {
+                            let resolved = tokio::task::spawn_blocking(move || {
                                 let mut connection = storage.connection().unwrap();
                                 let tx = connection.transaction().unwrap();
 
-                                resolve_state_update(&tx, block_id, &reorg_config, reorged.clone()).and_then(|state_update| resolve_block(&tx, block_id, &reorg_config, reorged).map(|block| (block, state_update)))
+                                let state_update = resolve_state_update(&tx, block_id, &reorg_config, reorged.clone())?;
+                                let block = if include_block {
+                                    Some(resolve_block(&tx, block_id, &reorg_config, reorged.clone())?)
+                                } else {
+                                    None
+                                };
+                                let signature = if include_signature {
+                                    Some(resolve_signature(&tx, block_id)?)
+                                } else {
+                                    None
+                                };
+                                anyhow::Ok((state_update, block, signature))
                             }).await.context("Joining blocking task").and_then(|res| res);
 
-                            match block_and_state_update {
-                                Ok((block, state_update)) => {
-                                    if include_block {
-                                        #[derive(Serialize)]
-                                        struct StateUpdateWithBlock {
-                                            state_update: starknet_gateway_types::reply::StateUpdate,
-                                            block: starknet_gateway_types::reply::Block,
-                                        }
-
-                                        let reply = StateUpdateWithBlock {
-                                            state_update,
-                                            block,
-                                        };
-
-                                        Ok(warp::reply::with_status(warp::reply::json(&reply), warp::http::StatusCode::OK))
-                                    } else {
-                                        Ok(warp::reply::with_status(warp::reply::json(&state_update), warp::http::StatusCode::OK))
+                            match resolved {
+                                Ok((state_update, block, signature)) => {
+                                    #[derive(Serialize)]
+                                    struct Reply {
+                                        state_update: starknet_gateway_types::reply::StateUpdate,
+                                        #[serde(skip_serializing_if = "Option::is_none")]
+                                        block: Option<starknet_gateway_types::reply::Block>,
+                                        #[serde(skip_serializing_if = "Option::is_none")]
+                                        signature: Option<[BlockCommitmentSignatureElem; 2]>,
                                     }
+
+                                    let reply = Reply {
+                                        state_update,
+                                        block,
+                                        signature: signature.map(|s| s.signature),
+                                    };
+
+                                    Ok(warp::reply::with_status(warp::reply::json(&reply), warp::http::StatusCode::OK))
                                 },
                                 Err(_) => {
                                     let error = serde_json::json!({"code": "StarknetErrorCode.BLOCK_NOT_FOUND", "message": "Block number not found"});
