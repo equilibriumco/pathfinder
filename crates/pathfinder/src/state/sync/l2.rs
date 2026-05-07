@@ -16,7 +16,7 @@ use pathfinder_common::Chain;
 use pathfinder_storage::Storage;
 use starknet_gateway_client::GatewayApi;
 use starknet_gateway_types::error::SequencerError;
-use starknet_gateway_types::reply::{Block, BlockSignature, Status};
+use starknet_gateway_types::reply::{Block, Status};
 use tokio::sync::{mpsc, watch};
 use tracing::Instrument;
 
@@ -139,21 +139,9 @@ where
             None => (BlockNumber::GENESIS, None),
         };
 
-        // We start downloading the signature for the block
-        let signature_handle = util::task::spawn({
-            let sequencer = sequencer.clone();
-            async move {
-                let t_signature = std::time::Instant::now();
-                let result = sequencer.signature(next.into()).await;
-                let t_signature = t_signature.elapsed();
-
-                Ok((result, t_signature))
-            }
-        });
-
         let t_block = std::time::Instant::now();
 
-        let (block, commitments, state_update, state_diff_commitment) = loop {
+        let (block, commitments, state_update, signature, state_diff_commitment) = loop {
             match download_block(
                 next,
                 chain,
@@ -165,8 +153,20 @@ where
             )
             .await?
             {
-                DownloadBlock::Block(block, commitments, state_update, state_diff_commitment) => {
-                    break (block, commitments, state_update, state_diff_commitment)
+                DownloadBlock::Block(
+                    block,
+                    commitments,
+                    state_update,
+                    signature,
+                    state_diff_commitment,
+                ) => {
+                    break (
+                        block,
+                        commitments,
+                        state_update,
+                        signature,
+                        state_diff_commitment,
+                    )
                 }
                 DownloadBlock::Wait => {
                     // Wait for the latest block to change.
@@ -252,61 +252,7 @@ where
         .await?;
         let t_declare = t_declare.elapsed();
 
-        // Download signature
-        let (signature_result, t_signature) = signature_handle
-            .await
-            .context("Joining signature task")?
-            .context("Task cancelled")?;
-        let (signature, t_signature) = match signature_result {
-            Ok(signature) => (signature, t_signature),
-            Err(SequencerError::StarknetError(err))
-                if err.code
-                    == starknet_gateway_types::error::KnownStarknetErrorCode::BlockNotFound
-                        .into() =>
-            {
-                // There is a race condition here: if the query for the signature was made
-                // _before_ the block was published -- but by the time we
-                // actually queried for the block it was there. In this case
-                // we just retry the signature download until we get it.
-                let t_signature = std::time::Instant::now();
-                let signature = loop {
-                    match sequencer.signature(next.into()).await {
-                        Ok(s) => {
-                            break s;
-                        }
-                        Err(SequencerError::StarknetError(err))
-                            if err.code
-                                == starknet_gateway_types::error::KnownStarknetErrorCode::BlockNotFound
-                                    .into() =>
-                        {
-                            // Wait a bit and retry
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                            continue;
-                        }
-                        Err(err) => {
-                                            return Err(err)
-                            .context(format!("Fetch signature for block {next:?} from sequencer"))
-                        }
-                    }
-                };
-                (signature, t_signature.elapsed())
-            }
-            Err(err) => {
-                return Err(err)
-                    .context(format!("Fetch signature for block {next:?} from sequencer"))
-            }
-        };
-
-        // An extra sanity check for the signature API.
-        anyhow::ensure!(
-            block.block_hash == signature.block_hash,
-            "Signature block hash mismatch, actual {:x}, expected {:x}",
-            signature.block_hash.0,
-            block.block_hash.0,
-        );
-
-        // Check block commitment signature
-        let signature: BlockCommitmentSignature = signature.signature();
+        // Check block commitment signature.
         let (signature, state_update) = match block_validation_mode {
             BlockValidationMode::Strict => {
                 let block_hash = block.block_hash;
@@ -462,21 +408,9 @@ where
 
         tracing::debug!("Downloading block {next} from sequencer");
 
-        // We start downloading the signature for the block
-        let signature_handle = util::task::spawn({
-            let sequencer = sequencer.clone();
-            async move {
-                let t_signature = std::time::Instant::now();
-                let result = sequencer.signature(next.into()).await;
-                let t_signature = t_signature.elapsed();
-
-                Ok((result, t_signature))
-            }
-        });
-
         let t_block = std::time::Instant::now();
 
-        let (block, commitments, state_update, state_diff_commitment) = loop {
+        let (block, commitments, state_update, signature, state_diff_commitment) = loop {
             match download_block(
                 next,
                 chain,
@@ -488,8 +422,20 @@ where
             )
             .await?
             {
-                DownloadBlock::Block(block, commitments, state_update, state_diff_commitment) => {
-                    break (block, commitments, state_update, state_diff_commitment)
+                DownloadBlock::Block(
+                    block,
+                    commitments,
+                    state_update,
+                    signature,
+                    state_diff_commitment,
+                ) => {
+                    break (
+                        block,
+                        commitments,
+                        state_update,
+                        signature,
+                        state_diff_commitment,
+                    )
                 }
                 DownloadBlock::Wait => {
                     let fgw_fut = latest.wait_for(|(_, hash)| hash != &head.unwrap_or_default().1);
@@ -592,61 +538,7 @@ where
         .await?;
         let t_declare = t_declare.elapsed();
 
-        // Download signature
-        let (signature_result, t_signature) = signature_handle
-            .await
-            .context("Joining signature task")?
-            .context("Task cancelled")?;
-        let (signature, t_signature) = match signature_result {
-            Ok(signature) => (signature, t_signature),
-            Err(SequencerError::StarknetError(err))
-                if err.code
-                    == starknet_gateway_types::error::KnownStarknetErrorCode::BlockNotFound
-                        .into() =>
-            {
-                // There is a race condition here: if the query for the signature was made
-                // _before_ the block was published -- but by the time we
-                // actually queried for the block it was there. In this case
-                // we just retry the signature download until we get it.
-                let t_signature = std::time::Instant::now();
-                let signature = loop {
-                    match sequencer.signature(next.into()).await {
-                        Ok(s) => {
-                            break s;
-                        }
-                        Err(SequencerError::StarknetError(err))
-                            if err.code
-                                == starknet_gateway_types::error::KnownStarknetErrorCode::BlockNotFound
-                                    .into() =>
-                        {
-                            // Wait a bit and retry
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                            continue;
-                        }
-                        Err(err) => {
-                                            return Err(err)
-                            .context(format!("Fetch signature for block {next:?} from sequencer"))
-                        }
-                    }
-                };
-                (signature, t_signature.elapsed())
-            }
-            Err(err) => {
-                return Err(err)
-                    .context(format!("Fetch signature for block {next:?} from sequencer"))
-            }
-        };
-
-        // An extra sanity check for the signature API.
-        anyhow::ensure!(
-            block.block_hash == signature.block_hash,
-            "Signature block hash mismatch, actual {:x}, expected {:x}",
-            signature.block_hash.0,
-            block.block_hash.0,
-        );
-
-        // Check block commitment signature
-        let signature: BlockCommitmentSignature = signature.signature();
+        // Check block commitment signature.
         let (signature, state_update) = match block_validation_mode {
             BlockValidationMode::Strict => {
                 let block_hash = block.block_hash;
@@ -816,6 +708,7 @@ enum DownloadBlock {
         Box<Block>,
         (TransactionCommitment, EventCommitment, ReceiptCommitment),
         Box<StateUpdate>,
+        BlockCommitmentSignature,
         StateDiffCommitment,
     ),
     Wait,
@@ -845,7 +738,7 @@ async fn download_block(
     use starknet_gateway_types::error::KnownStarknetErrorCode::BlockNotFound;
 
     match sequencer.state_update_with_block(block_number).await {
-        Ok((block, state_update)) => {
+        Ok((block, state_update, signature)) => {
             let block = Box::new(block);
 
             // Verify that transaction hashes match transaction contents.
@@ -916,6 +809,7 @@ async fn download_block(
                     block,
                     commitments,
                     state_update,
+                    signature,
                     state_diff_commitment,
                 )),
                 (
@@ -926,6 +820,7 @@ async fn download_block(
                     block,
                     Default::default(),
                     state_update,
+                    signature,
                     state_diff_commitment,
                 )),
                 (_, VerifyResult::Mismatch, BlockValidationMode::Strict) => {
@@ -1565,7 +1460,7 @@ async fn reorg(
         .await
         .with_context(|| format!("Download block {previous_block_number} from sequencer"))?
         {
-            DownloadBlock::Block(block, _, _, _) if block.block_hash == previous.0 => {
+            DownloadBlock::Block(block, _, _, _, _) if block.block_hash == previous.0 => {
                 break Some((previous_block_number, previous.0, previous.1));
             }
             _ => {}
@@ -1672,63 +1567,34 @@ mod tests {
         const STORAGE_VAL0_V2: StorageValue = storage_value_bytes!(b"contract 0 storage val 0 v2");
         const STORAGE_VAL1: StorageValue = storage_value_bytes!(b"contract 1 storage val 0");
 
-        const BLOCK0_SIGNATURE: reply::BlockSignature = reply::BlockSignature {
-            block_hash: BLOCK0_HASH,
-            signature: [
-                block_commitment_signature_elem_bytes!(b"block 0 signature r"),
-                block_commitment_signature_elem_bytes!(b"block 0 signature s"),
-            ],
+        const BLOCK0_SIGNATURE: BlockCommitmentSignature = BlockCommitmentSignature {
+            r: block_commitment_signature_elem_bytes!(b"block 0 signature r"),
+            s: block_commitment_signature_elem_bytes!(b"block 0 signature s"),
         };
-        // const BLOCK0_COMMITMENT_SIGNATURE: BlockCommitmentSignature =
-        // BlockCommitmentSignature {     r: BLOCK0_SIGNATURE.signature[0],
-        //     s: BLOCK0_SIGNATURE.signature[1],
-        // };
-        const BLOCK0_SIGNATURE_V2: reply::BlockSignature = reply::BlockSignature {
-            block_hash: BLOCK0_HASH_V2,
-            signature: [
-                block_commitment_signature_elem_bytes!(b"block 0 signature r 2"),
-                block_commitment_signature_elem_bytes!(b"block 0 signature s 2"),
-            ],
+        const BLOCK0_SIGNATURE_V2: BlockCommitmentSignature = BlockCommitmentSignature {
+            r: block_commitment_signature_elem_bytes!(b"block 0 signature r 2"),
+            s: block_commitment_signature_elem_bytes!(b"block 0 signature s 2"),
         };
 
-        const BLOCK1_SIGNATURE: reply::BlockSignature = reply::BlockSignature {
-            block_hash: BLOCK1_HASH,
-            signature: [
-                block_commitment_signature_elem_bytes!(b"block 1 signature r"),
-                block_commitment_signature_elem_bytes!(b"block 1 signature s"),
-            ],
+        const BLOCK1_SIGNATURE: BlockCommitmentSignature = BlockCommitmentSignature {
+            r: block_commitment_signature_elem_bytes!(b"block 1 signature r"),
+            s: block_commitment_signature_elem_bytes!(b"block 1 signature s"),
         };
-        // const BLOCK1_COMMITMENT_SIGNATURE: BlockCommitmentSignature =
-        // BlockCommitmentSignature {     r: BLOCK1_SIGNATURE.signature[0],
-        //     s: BLOCK1_SIGNATURE.signature[1],
-        // };
-        const BLOCK1_SIGNATURE_V2: reply::BlockSignature = reply::BlockSignature {
-            block_hash: BLOCK1_HASH_V2,
-            signature: [
-                block_commitment_signature_elem_bytes!(b"block 1 signature r 2"),
-                block_commitment_signature_elem_bytes!(b"block 1 signature s 2"),
-            ],
+        const BLOCK1_SIGNATURE_V2: BlockCommitmentSignature = BlockCommitmentSignature {
+            r: block_commitment_signature_elem_bytes!(b"block 1 signature r 2"),
+            s: block_commitment_signature_elem_bytes!(b"block 1 signature s 2"),
         };
-        const BLOCK2_SIGNATURE: reply::BlockSignature = reply::BlockSignature {
-            block_hash: BLOCK2_HASH,
-            signature: [
-                block_commitment_signature_elem_bytes!(b"block 2 signature r"),
-                block_commitment_signature_elem_bytes!(b"block 2 signature s"),
-            ],
+        const BLOCK2_SIGNATURE: BlockCommitmentSignature = BlockCommitmentSignature {
+            r: block_commitment_signature_elem_bytes!(b"block 2 signature r"),
+            s: block_commitment_signature_elem_bytes!(b"block 2 signature s"),
         };
-        const BLOCK2_SIGNATURE_V2: reply::BlockSignature = reply::BlockSignature {
-            block_hash: BLOCK2_HASH_V2,
-            signature: [
-                block_commitment_signature_elem_bytes!(b"block 2 signature r 2"),
-                block_commitment_signature_elem_bytes!(b"block 2 signature s 2"),
-            ],
+        const BLOCK2_SIGNATURE_V2: BlockCommitmentSignature = BlockCommitmentSignature {
+            r: block_commitment_signature_elem_bytes!(b"block 2 signature r 2"),
+            s: block_commitment_signature_elem_bytes!(b"block 2 signature s 2"),
         };
-        const BLOCK3_SIGNATURE: reply::BlockSignature = reply::BlockSignature {
-            block_hash: BLOCK3_HASH,
-            signature: [
-                block_commitment_signature_elem_bytes!(b"block 3 signature r"),
-                block_commitment_signature_elem_bytes!(b"block 3 signature s"),
-            ],
+        const BLOCK3_SIGNATURE: BlockCommitmentSignature = BlockCommitmentSignature {
+            r: block_commitment_signature_elem_bytes!(b"block 3 signature r"),
+            s: block_commitment_signature_elem_bytes!(b"block 3 signature s"),
         };
 
         fn spawn_sync_default(
@@ -2028,7 +1894,10 @@ mod tests {
             mock: &mut MockGatewayApi,
             seq: &mut mockall::Sequence,
             block: BlockNumber,
-            returned_result: Result<(reply::Block, StateUpdate), SequencerError>,
+            returned_result: Result<
+                (reply::Block, StateUpdate, BlockCommitmentSignature),
+                SequencerError,
+            >,
         ) {
             use mockall::predicate::eq;
 
@@ -2043,7 +1912,10 @@ mod tests {
         fn expect_state_update_with_block_no_sequence(
             mock: &mut MockGatewayApi,
             block: BlockNumber,
-            returned_result: Result<(reply::Block, StateUpdate), SequencerError>,
+            returned_result: Result<
+                (reply::Block, StateUpdate, BlockCommitmentSignature),
+                SequencerError,
+            >,
         ) {
             use mockall::predicate::eq;
 
@@ -2056,7 +1928,10 @@ mod tests {
         fn expect_state_update_with_block_no_sequence_at_most_once(
             mock: &mut MockGatewayApi,
             block: BlockNumber,
-            returned_result: Result<(reply::Block, StateUpdate), SequencerError>,
+            returned_result: Result<
+                (reply::Block, StateUpdate, BlockCommitmentSignature),
+                SequencerError,
+            >,
         ) {
             use mockall::predicate::eq;
 
@@ -2080,49 +1955,6 @@ mod tests {
                 .times(1)
                 .in_sequence(seq)
                 .return_once(move |_| returned_result);
-        }
-
-        /// Convenience wrapper
-        fn expect_signature(
-            mock: &mut MockGatewayApi,
-            seq: &mut mockall::Sequence,
-            block: BlockId,
-            returned_result: Result<reply::BlockSignature, SequencerError>,
-        ) {
-            use mockall::predicate::eq;
-
-            mock.expect_signature()
-                .with(eq(block))
-                .times(1)
-                .in_sequence(seq)
-                .return_once(|_| returned_result);
-        }
-
-        /// Convenience wrapper
-        fn expect_signature_no_sequence(
-            mock: &mut MockGatewayApi,
-            block: BlockId,
-            returned_result: Result<reply::BlockSignature, SequencerError>,
-        ) {
-            use mockall::predicate::eq;
-
-            mock.expect_signature()
-                .with(eq(block))
-                .times(1)
-                .return_once(|_| returned_result);
-        }
-
-        fn expect_signature_no_sequence_at_most_once(
-            mock: &mut MockGatewayApi,
-            block: BlockId,
-            returned_result: Result<reply::BlockSignature, SequencerError>,
-        ) {
-            use mockall::predicate::eq;
-
-            mock.expect_signature()
-                .with(eq(block))
-                .times(..=1)
-                .return_once(|_| returned_result);
         }
 
         /// Convenience wrapper
@@ -2193,14 +2025,17 @@ mod tests {
                 let (tx_event, mut rx_event) = tokio::sync::mpsc::channel(1);
                 let mut mock = MockGatewayApi::new();
                 let mut seq = mockall::Sequence::new();
-                let mut signature_seq = mockall::Sequence::new();
 
                 // Download the genesis block with respective state update and contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0.clone(), STATE_UPDATE0.clone())),
+                    Ok((
+                        BLOCK0.clone(),
+                        STATE_UPDATE0.clone(),
+                        BLOCK0_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -2208,18 +2043,16 @@ mod tests {
                     CONTRACT0_HASH,
                     Ok(CONTRACT0_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK0_NUMBER.into(),
-                    Ok(BLOCK0_SIGNATURE.clone()),
-                );
                 // Download block #1 with respective state update and contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Ok((BLOCK1.clone(), STATE_UPDATE1.clone())),
+                    Ok((
+                        BLOCK1.clone(),
+                        STATE_UPDATE1.clone(),
+                        BLOCK1_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -2227,23 +2060,11 @@ mod tests {
                     CONTRACT1_HASH,
                     Ok(CONTRACT1_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK1_NUMBER.into(),
-                    Ok(BLOCK1_SIGNATURE.clone()),
-                );
                 // Stay at head, no more blocks available
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK2_NUMBER,
-                    Err(block_not_found()),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK2_NUMBER.into(),
                     Err(block_not_found()),
                 );
                 expect_block_header(
@@ -2264,7 +2085,7 @@ mod tests {
                     assert_eq!(*block, *BLOCK0);
                     assert_eq_sorted!(*state_update, *STATE_UPDATE0);
                     // assert_eq!(*signature, BLOCK0_COMMITMENT_SIGNATURE);
-                    assert_eq!(*signature, BLOCK0_SIGNATURE.signature());
+                    assert_eq!(*signature, BLOCK0_SIGNATURE);
                 });
                 assert_matches!(rx_event.recv().await.unwrap(),
                     SyncEvent::CairoClass { hash, .. } => {
@@ -2274,7 +2095,7 @@ mod tests {
                     assert_eq!(*block, *BLOCK1);
                     assert_eq_sorted!(*state_update, *STATE_UPDATE1);
                     // assert_eq!(*signature, BLOCK1_COMMITMENT_SIGNATURE);
-                    assert_eq!(*signature, BLOCK1_SIGNATURE.signature());
+                    assert_eq!(*signature, BLOCK1_SIGNATURE);
                 });
             }
 
@@ -2283,14 +2104,17 @@ mod tests {
                 let (tx_event, mut rx_event) = tokio::sync::mpsc::channel(1);
                 let mut mock = MockGatewayApi::new();
                 let mut seq = mockall::Sequence::new();
-                let mut signature_seq = mockall::Sequence::new();
 
                 // Start with downloading block #1
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Ok((BLOCK1.clone(), STATE_UPDATE1.clone())),
+                    Ok((
+                        BLOCK1.clone(),
+                        STATE_UPDATE1.clone(),
+                        BLOCK1_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -2298,24 +2122,12 @@ mod tests {
                     CONTRACT1_HASH,
                     Ok(CONTRACT1_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK1_NUMBER.into(),
-                    Ok(BLOCK1_SIGNATURE.clone()),
-                );
 
                 // Stay at head, no more blocks available
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK2_NUMBER,
-                    Err(block_not_found()),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK2_NUMBER.into(),
                     Err(block_not_found()),
                 );
                 expect_block_header(
@@ -2377,7 +2189,6 @@ mod tests {
                 let (tx_event, _rx_event) = tokio::sync::mpsc::channel(1);
                 let mut mock = MockGatewayApi::new();
                 let mut seq = mockall::Sequence::new();
-                let mut signature_seq = mockall::Sequence::new();
 
                 // Block with a non-accepted status
                 let mut block = BLOCK0.clone();
@@ -2386,13 +2197,7 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((block, STATE_UPDATE0.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK0_NUMBER.into(),
-                    Ok(BLOCK0_SIGNATURE.clone()),
+                    Ok((block, STATE_UPDATE0.clone(), BLOCK0_SIGNATURE.clone())),
                 );
 
                 let jh = spawn_sync_default(tx_event, mock);
@@ -2418,14 +2223,17 @@ mod tests {
                 let (tx_event, mut rx_event) = tokio::sync::mpsc::channel(1);
                 let mut mock = MockGatewayApi::new();
                 let mut seq = mockall::Sequence::new();
-                let mut signature_seq = mockall::Sequence::new();
 
                 // Fetch the genesis block with respective state update and contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0.clone(), STATE_UPDATE0.clone())),
+                    Ok((
+                        BLOCK0.clone(),
+                        STATE_UPDATE0.clone(),
+                        BLOCK0_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -2433,18 +2241,16 @@ mod tests {
                     CONTRACT0_HASH,
                     Ok(CONTRACT0_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK0_NUMBER.into(),
-                    Ok(BLOCK0_SIGNATURE.clone()),
-                );
                 // Fetch block #1 with respective state update and contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Ok((BLOCK1.clone(), STATE_UPDATE1.clone())),
+                    Ok((
+                        BLOCK1.clone(),
+                        STATE_UPDATE1.clone(),
+                        BLOCK1_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -2452,23 +2258,11 @@ mod tests {
                     CONTRACT1_HASH,
                     Ok(CONTRACT1_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK1_NUMBER.into(),
-                    Ok(BLOCK1_SIGNATURE.clone()),
-                );
                 // Block #2 is not there
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK2_NUMBER,
-                    Err(block_not_found()),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK2_NUMBER.into(),
                     Err(block_not_found()),
                 );
 
@@ -2486,13 +2280,11 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK2_NUMBER,
-                    Ok((BLOCK2.clone(), STATE_UPDATE2.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK2_NUMBER.into(),
-                    Ok(BLOCK2_SIGNATURE.clone()),
+                    Ok((
+                        BLOCK2.clone(),
+                        STATE_UPDATE2.clone(),
+                        BLOCK2_SIGNATURE.clone(),
+                    )),
                 );
 
                 // Indicate that we are at the head - no new blocks available and the latest
@@ -2502,12 +2294,6 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK3_NUMBER,
-                    Err(block_not_found()),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK3_NUMBER.into(),
                     Err(block_not_found()),
                 );
                 expect_block_header(
@@ -2570,14 +2356,17 @@ mod tests {
                 let (tx_event, mut rx_event) = tokio::sync::mpsc::channel(1);
                 let mut mock = MockGatewayApi::new();
                 let mut seq = mockall::Sequence::new();
-                let mut signature_seq = mockall::Sequence::new();
 
                 // Fetch the genesis block with respective state update and contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0.clone(), STATE_UPDATE0.clone())),
+                    Ok((
+                        BLOCK0.clone(),
+                        STATE_UPDATE0.clone(),
+                        BLOCK0_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -2585,24 +2374,12 @@ mod tests {
                     CONTRACT0_HASH,
                     Ok(CONTRACT0_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK0_NUMBER.into(),
-                    Ok(BLOCK0_SIGNATURE.clone()),
-                );
 
                 // Block #1 is not there
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Err(block_not_found()),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK1_NUMBER.into(),
                     Err(block_not_found()),
                 );
 
@@ -2621,7 +2398,11 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0_V2.clone(), STATE_UPDATE0_V2.clone())),
+                    Ok((
+                        BLOCK0_V2.clone(),
+                        STATE_UPDATE0_V2.clone(),
+                        BLOCK0_SIGNATURE_V2.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -2629,24 +2410,12 @@ mod tests {
                     CONTRACT0_HASH_V2,
                     Ok(CONTRACT0_DEF_V2.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK0_NUMBER.into(),
-                    Ok(BLOCK0_SIGNATURE_V2.clone()),
-                );
 
                 // Indicate that we are still staying at the head - no new blocks
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Err(block_not_found()),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK1_NUMBER.into(),
                     Err(block_not_found()),
                 );
 
@@ -2698,7 +2467,6 @@ mod tests {
                 let (tx_event, mut rx_event) = tokio::sync::mpsc::channel(1);
                 let mut mock = MockGatewayApi::new();
                 let mut seq = mockall::Sequence::new();
-                let mut signature_seq = mockall::Sequence::new();
 
                 let block1_v2 = reply::Block {
                     block_hash: BLOCK1_HASH_V2,
@@ -2738,7 +2506,11 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0.clone(), STATE_UPDATE0.clone())),
+                    Ok((
+                        BLOCK0.clone(),
+                        STATE_UPDATE0.clone(),
+                        BLOCK0_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -2746,18 +2518,16 @@ mod tests {
                     CONTRACT0_HASH,
                     Ok(CONTRACT0_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK0_NUMBER.into(),
-                    Ok(BLOCK0_SIGNATURE.clone()),
-                );
                 // Fetch block #1 with respective state update and contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Ok((BLOCK1.clone(), STATE_UPDATE1.clone())),
+                    Ok((
+                        BLOCK1.clone(),
+                        STATE_UPDATE1.clone(),
+                        BLOCK1_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -2765,36 +2535,22 @@ mod tests {
                     CONTRACT1_HASH,
                     Ok(CONTRACT1_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK1_NUMBER.into(),
-                    Ok(BLOCK1_SIGNATURE.clone()),
-                );
                 // Fetch block #2 with respective state update and contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK2_NUMBER,
-                    Ok((BLOCK2.clone(), STATE_UPDATE2.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK2_NUMBER.into(),
-                    Ok(BLOCK2_SIGNATURE.clone()),
+                    Ok((
+                        BLOCK2.clone(),
+                        STATE_UPDATE2.clone(),
+                        BLOCK2_SIGNATURE.clone(),
+                    )),
                 );
                 // Block #3 is not there
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK3_NUMBER,
-                    Err(block_not_found()),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK3_NUMBER.into(),
                     Err(block_not_found()),
                 );
 
@@ -2814,13 +2570,21 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Ok((block1_v2.clone(), STATE_UPDATE1_V2.clone())),
+                    Ok((
+                        block1_v2.clone(),
+                        STATE_UPDATE1_V2.clone(),
+                        BLOCK1_SIGNATURE_V2.clone(),
+                    )),
                 );
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0_V2.clone(), STATE_UPDATE0_V2.clone())),
+                    Ok((
+                        BLOCK0_V2.clone(),
+                        STATE_UPDATE0_V2.clone(),
+                        BLOCK0_SIGNATURE_V2.clone(),
+                    )),
                 );
 
                 // Once the L2 sync task has found where reorg occurred,
@@ -2831,7 +2595,11 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0_V2.clone(), STATE_UPDATE0_V2.clone())),
+                    Ok((
+                        BLOCK0_V2.clone(),
+                        STATE_UPDATE0_V2.clone(),
+                        BLOCK0_SIGNATURE_V2.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -2839,25 +2607,17 @@ mod tests {
                     CONTRACT0_HASH_V2,
                     Ok(CONTRACT0_DEF_V2.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK0_NUMBER.into(),
-                    Ok(BLOCK0_SIGNATURE_V2.clone()),
-                );
                 // Fetch the new block #1 from the fork with respective state update and
                 // contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Ok((block1_v2.clone(), STATE_UPDATE1_V2.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK1_NUMBER.into(),
-                    Ok(BLOCK1_SIGNATURE_V2.clone()),
+                    Ok((
+                        block1_v2.clone(),
+                        STATE_UPDATE1_V2.clone(),
+                        BLOCK1_SIGNATURE_V2.clone(),
+                    )),
                 );
 
                 // Indicate that we are still staying at the head - no new blocks and the latest
@@ -2867,12 +2627,6 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK2_NUMBER,
-                    Err(block_not_found()),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK2_NUMBER.into(),
                     Err(block_not_found()),
                 );
                 expect_block_header(
@@ -2961,7 +2715,6 @@ mod tests {
                 let (tx_event, mut rx_event) = tokio::sync::mpsc::channel(1);
                 let mut mock = MockGatewayApi::new();
                 let mut seq = mockall::Sequence::new();
-                let mut signature_seq = mockall::Sequence::new();
 
                 let block1_v2 = reply::Block {
                     block_hash: BLOCK1_HASH_V2,
@@ -3065,7 +2818,11 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0.clone(), STATE_UPDATE0.clone())),
+                    Ok((
+                        BLOCK0.clone(),
+                        STATE_UPDATE0.clone(),
+                        BLOCK0_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -3073,18 +2830,16 @@ mod tests {
                     CONTRACT0_HASH,
                     Ok(CONTRACT0_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK0_NUMBER.into(),
-                    Ok(BLOCK0_SIGNATURE.clone()),
-                );
                 // Fetch block #1 with respective state update and contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Ok((BLOCK1.clone(), STATE_UPDATE1.clone())),
+                    Ok((
+                        BLOCK1.clone(),
+                        STATE_UPDATE1.clone(),
+                        BLOCK1_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -3092,49 +2847,33 @@ mod tests {
                     CONTRACT1_HASH,
                     Ok(CONTRACT1_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK1_NUMBER.into(),
-                    Ok(BLOCK1_SIGNATURE.clone()),
-                );
                 // Fetch block #2 with respective state update and contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK2_NUMBER,
-                    Ok((BLOCK2.clone(), STATE_UPDATE2.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK2_NUMBER.into(),
-                    Ok(BLOCK2_SIGNATURE.clone()),
+                    Ok((
+                        BLOCK2.clone(),
+                        STATE_UPDATE2.clone(),
+                        BLOCK2_SIGNATURE.clone(),
+                    )),
                 );
                 // Fetch block #3 with respective state update and contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK3_NUMBER,
-                    Ok((block3.clone(), STATE_UPDATE3.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK3_NUMBER.into(),
-                    Ok(BLOCK3_SIGNATURE.clone()),
+                    Ok((
+                        block3.clone(),
+                        STATE_UPDATE3.clone(),
+                        BLOCK3_SIGNATURE.clone(),
+                    )),
                 );
                 // Block #4 is not there.
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK4_NUMBER,
-                    Err(block_not_found()),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK4_NUMBER.into(),
                     Err(block_not_found()),
                 );
 
@@ -3157,19 +2896,31 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK2_NUMBER,
-                    Ok((block2_v2.clone(), STATE_UPDATE2_V2.clone())),
+                    Ok((
+                        block2_v2.clone(),
+                        STATE_UPDATE2_V2.clone(),
+                        BLOCK2_SIGNATURE_V2.clone(),
+                    )),
                 );
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Ok((block1_v2.clone(), STATE_UPDATE1_V2.clone())),
+                    Ok((
+                        block1_v2.clone(),
+                        STATE_UPDATE1_V2.clone(),
+                        BLOCK1_SIGNATURE_V2.clone(),
+                    )),
                 );
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0.clone(), STATE_UPDATE0.clone())),
+                    Ok((
+                        BLOCK0.clone(),
+                        STATE_UPDATE0.clone(),
+                        BLOCK0_SIGNATURE.clone(),
+                    )),
                 );
 
                 // Finally the L2 sync task is downloading the new blocks once it knows where to
@@ -3180,26 +2931,22 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Ok((block1_v2.clone(), STATE_UPDATE1_V2.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK1_NUMBER.into(),
-                    Ok(BLOCK1_SIGNATURE_V2.clone()),
+                    Ok((
+                        block1_v2.clone(),
+                        STATE_UPDATE1_V2.clone(),
+                        BLOCK1_SIGNATURE_V2.clone(),
+                    )),
                 );
                 // Fetch the new block #2 from the fork with respective state update
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK2_NUMBER,
-                    Ok((block2_v2.clone(), STATE_UPDATE2_V2.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK2_NUMBER.into(),
-                    Ok(BLOCK2_SIGNATURE_V2.clone()),
+                    Ok((
+                        block2_v2.clone(),
+                        STATE_UPDATE2_V2.clone(),
+                        BLOCK2_SIGNATURE_V2.clone(),
+                    )),
                 );
                 // Indicate that we are still staying at the head - no new blocks and the latest
                 // block matches our head. Because of this, L2 sync task will wait for the
@@ -3208,12 +2955,6 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK3_NUMBER,
-                    Err(block_not_found()),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK3_NUMBER.into(),
                     Err(block_not_found()),
                 );
                 expect_block_header(
@@ -3303,7 +3044,6 @@ mod tests {
                 let (tx_event, mut rx_event) = tokio::sync::mpsc::channel(1);
                 let mut mock = MockGatewayApi::new();
                 let mut seq = mockall::Sequence::new();
-                let mut signature_seq = mockall::Sequence::new();
 
                 let block2_v2 = reply::Block {
                     block_hash: BLOCK2_HASH_V2,
@@ -3343,7 +3083,11 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0.clone(), STATE_UPDATE0.clone())),
+                    Ok((
+                        BLOCK0.clone(),
+                        STATE_UPDATE0.clone(),
+                        BLOCK0_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -3351,18 +3095,16 @@ mod tests {
                     CONTRACT0_HASH,
                     Ok(CONTRACT0_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK0_NUMBER.into(),
-                    Ok(BLOCK0_SIGNATURE.clone()),
-                );
                 // Fetch block #1 with respective state update and contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Ok((BLOCK1.clone(), STATE_UPDATE1.clone())),
+                    Ok((
+                        BLOCK1.clone(),
+                        STATE_UPDATE1.clone(),
+                        BLOCK1_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -3370,36 +3112,22 @@ mod tests {
                     CONTRACT1_HASH,
                     Ok(CONTRACT1_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK1_NUMBER.into(),
-                    Ok(BLOCK1_SIGNATURE.clone()),
-                );
                 // Fetch block #2 with respective state update and contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK2_NUMBER,
-                    Ok((BLOCK2.clone(), STATE_UPDATE2.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK2_NUMBER.into(),
-                    Ok(BLOCK2_SIGNATURE.clone()),
+                    Ok((
+                        BLOCK2.clone(),
+                        STATE_UPDATE2.clone(),
+                        BLOCK2_SIGNATURE.clone(),
+                    )),
                 );
                 // Block #3 is not there
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK3_NUMBER,
-                    Err(block_not_found()),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK3_NUMBER.into(),
                     Err(block_not_found()),
                 );
 
@@ -3422,7 +3150,11 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Ok((BLOCK1.clone(), STATE_UPDATE1.clone())),
+                    Ok((
+                        BLOCK1.clone(),
+                        STATE_UPDATE1.clone(),
+                        BLOCK1_SIGNATURE.clone(),
+                    )),
                 );
 
                 // Finally the L2 sync task is downloading the new blocks once it knows where to
@@ -3432,13 +3164,11 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK2_NUMBER,
-                    Ok((block2_v2.clone(), STATE_UPDATE2_V2.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK2_NUMBER.into(),
-                    Ok(BLOCK2_SIGNATURE_V2.clone()),
+                    Ok((
+                        block2_v2.clone(),
+                        STATE_UPDATE2_V2.clone(),
+                        BLOCK2_SIGNATURE_V2.clone(),
+                    )),
                 );
 
                 // Indicate that we are still staying at the head - no new blocks and the latest
@@ -3448,12 +3178,6 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK3_NUMBER,
-                    Err(block_not_found()),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK3_NUMBER.into(),
                     Err(block_not_found()),
                 );
                 expect_block_header(
@@ -3515,7 +3239,6 @@ mod tests {
                 let (tx_event, mut rx_event) = tokio::sync::mpsc::channel(1);
                 let mut mock = MockGatewayApi::new();
                 let mut seq = mockall::Sequence::new();
-                let mut signature_seq = mockall::Sequence::new();
 
                 let block1_v2 = reply::Block {
                     block_hash: BLOCK1_HASH_V2,
@@ -3587,7 +3310,11 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0.clone(), STATE_UPDATE0.clone())),
+                    Ok((
+                        BLOCK0.clone(),
+                        STATE_UPDATE0.clone(),
+                        BLOCK0_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -3595,19 +3322,17 @@ mod tests {
                     CONTRACT0_HASH,
                     Ok(CONTRACT0_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK0_NUMBER.into(),
-                    Ok(BLOCK0_SIGNATURE.clone()),
-                );
 
                 // Fetch block #1 with respective state update and contracts
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Ok((BLOCK1.clone(), STATE_UPDATE1.clone())),
+                    Ok((
+                        BLOCK1.clone(),
+                        STATE_UPDATE1.clone(),
+                        BLOCK1_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -3615,24 +3340,16 @@ mod tests {
                     CONTRACT1_HASH,
                     Ok(CONTRACT1_DEF.clone()),
                 );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK1_NUMBER.into(),
-                    Ok(BLOCK1_SIGNATURE.clone()),
-                );
                 // Fetch block #2 whose parent hash does not match block #1 hash
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK2_NUMBER,
-                    Ok((block2.clone(), STATE_UPDATE2.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK2_NUMBER.into(),
-                    Ok(BLOCK2_SIGNATURE.clone()),
+                    Ok((
+                        block2.clone(),
+                        STATE_UPDATE2.clone(),
+                        BLOCK2_SIGNATURE.clone(),
+                    )),
                 );
 
                 // L2 sync task goes back block by block to find where the block hash matches
@@ -3642,7 +3359,11 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0.clone(), STATE_UPDATE0.clone())),
+                    Ok((
+                        BLOCK0.clone(),
+                        STATE_UPDATE0.clone(),
+                        BLOCK0_SIGNATURE.clone(),
+                    )),
                 );
 
                 // Finally the L2 sync task is downloading the new blocks once it knows where to
@@ -3652,26 +3373,22 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK1_NUMBER,
-                    Ok((block1_v2.clone(), STATE_UPDATE1_V2.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK1_NUMBER.into(),
-                    Ok(BLOCK1_SIGNATURE_V2.clone()),
+                    Ok((
+                        block1_v2.clone(),
+                        STATE_UPDATE1_V2.clone(),
+                        BLOCK1_SIGNATURE_V2.clone(),
+                    )),
                 );
                 // Fetch the block #2 again, now with respective state update
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK2_NUMBER,
-                    Ok((block2.clone(), STATE_UPDATE2.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK2_NUMBER.into(),
-                    Ok(BLOCK2_SIGNATURE.clone()),
+                    Ok((
+                        block2.clone(),
+                        STATE_UPDATE2.clone(),
+                        BLOCK2_SIGNATURE.clone(),
+                    )),
                 );
 
                 // Indicate that we are still staying at the head - no new blocks and the latest
@@ -3680,12 +3397,6 @@ mod tests {
                     &mut mock,
                     &mut seq,
                     BLOCK3_NUMBER,
-                    Err(block_not_found()),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK3_NUMBER.into(),
                     Err(block_not_found()),
                 );
                 expect_block_header(
@@ -3737,19 +3448,16 @@ mod tests {
 
                 let mut mock = MockGatewayApi::new();
                 let mut seq = mockall::Sequence::new();
-                let mut signature_seq = mockall::Sequence::new();
 
                 expect_state_update_with_block(
                     &mut mock,
                     &mut seq,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0.clone(), STATE_UPDATE0.clone())),
-                );
-                expect_signature(
-                    &mut mock,
-                    &mut signature_seq,
-                    BLOCK0_NUMBER.into(),
-                    Ok(BLOCK0_SIGNATURE.clone()),
+                    Ok((
+                        BLOCK0.clone(),
+                        STATE_UPDATE0.clone(),
+                        BLOCK0_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash(
                     &mut mock,
@@ -3785,33 +3493,31 @@ mod tests {
                 expect_state_update_with_block_no_sequence(
                     &mut mock,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0.clone(), STATE_UPDATE0.clone())),
+                    Ok((
+                        BLOCK0.clone(),
+                        STATE_UPDATE0.clone(),
+                        BLOCK0_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash_no_sequence(
                     &mut mock,
                     CONTRACT0_HASH,
                     Ok(CONTRACT0_DEF.clone()),
                 );
-                expect_signature_no_sequence(
-                    &mut mock,
-                    BLOCK0_NUMBER.into(),
-                    Ok(BLOCK0_SIGNATURE.clone()),
-                );
                 // Download block #1 with respective state update and contracts
                 expect_state_update_with_block_no_sequence(
                     &mut mock,
                     BLOCK1_NUMBER,
-                    Ok((BLOCK1.clone(), STATE_UPDATE1.clone())),
+                    Ok((
+                        BLOCK1.clone(),
+                        STATE_UPDATE1.clone(),
+                        BLOCK1_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash_no_sequence(
                     &mut mock,
                     CONTRACT1_HASH,
                     Ok(CONTRACT1_DEF.clone()),
-                );
-                expect_signature_no_sequence(
-                    &mut mock,
-                    BLOCK1_NUMBER.into(),
-                    Ok(BLOCK1_SIGNATURE.clone()),
                 );
 
                 // Let's run the UUT
@@ -3824,7 +3530,7 @@ mod tests {
                 assert_matches!(rx_event.recv().await.unwrap(), SyncEvent::DownloadedBlock((block, _), state_update, signature, _, _) => {
                     assert_eq!(*block, *BLOCK0);
                     assert_eq_sorted!(*state_update, *STATE_UPDATE0);
-                    assert_eq!(*signature, BLOCK0_SIGNATURE.signature());
+                    assert_eq!(*signature, BLOCK0_SIGNATURE);
                 });
                 assert_matches!(rx_event.recv().await.unwrap(),
                     SyncEvent::CairoClass { hash, .. } => {
@@ -3833,7 +3539,7 @@ mod tests {
                 assert_matches!(rx_event.recv().await.unwrap(), SyncEvent::DownloadedBlock((block, _), state_update, signature, _, _) => {
                     assert_eq!(*block, *BLOCK1);
                     assert_eq_sorted!(*state_update, *STATE_UPDATE1);
-                    assert_eq!(*signature, BLOCK1_SIGNATURE.signature());
+                    assert_eq!(*signature, BLOCK1_SIGNATURE);
                 });
 
                 let result = jh.await.unwrap();
@@ -3850,17 +3556,16 @@ mod tests {
                 expect_state_update_with_block_no_sequence_at_most_once(
                     &mut mock,
                     BLOCK0_NUMBER,
-                    Ok((BLOCK0.clone(), STATE_UPDATE0.clone())),
+                    Ok((
+                        BLOCK0.clone(),
+                        STATE_UPDATE0.clone(),
+                        BLOCK0_SIGNATURE.clone(),
+                    )),
                 );
                 expect_class_by_hash_no_sequence_at_most_once(
                     &mut mock,
                     CONTRACT0_HASH,
                     Ok(CONTRACT0_DEF.clone()),
-                );
-                expect_signature_no_sequence_at_most_once(
-                    &mut mock,
-                    BLOCK0_NUMBER.into(),
-                    Ok(BLOCK0_SIGNATURE.clone()),
                 );
                 // Downloading block 1 fails with block not found
                 expect_state_update_with_block_no_sequence(
