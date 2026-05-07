@@ -278,10 +278,10 @@ pub fn spawn(
                             //   actively being worked on).
                             if consensus
                                 .last_decided_height()
-                                .map_or(true, |last_decided| last_decided == height)
+                                .is_none_or(|last_decided| last_decided == height)
                                 && consensus
                                     .max_active_height()
-                                    .map_or(true, |max_active| max_active <= height)
+                                    .is_none_or(|max_active| max_active <= height)
                             {
                                 let next_height = BlockNumber::new(height + 1)
                                     .context("Next height exceeds i64::MAX")?
