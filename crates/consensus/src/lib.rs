@@ -555,7 +555,17 @@ impl<
                 }
 
                 // Only call StartHeight if the height is not already finalized.
-                if !internal_consensus.is_finalized() {
+                //
+                // With one exception:
+                // In an extremely rare case, where this node is required for consensus to move
+                // forward (ie. avoid stalling when there are only 3 nodes) it may happen that
+                // the other 2 nodes have not finalized their heights H and have timed out while
+                // our node, prior to being restarted, has finalized the same height H. Without
+                // our node restarting consensus at H the network will stall even though the
+                // number of honest nodes is sufficient (ie. 3).
+                if !internal_consensus.is_finalized()
+                    || max_height.is_some_and(|max_height| max_height == height)
+                {
                     internal_consensus
                         .handle_command(ConsensusCommand::StartHeight(height, validator_set));
                 }
