@@ -384,7 +384,7 @@ where
         // - Bob downloads H from FGw, even though he will shortly have a confirmation
         //   that he can commit the locally executed proposal at H.
         if let Some(l2_block) = reply {
-            tracing::debug!("Block {next} already committed in consensus, skipping download");
+            tracing::debug!("Block {next} already decided in consensus, skipping download");
 
             let (state_tries_updated_tx, rx) = tokio::sync::oneshot::channel();
 

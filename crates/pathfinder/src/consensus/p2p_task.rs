@@ -844,7 +844,7 @@ fn execute_deferred_for_next_height<T: TransactionExt>(
     l2_gas_price_provider: Option<L2GasPriceProvider>,
     worker_pool: ValidatorWorkerPool,
     my_starknet_version: StarknetVersion,
-) -> anyhow::Result<Option<(HeightAndRound, ProposalCommitmentWithOrigin)>> {
+) -> Result<Option<(HeightAndRound, ProposalCommitmentWithOrigin)>, ProposalHandlingError> {
     // Retrieve and execute any deferred transactions or proposal finalizations
     // for the next height, if any. Sort by (height, round) in ascending order.
     let deferred = {
@@ -1255,7 +1255,7 @@ fn defer_or_execute_proposal_fin<T: TransactionExt>(
     l2_gas_price_provider: Option<L2GasPriceProvider>,
     worker_pool: ValidatorWorkerPool,
     my_starknet_version: StarknetVersion,
-) -> anyhow::Result<Option<ProposalCommitmentWithOrigin>> {
+) -> Result<Option<ProposalCommitmentWithOrigin>, ProposalHandlingError> {
     let commitment = ProposalCommitmentWithOrigin {
         proposal_commitment: ProposalCommitment(proposal_commitment.0),
         proposer_address,
