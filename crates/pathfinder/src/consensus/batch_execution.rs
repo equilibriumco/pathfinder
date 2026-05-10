@@ -335,10 +335,7 @@ mod tests {
     use pathfinder_validator::{ProdTransactionMapper, ValidatorBlockInfoStage};
 
     use super::*;
-    use crate::consensus::inner::dummy_proposal::{
-        create_test_proposal_init,
-        create_transaction_batch,
-    };
+    use crate::consensus::dummy_proposal::{create_test_proposal_init, create_transaction_batch};
 
     /// Creates a worker pool for tests.
     fn create_test_worker_pool() -> ValidatorWorkerPool {

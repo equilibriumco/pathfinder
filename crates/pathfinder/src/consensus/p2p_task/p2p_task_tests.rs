@@ -31,17 +31,8 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::error::Elapsed;
 use tokio::time::timeout;
 
-use crate::consensus::inner::dummy_proposal::{
-    create_test_proposal_init,
-    create_transaction_batch,
-};
-use crate::consensus::inner::{
-    p2p_task,
-    ConsensusTaskEvent,
-    ConsensusValue,
-    P2PTaskConfig,
-    P2PTaskEvent,
-};
+use crate::consensus::dummy_proposal::{create_test_proposal_init, create_transaction_batch};
+use crate::consensus::{p2p_task, ConsensusTaskEvent, ConsensusValue, P2PTaskConfig, P2PTaskEvent};
 use crate::SyncMessageToConsensus;
 
 /// Helper struct to setup and manage the test environment (databases,
@@ -619,12 +610,10 @@ async fn test_proposal_fin_deferred_until_parent_block_committed(
     // Step 6: Send MarkBlockAsDecidedAndCleanUp for parent block (should trigger
     // finalization)
     env.tx_to_p2p
-        .send(
-            crate::consensus::inner::P2PTaskEvent::MarkBlockAsDecidedAndCleanUp(
-                h1r0,
-                ConsensusValue(proposal_commitment1),
-            ),
-        )
+        .send(P2PTaskEvent::MarkBlockAsDecidedAndCleanUp(
+            h1r0,
+            ConsensusValue(proposal_commitment1),
+        ))
         .await
         .expect("Failed to send MarkBlockAsDecidedAndCleanUp");
     env.verify_task_alive().await;

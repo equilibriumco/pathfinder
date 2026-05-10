@@ -58,12 +58,12 @@ use super::gossip_retry::{GossipHandler, GossipRetryConfig};
 use super::proposal_validator::{ProposalPartsValidator, ValidationResult};
 use super::{integration_testing, ConsensusTaskEvent, ConsensusValue, P2PTaskConfig, P2PTaskEvent};
 use crate::config::integration_testing::InjectFailureConfig;
-use crate::consensus::inner::batch_execution::{
+use crate::consensus::batch_execution::{
     BatchExecutionManager,
     DeferredExecution,
     ProposalCommitmentWithOrigin,
 };
-use crate::consensus::inner::create_empty_block;
+use crate::consensus::create_empty_block;
 use crate::SyncMessageToConsensus;
 
 #[cfg(test)]
@@ -1520,7 +1520,7 @@ mod tests {
     use pathfinder_validator::ValidatorWorkerPool;
 
     use super::*;
-    use crate::consensus::inner::dummy_proposal::{
+    use crate::consensus::dummy_proposal::{
         create_with_invalid_l1_handler_transactions,
         ProposalCreationConfig,
     };
