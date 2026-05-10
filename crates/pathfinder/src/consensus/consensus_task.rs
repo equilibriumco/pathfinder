@@ -35,7 +35,7 @@ use super::fetch_validators::L2ValidatorSetProvider;
 use super::{integration_testing, ConsensusTaskEvent, ConsensusValue, P2PTaskEvent};
 use crate::config::integration_testing::InjectFailureConfig;
 use crate::config::ConsensusConfig;
-use crate::consensus::inner::dummy_proposal;
+use crate::consensus::dummy_proposal;
 use crate::devnet::Account;
 
 #[allow(clippy::too_many_arguments)]
