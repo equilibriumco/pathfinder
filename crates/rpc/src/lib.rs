@@ -786,16 +786,6 @@ pub mod test_utils {
             },
         ];
 
-        let candidate_transactions = vec![Transaction {
-            hash: transaction_hash_bytes!(b"candidate tx hash 0"),
-            variant: TransactionVariant::InvokeV0(InvokeTransactionV0 {
-                sender_address: contract_address_bytes!(b"candidate contract addr 0"),
-                entry_point_selector: entry_point_bytes!(b"entry point 0"),
-                entry_point_type: Some(EntryPointType::External),
-                ..Default::default()
-            }),
-        }];
-
         let transaction_receipts = vec![
             (
                 Receipt {
@@ -907,7 +897,6 @@ pub mod test_utils {
                 l1_da_mode: L1DataAvailabilityMode::Calldata,
             },
             pre_latest: None,
-            candidate_transactions,
         };
 
         // The class definitions must be inserted into the database.
@@ -1142,16 +1131,6 @@ pub mod test_utils {
             },
         ];
 
-        let candidate_transactions = vec![Transaction {
-            hash: transaction_hash_bytes!(b"candidate tx hash 0"),
-            variant: TransactionVariant::InvokeV0(InvokeTransactionV0 {
-                sender_address: contract_address_bytes!(b"candidate contract addr 0"),
-                entry_point_selector: entry_point_bytes!(b"entry point 0"),
-                entry_point_type: Some(EntryPointType::External),
-                ..Default::default()
-            }),
-        }];
-
         let pre_confirmed_tx_receipts = vec![
             (
                 Receipt {
@@ -1267,7 +1246,6 @@ pub mod test_utils {
                 block: pre_latest_block,
                 state_update: pre_latest_state_update.clone(),
             }),
-            candidate_transactions,
         };
 
         let aggregated_state_update = pre_latest_state_update
@@ -1741,7 +1719,5 @@ mod tests {
                 panic!("{failures:#?} were marked as excluded but are actually present");
             }
         }
-
-
     }
 }

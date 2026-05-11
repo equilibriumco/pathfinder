@@ -227,49 +227,6 @@ mod tests {
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
-    async fn candidate(#[case] version: RpcVersion) {
-        let context = RpcContext::for_tests_with_pre_confirmed().await;
-        let tx_hash = transaction_hash_bytes!(b"candidate tx hash 0");
-        let input = Input {
-            transaction_hash: tx_hash,
-            response_flags: TransactionResponseFlags::default(),
-        };
-        let result = get_transaction_by_hash(context, input, version).await;
-
-        match version {
-            RpcVersion::PathfinderV01 => unreachable!(),
-            RpcVersion::V06 | RpcVersion::V07 | RpcVersion::V08 => {
-                assert_matches::assert_matches!(
-                    result,
-                    Err(GetTransactionByHashError::TxnHashNotFound)
-                );
-            }
-            RpcVersion::V09 => {
-                let output_json = result.unwrap().serialize(Serializer { version }).unwrap();
-                let expected_json: serde_json::Value = serde_json::from_str(include_str!(
-                    "../../fixtures/0.9.0/transactions/txn_candidate_hash_0.json"
-                ))
-                .unwrap();
-                assert_eq!(output_json, expected_json);
-            }
-            RpcVersion::V10 => {
-                let output_json = result.unwrap().serialize(Serializer { version }).unwrap();
-                let expected_json: serde_json::Value = serde_json::from_str(include_str!(
-                    "../../fixtures/0.10.0/transactions/txn_candidate_hash_0.json"
-                ))
-                .unwrap();
-                assert_eq!(output_json, expected_json);
-            }
-        }
-    }
-
-    #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
-    #[case::v09(RpcVersion::V09)]
-    #[case::v10(RpcVersion::V10)]
-    #[tokio::test]
     async fn pre_latest(#[case] version: RpcVersion) {
         let context = RpcContext::for_tests_with_pre_latest_and_pre_confirmed().await;
         let tx_hash = transaction_hash_bytes!(b"prelatest tx hash 0");

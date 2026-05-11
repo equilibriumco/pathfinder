@@ -98,7 +98,7 @@ pub async fn get_messages_status(
             // transactions; the cases are kept for backwards
             // compatibility - more explicit error handling can be
             // added if/when they actually happen.
-            TxStatus::Received | TxStatus::Candidate => (FinalityStatus::Received, None),
+            TxStatus::Received => (FinalityStatus::Received, None),
             TxStatus::Rejected { .. } => (FinalityStatus::Rejected, None),
             TxStatus::PreConfirmed(ref exec_status) => {
                 (FinalityStatus::PreConfirmed, Some(exec_status.clone()))

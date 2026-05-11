@@ -76,7 +76,6 @@ impl PendingWatcher {
         let PendingBlocks {
             pre_confirmed,
             pre_latest,
-            candidate_transactions,
         } = watched_pending_blocks.as_ref();
 
         let pending_data = {
@@ -111,7 +110,6 @@ impl PendingWatcher {
                     PendingData {
                         blocks: PendingBlocks {
                             pre_confirmed: pre_confirmed.clone(),
-                            candidate_transactions: candidate_transactions.clone(),
                             pre_latest: Some(pre_latest),
                         }
                         .into(),
@@ -135,7 +133,6 @@ impl PendingWatcher {
                     // commitment and clone rest of the data.
                     let pre_confirmed_block = PendingBlocks {
                         pre_confirmed: pre_confirmed.clone(),
-                        candidate_transactions: candidate_transactions.clone(),
                         pre_latest: None,
                     };
                     let pre_confirmed_state_update = Arc::new(
@@ -178,7 +175,7 @@ impl PendingWatcher {
 }
 
 /// Find a transaction-with-receipt in the pre-confirmed or pre-latest block,
-/// in that order. Candidate transactions are not finalized and are skipped.
+/// in that order.
 pub fn find_finalized_tx_data(
     pending: &PendingData,
     tx_hash: pathfinder_common::TransactionHash,
@@ -234,12 +231,15 @@ pub fn find_finalized_tx_data(
 mod tests {
 
     use pathfinder_common::macro_prelude::*;
+    use pathfinder_common::receipt::Receipt;
+    use pathfinder_common::transaction::Transaction;
     use pathfinder_common::{
         BlockHeader,
         BlockTimestamp,
         GasPrice,
         L1DataAvailabilityMode,
         StarknetVersion,
+        TransactionHash,
     };
     use starknet_gateway_types::reply::{GasPrices, Status};
 
@@ -273,7 +273,6 @@ mod tests {
                     transactions: vec![],
                     transaction_receipts: vec![],
                 },
-                candidate_transactions: vec![],
                 pre_latest: None,
             }
             .into(),
@@ -295,8 +294,8 @@ mod tests {
             timestamp: BlockTimestamp::new_or_panic(112233),
             starknet_version: StarknetVersion::new(0, 14, 0, 0),
             l1_da_mode: L1DataAvailabilityMode::Blob,
-            transactions: vec![pathfinder_common::transaction::Transaction::default()],
-            transaction_receipts: vec![(pathfinder_common::receipt::Receipt::default(), vec![])],
+            transactions: vec![Transaction::default()],
+            transaction_receipts: vec![(Receipt::default(), vec![])],
         };
         let pre_latest_state_update = StateUpdate::default().with_contract_nonce(
             contract_address_bytes!(b"pre latest contract address"),
@@ -324,13 +323,9 @@ mod tests {
                     timestamp: BlockTimestamp::new_or_panic(112233),
                     starknet_version: StarknetVersion::new(0, 14, 0, 0),
                     l1_da_mode: L1DataAvailabilityMode::Blob,
-                    transactions: vec![pathfinder_common::transaction::Transaction::default()],
-                    transaction_receipts: vec![(
-                        pathfinder_common::receipt::Receipt::default(),
-                        vec![],
-                    )],
+                    transactions: vec![Transaction::default()],
+                    transaction_receipts: vec![(Receipt::default(), vec![])],
                 },
-                candidate_transactions: vec![],
                 pre_latest: Some(PreLatestData {
                     block: pre_latest_block,
                     state_update: pre_latest_state_update,
@@ -362,7 +357,6 @@ mod tests {
                     number: latest.number + 3,
                     ..Default::default()
                 },
-                candidate_transactions: vec![],
                 pre_latest: Some(pre_latest_data),
             }
             .into(),
@@ -710,7 +704,6 @@ mod tests {
             blocks: Arc::new(PendingBlocks {
                 pre_confirmed,
                 pre_latest: None,
-                candidate_transactions: vec![],
             }),
             state_update: StateUpdate::default().into(),
             aggregated_state_update: StateUpdate::default().into(),
@@ -722,28 +715,10 @@ mod tests {
     fn pre_confirmed_block_state_diff_conversion() {
         let json =
             starknet_gateway_test_fixtures::v0_14_0::preconfirmed_block::SEPOLIA_INTEGRATION_955821;
-        let mut pre_confirmed_block: starknet_gateway_types::reply::PreConfirmedBlock =
+        let pre_confirmed_block: starknet_gateway_types::reply::PreConfirmedBlock =
             serde_json::from_str(json).unwrap();
         let number_of_pre_confirmed_transactions = pre_confirmed_block.transaction_receipts.len();
         let block_number = BlockNumber::new_or_panic(955821);
-
-        // Unfortunately that fixture does not contain a _candidate_ transaction, so
-        // just push one on to the end of the list.
-        let candidate_transaction = pathfinder_common::transaction::Transaction {
-            hash: transaction_hash!(
-                "0x352057331d5ad77465315d30b98135ddb815b86aa485d659dfeef59a904f88d"
-            ),
-            variant: pathfinder_common::transaction::TransactionVariant::InvokeV3(
-                pathfinder_common::transaction::InvokeTransactionV3 {
-                    ..Default::default()
-                },
-            ),
-        };
-        pre_confirmed_block
-            .transactions
-            .push(candidate_transaction.clone());
-        pre_confirmed_block.transaction_receipts.push(None);
-        pre_confirmed_block.transaction_state_diffs.push(None);
 
         // Convert the pre-confirmed block into pending data.
         let pending_data =
@@ -808,11 +783,76 @@ mod tests {
             number_of_pre_confirmed_transactions,
             pending_data.pre_confirmed_transactions().len()
         );
+    }
 
-        // And the single candidate transaction we've added.
+    fn sample_tx(hash: TransactionHash) -> Transaction {
+        Transaction {
+            hash,
+            ..Default::default()
+        }
+    }
+
+    fn sample_receipt(hash: TransactionHash) -> Receipt {
+        Receipt {
+            transaction_hash: hash,
+            ..Default::default()
+        }
+    }
+
+    fn unwrap_pre_confirmed_err(transactions: Vec<Transaction>, receipts: Vec<Receipt>) -> String {
+        let len = transactions.len().max(receipts.len());
+        let block = starknet_gateway_types::reply::PreConfirmedBlock {
+            transactions,
+            transaction_receipts: receipts.into_iter().map(|r| Some((r, vec![]))).collect(),
+            transaction_state_diffs: vec![None; len],
+            ..Default::default()
+        };
+        PendingData::try_from_pre_confirmed_block(Box::new(block), BlockNumber::new_or_panic(1))
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn pre_confirmed_block_with_tx_missing_receipt() {
+        let tx_hash = transaction_hash_bytes!(b"tx a");
+        let err = unwrap_pre_confirmed_err(
+            vec![sample_tx(tx_hash)],
+            vec![sample_receipt(transaction_hash_bytes!(b"tx b"))],
+        );
         assert_eq!(
-            &vec![candidate_transaction],
-            pending_data.candidate_transactions()
+            err,
+            format!("Missing transaction receipt for tx ({tx_hash})")
+        );
+    }
+
+    #[test]
+    fn pre_confirmed_block_with_more_txs_than_receipts() {
+        let tx_b_hash = transaction_hash_bytes!(b"tx b");
+        let err = unwrap_pre_confirmed_err(
+            vec![
+                sample_tx(transaction_hash_bytes!(b"tx a")),
+                sample_tx(tx_b_hash),
+            ],
+            vec![sample_receipt(transaction_hash_bytes!(b"tx a"))],
+        );
+        assert_eq!(
+            err,
+            format!("Missing transaction receipt for tx ({tx_b_hash})")
+        );
+    }
+
+    #[test]
+    fn pre_confirmed_block_with_more_receipts_than_txs() {
+        let err = unwrap_pre_confirmed_err(
+            vec![sample_tx(transaction_hash_bytes!(b"tx a"))],
+            vec![
+                sample_receipt(transaction_hash_bytes!(b"tx a")),
+                sample_receipt(transaction_hash_bytes!(b"tx b")),
+            ],
+        );
+        assert_eq!(
+            err,
+            "Mismatched transaction and receipt count in pre-confirmed block"
         );
     }
 }

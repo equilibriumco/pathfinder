@@ -12,7 +12,6 @@ use crate::{dto, RpcVersion};
 pub enum TxnStatus {
     Received,
     Rejected,
-    Candidate,
     PreConfirmed,
     AcceptedOnL2,
     AcceptedOnL1,
@@ -43,7 +42,6 @@ struct TxnExecutionStatusWithRevertReason<'a>(pub &'a pathfinder_common::receipt
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TxnFinalityStatus {
-    Candidate,
     PreConfirmed,
     AcceptedOnL2,
     AcceptedOnL1,
@@ -89,7 +87,6 @@ impl SerializeForVersion for TxnStatus {
         match self {
             TxnStatus::Received => "RECEIVED",
             TxnStatus::Rejected => "REJECTED",
-            TxnStatus::Candidate => "CANDIDATE",
             TxnStatus::PreConfirmed => "PRE_CONFIRMED",
             TxnStatus::AcceptedOnL2 => "ACCEPTED_ON_L2",
             TxnStatus::AcceptedOnL1 => "ACCEPTED_ON_L1",
@@ -136,7 +133,6 @@ impl SerializeForVersion for TxnExecutionStatusWithRevertReason<'_> {
 impl SerializeForVersion for TxnFinalityStatus {
     fn serialize(&self, serializer: Serializer) -> Result<crate::dto::Ok, crate::dto::Error> {
         match self {
-            TxnFinalityStatus::Candidate => "CANDIDATE",
             TxnFinalityStatus::PreConfirmed => "PRE_CONFIRMED",
             TxnFinalityStatus::AcceptedOnL2 => "ACCEPTED_ON_L2",
             TxnFinalityStatus::AcceptedOnL1 => "ACCEPTED_ON_L1",
@@ -149,7 +145,6 @@ impl crate::dto::DeserializeForVersion for TxnFinalityStatus {
     fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
         let s: String = value.deserialize()?;
         match s.as_str() {
-            "CANDIDATE" => Ok(Self::Candidate),
             "ACCEPTED_ON_L1" => Ok(Self::AcceptedOnL1),
             "ACCEPTED_ON_L2" => Ok(Self::AcceptedOnL2),
             "PRE_CONFIRMED" => Ok(Self::PreConfirmed),
