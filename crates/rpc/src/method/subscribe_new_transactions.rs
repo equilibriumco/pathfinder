@@ -87,7 +87,6 @@ impl crate::dto::DeserializeForVersion for Option<Params> {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TxnFinalityStatusWithoutL1Accepted {
     Received,
-    Candidate,
     PreConfirmed,
     AcceptedOnL2,
 }
@@ -99,7 +98,6 @@ impl crate::dto::SerializeForVersion for TxnFinalityStatusWithoutL1Accepted {
     ) -> Result<crate::dto::Ok, crate::dto::Error> {
         match self {
             Self::Received => "RECEIVED",
-            Self::Candidate => "CANDIDATE",
             Self::PreConfirmed => "PRE_CONFIRMED",
             Self::AcceptedOnL2 => "ACCEPTED_ON_L2",
         }
@@ -112,12 +110,19 @@ impl crate::dto::DeserializeForVersion for TxnFinalityStatusWithoutL1Accepted {
         let s: String = value.deserialize()?;
         match s.as_str() {
             "RECEIVED" => Ok(Self::Received),
-            "CANDIDATE" => Ok(Self::Candidate),
             "ACCEPTED_ON_L2" => Ok(Self::AcceptedOnL2),
             "PRE_CONFIRMED" => Ok(Self::PreConfirmed),
+            // TODO: remove after deprecation period
+            "CANDIDATE" => {
+                tracing::warn!(
+                    "Transaction finality status \"CANDIDATE\" is deprecated and will result in \
+                     an error in future releases, falling back to \"PRE_CONFIRMED\""
+                );
+                Ok(Self::PreConfirmed)
+            }
             _ => Err(serde::de::Error::unknown_variant(
                 &s,
-                &["ACCEPTED_ON_L2", "PRE_CONFIRMED", "CANDIDATE", "RECEIVED"],
+                &["ACCEPTED_ON_L2", "PRE_CONFIRMED", "RECEIVED"],
             )),
         }
     }
@@ -312,13 +317,7 @@ impl RpcSubscriptionFlow for SubscribeNewTransactions {
                     let pending_txs = pending
                         .pre_confirmed_transactions()
                         .iter()
-                        .zip(std::iter::repeat(pending_finality_status))
-                        .chain(
-                            pending
-                                .candidate_transactions()
-                                .iter()
-                                .zip(std::iter::repeat(TxnFinalityStatusWithoutL1Accepted::Candidate)),
-                        );
+                        .zip(std::iter::repeat(pending_finality_status));
 
                     if send_tx_updates(
                         pending_txs,
@@ -497,7 +496,8 @@ mod tests {
                 finality_status: vec![
                     TxnFinalityStatusWithoutL1Accepted::AcceptedOnL2,
                     TxnFinalityStatusWithoutL1Accepted::PreConfirmed,
-                    TxnFinalityStatusWithoutL1Accepted::Candidate
+                    // TODO: remove after deprecation period of CANDIDATE
+                    TxnFinalityStatusWithoutL1Accepted::PreConfirmed,
                 ],
                 sender_address: Some(
                     [contract_address!("0x1"), contract_address!("0x2")]
@@ -527,7 +527,8 @@ mod tests {
                 finality_status: vec![
                     TxnFinalityStatusWithoutL1Accepted::AcceptedOnL2,
                     TxnFinalityStatusWithoutL1Accepted::PreConfirmed,
-                    TxnFinalityStatusWithoutL1Accepted::Candidate
+                    // TODO: remove after deprecation period of CANDIDATE
+                    TxnFinalityStatusWithoutL1Accepted::PreConfirmed,
                 ],
                 sender_address: Some(
                     [contract_address!("0x1"), contract_address!("0x2")]
@@ -553,7 +554,7 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "unknown variant `ACCEPTED_ON_L1`, expected one of `ACCEPTED_ON_L2`, `PRE_CONFIRMED`, \
-             `CANDIDATE`, `RECEIVED`"
+             `RECEIVED`"
                 .to_string()
         );
     }
@@ -747,7 +748,6 @@ mod tests {
                 (contract_address!("0x1"), transaction_hash!("0x3")),
                 (contract_address!("0x2"), transaction_hash!("0x4")),
             ],
-            vec![],
         ));
         assert_eq!(
             recv(&mut rx).await,
@@ -823,7 +823,6 @@ mod tests {
                 (contract_address!("0x1"), transaction_hash!("0x3")),
                 (contract_address!("0x2"), transaction_hash!("0x4")),
             ],
-            vec![],
         ));
         assert_eq!(
             recv(&mut rx).await,
@@ -845,109 +844,11 @@ mod tests {
                 (contract_address!("0x1"), transaction_hash!("0x5")),
                 (contract_address!("0x2"), transaction_hash!("0x6")),
             ],
-            vec![],
         ));
         assert_eq!(
             recv(&mut rx).await,
             sample_pre_confirmed_transaction_message("0x1", "0x5", subscription_id)
         );
-        assert_eq!(
-            recv(&mut rx).await,
-            sample_pre_confirmed_transaction_message("0x2", "0x6", subscription_id)
-        );
-        assert_recv_nothing(&mut rx).await;
-    }
-
-    #[test_log::test(tokio::test)]
-    async fn pre_confirmed_with_candidate() {
-        let Setup {
-            tx,
-            mut rx,
-            pending_data_cache,
-            ..
-        } = setup();
-        tx.send(Ok(Message::Text(
-            serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "starknet_subscribeNewTransactions",
-                "params": {
-                    "finality_status": ["ACCEPTED_ON_L2", "PRE_CONFIRMED", "CANDIDATE"]
-                }
-            })
-            .to_string()
-            .into(),
-        )))
-        .await
-        .unwrap();
-        let response = rx.recv().await.unwrap().unwrap();
-        let subscription_id = match response {
-            Message::Text(json) => {
-                let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-                assert_eq!(json["jsonrpc"], "2.0");
-                assert_eq!(json["id"], 1);
-                json["result"].as_str().unwrap().parse().unwrap()
-            }
-            _ => {
-                panic!("Expected text message");
-            }
-        };
-        assert_recv_nothing(&mut rx).await;
-
-        // First pre-confirmed block update.
-        pending_data_cache.store(sample_pre_confirmed_block(
-            BlockNumber::new_or_panic(1),
-            vec![
-                (contract_address!("0x1"), transaction_hash!("0x3")),
-                (contract_address!("0x2"), transaction_hash!("0x4")),
-            ],
-            vec![],
-        ));
-        assert_eq!(
-            recv(&mut rx).await,
-            sample_pre_confirmed_transaction_message("0x1", "0x3", subscription_id)
-        );
-        assert_eq!(
-            recv(&mut rx).await,
-            sample_pre_confirmed_transaction_message("0x2", "0x4", subscription_id)
-        );
-        assert_recv_nothing(&mut rx).await;
-
-        // We expect that the second pre-confirmed block update will ignore
-        // transactions that were already sent. This includes a candidate transaction
-        // that was not sent before.
-        pending_data_cache.store(sample_pre_confirmed_block(
-            BlockNumber::new_or_panic(1),
-            vec![
-                (contract_address!("0x1"), transaction_hash!("0x3")),
-                (contract_address!("0x2"), transaction_hash!("0x4")),
-                (contract_address!("0x1"), transaction_hash!("0x5")),
-            ],
-            vec![(contract_address!("0x2"), transaction_hash!("0x6"))],
-        ));
-        assert_eq!(
-            recv(&mut rx).await,
-            sample_pre_confirmed_transaction_message("0x1", "0x5", subscription_id)
-        );
-        assert_eq!(
-            recv(&mut rx).await,
-            sample_candidate_transaction_message("0x2", "0x6", subscription_id)
-        );
-        assert_recv_nothing(&mut rx).await;
-
-        // The next pre-confirmed block does have a receipt for the previously sent
-        // candidate transaction. We expect the transaction to be re-sent with
-        // PRE_CONFIRMED status.
-        pending_data_cache.store(sample_pre_confirmed_block(
-            BlockNumber::new_or_panic(1),
-            vec![
-                (contract_address!("0x1"), transaction_hash!("0x3")),
-                (contract_address!("0x2"), transaction_hash!("0x4")),
-                (contract_address!("0x1"), transaction_hash!("0x5")),
-                (contract_address!("0x2"), transaction_hash!("0x6")),
-            ],
-            vec![],
-        ));
         assert_eq!(
             recv(&mut rx).await,
             sample_pre_confirmed_transaction_message("0x2", "0x6", subscription_id)
@@ -997,8 +898,8 @@ mod tests {
                 (contract_address!("0x1"), transaction_hash!("0x1")),
                 (contract_address!("0x2"), transaction_hash!("0x2")),
             ],
-            vec![],
         ));
+
         assert_eq!(
             recv(&mut rx).await,
             sample_pre_confirmed_transaction_message("0x1", "0x1", subscription_id)
@@ -1049,8 +950,8 @@ mod tests {
                 (contract_address!("0x2"), transaction_hash!("0x4")),
                 (contract_address!("0x3"), transaction_hash!("0x5")),
             ],
-            vec![],
         ));
+
         assert_eq!(
             recv(&mut rx).await,
             sample_pre_confirmed_transaction_message("0x1", "0x3", subscription_id)
@@ -1106,8 +1007,8 @@ mod tests {
                 (contract_address!("0x1"), transaction_hash!("0x3")),
                 (contract_address!("0x2"), transaction_hash!("0x4")),
             ],
-            vec![],
         ));
+
         assert_eq!(
             recv(&mut rx).await,
             sample_pre_confirmed_transaction_message("0x1", "0x3", subscription_id)
@@ -1162,8 +1063,8 @@ mod tests {
                 (contract_address!("0x1"), transaction_hash!("0x7")),
                 (contract_address!("0x2"), transaction_hash!("0x8")),
             ],
-            vec![],
         ));
+
         assert_eq!(
             recv(&mut rx).await,
             sample_pre_confirmed_transaction_message("0x1", "0x7", subscription_id)
@@ -1237,8 +1138,8 @@ mod tests {
                 (contract_address!("0x1"), transaction_hash!("0x3")),
                 (contract_address!("0x2"), transaction_hash!("0x4")),
             ],
-            vec![],
         ));
+
         assert_recv_nothing(&mut rx).await;
 
         // The finalized block is sent after the pre-confirmed block, but contains more
@@ -1283,8 +1184,8 @@ mod tests {
                 (contract_address!("0x1"), transaction_hash!("0x7")),
                 (contract_address!("0x2"), transaction_hash!("0x8")),
             ],
-            vec![],
         ));
+
         assert_recv_nothing(&mut rx).await;
     }
 
@@ -1401,7 +1302,6 @@ mod tests {
     fn sample_pre_confirmed_block(
         block_number: BlockNumber,
         txs: Vec<(ContractAddress, TransactionHash)>,
-        candidate_txs: Vec<(ContractAddress, TransactionHash)>,
     ) -> PendingData {
         let pre_confirmed_block = PreConfirmedBlock {
             status: starknet_gateway_types::reply::Status::PreConfirmed,
@@ -1418,21 +1318,6 @@ mod tests {
                     }),
                     hash: *hash,
                 })
-                .chain(
-                    candidate_txs
-                        .iter()
-                        .map(|(sender_address, hash)| Transaction {
-                            variant: TransactionVariant::InvokeV3(InvokeTransactionV3 {
-                                sender_address: *sender_address,
-                                proof_facts: vec![
-                                    proof_fact_elem_bytes!(b"proof 0"),
-                                    proof_fact_elem_bytes!(b"proof 1"),
-                                ],
-                                ..Default::default()
-                            }),
-                            hash: *hash,
-                        }),
-                )
                 .collect(),
             transaction_receipts: txs
                 .iter()
@@ -1445,7 +1330,6 @@ mod tests {
                         vec![],
                     ))
                 })
-                .chain(candidate_txs.iter().map(|_| None))
                 .collect(),
             transaction_state_diffs: vec![],
             ..Default::default()
@@ -1479,14 +1363,6 @@ mod tests {
         subscription_id: u64,
     ) -> serde_json::Value {
         sample_transaction_message_ex(sender_address, hash, subscription_id, "PRE_CONFIRMED")
-    }
-
-    fn sample_candidate_transaction_message(
-        sender_address: &str,
-        hash: &str,
-        subscription_id: u64,
-    ) -> serde_json::Value {
-        sample_transaction_message_ex(sender_address, hash, subscription_id, "CANDIDATE")
     }
 
     fn sample_transaction_message(

@@ -71,13 +71,12 @@ pub struct PreLatestData {
     pub state_update: StateUpdate,
 }
 
-/// Chain data observed in flight: the pre-confirmed block, an optional
-/// pre-latest parent, and any candidate transactions.
+/// Chain data observed in flight: the pre-confirmed block and an optional
+/// pre-latest parent.
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct PendingBlocks {
     pub pre_confirmed: PreConfirmedBlock,
     pub pre_latest: Option<PreLatestData>,
-    pub candidate_transactions: Vec<Transaction>,
 }
 
 impl PendingBlocks {
@@ -127,8 +126,7 @@ impl PendingData {
     }
 
     /// Converts a pre-confirmed block from the gateway into pending data.
-    /// Candidate transactions are filtered out; the state update is composed
-    /// from the per-transaction diffs.
+    /// State update is composed from the per-transaction diffs.
     pub fn try_from_pre_confirmed_block(
         block: Box<starknet_gateway_types::reply::PreConfirmedBlock>,
         number: BlockNumber,
@@ -161,13 +159,13 @@ impl PendingData {
             .iter()
             .map(|(receipt, _)| receipt.transaction_hash)
             .collect();
-        let (pre_confirmed_transactions, candidate_transactions): (Vec<_>, Vec<_>) =
-            pre_confirmed_block
-                .transactions
-                .into_iter()
-                .partition(|tx| pre_confirmed_transaction_hashes.contains(&tx.hash));
 
-        if transaction_receipts.len() != pre_confirmed_transactions.len() {
+        for tx in &pre_confirmed_block.transactions {
+            if !pre_confirmed_transaction_hashes.contains(&tx.hash) {
+                anyhow::bail!("Missing transaction receipt for tx ({})", tx.hash);
+            }
+        }
+        if transaction_receipts.len() != pre_confirmed_block.transactions.len() {
             anyhow::bail!("Mismatched transaction and receipt count in pre-confirmed block");
         }
 
@@ -203,7 +201,7 @@ impl PendingData {
             timestamp: pre_confirmed_block.timestamp,
             starknet_version: pre_confirmed_block.starknet_version,
             l1_da_mode: pre_confirmed_block.l1_da_mode.into(),
-            transactions: pre_confirmed_transactions,
+            transactions: pre_confirmed_block.transactions,
             transaction_receipts,
         };
 
@@ -249,7 +247,6 @@ impl PendingData {
             blocks: Arc::new(PendingBlocks {
                 pre_confirmed: pre_confirmed_block,
                 pre_latest: pre_latest_data,
-                candidate_transactions,
             }),
             state_update: pre_confirmed_state_update,
             aggregated_state_update,
@@ -286,7 +283,6 @@ impl PendingData {
         Self {
             blocks: Arc::new(PendingBlocks {
                 pre_confirmed: block,
-                candidate_transactions: vec![],
                 pre_latest: None,
             }),
             state_update: Arc::clone(&state_update),
@@ -402,10 +398,6 @@ impl PendingData {
         self.blocks.pre_latest_tx_receipts_and_events()
     }
 
-    pub fn candidate_transactions(&self) -> &[Transaction] {
-        &self.blocks.candidate_transactions
-    }
-
     /// Look up a contract nonce across the aggregated pending state.
     pub fn find_nonce(&self, contract_address: ContractAddress) -> Option<ContractNonce> {
         self.aggregated_state_update()
@@ -422,19 +414,13 @@ impl PendingData {
             .storage_value_with_provenance(contract_address, storage_address)
     }
 
-    /// Look up a transaction by hash across pre-confirmed, candidate, and
-    /// pre-latest, in that order.
+    /// Look up a transaction by hash across pre-confirmed and pre-latest, in
+    /// that order.
     pub fn find_transaction(&self, tx_hash: TransactionHash) -> Option<Transaction> {
         self.pre_confirmed_transactions()
             .iter()
             .find(|tx| tx.hash == tx_hash)
             .cloned()
-            .or_else(|| {
-                self.candidate_transactions()
-                    .iter()
-                    .find(|tx| tx.hash == tx_hash)
-                    .cloned()
-            })
             .or_else(|| {
                 self.pre_latest_transactions()
                     .and_then(|pre_latest| pre_latest.iter().find(|tx| tx.hash == tx_hash).cloned())
