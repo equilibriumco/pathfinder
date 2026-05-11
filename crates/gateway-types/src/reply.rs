@@ -119,24 +119,22 @@ pub struct PreConfirmedBlock {
     pub transaction_state_diffs: Vec<Option<state_update::StateDiff>>,
 }
 
-/// Flat wire struct that deserializes all response shapes returned by the
+/// Flat wire struct that deserializes any response shape returned by the
 /// feeder gateway's `get_preconfirmed_block` endpoint.
 ///
 /// The `changed` field is the discriminant:
-/// - absent: legacy 0.14.2 full block (no `known_block_identifier`)
 /// - `false`: `Unchanged`
-/// - `true` + `status` present: new-style `Full`
+/// - `true` + `status` present: `Full`
 /// - `true` + `status` absent: `Delta`
 #[serde_as]
 #[derive(Debug, Deserialize)]
 pub struct PreConfirmedPollResponseWire {
-    #[serde(default)]
-    changed: Option<bool>,
+    changed: bool,
 
     #[serde(default)]
     known_block_identifier: Option<String>,
 
-    // Block-header fields: present on legacy and new-style Full responses.
+    // Block-header fields: present on Full responses only.
     #[serde(default)]
     l1_gas_price: Option<GasPrices>,
     #[serde(default)]
@@ -176,11 +174,8 @@ pub struct PreConfirmedPollResponseWire {
 /// Three modes are possible:
 /// - `Unchanged` — the server confirms the caller's view is still current.
 /// - `Delta`     — the identifier matches; only new transactions are returned.
-/// - `Full`      — a complete block view is returned (identifier mismatch,
-///   first poll, or legacy 0.14.2 response).
-///
-/// Note: `Full` responses converted from the legacy 0.14.2 wire shape (no
-/// `changed` field) will have an empty string as `identifier`.
+/// - `Full`      — a complete block view is returned (identifier mismatch or
+///   first poll).
 #[derive(Debug, PartialEq)]
 pub enum PreConfirmedPollResponse {
     Unchanged,
@@ -245,29 +240,23 @@ fn build_block(wire: &mut PreConfirmedPollResponseWire) -> PreConfirmedBlock {
 
 impl From<PreConfirmedPollResponseWire> for PreConfirmedPollResponse {
     fn from(mut wire: PreConfirmedPollResponseWire) -> Self {
-        match wire.changed {
-            // Legacy 0.14.2 shape: no `changed` field, all block fields present.
-            None => Self::Full {
-                identifier: String::new(),
+        if !wire.changed {
+            return Self::Unchanged;
+        }
+        let identifier = wire.known_block_identifier.take().unwrap_or_default();
+        if wire.status.is_some() {
+            // Full: block-header fields are present.
+            Self::Full {
+                identifier,
                 block: build_block(&mut wire),
-            },
-            Some(false) => Self::Unchanged,
-            Some(true) if wire.status.is_some() => {
-                // New-style Full: block-header fields are present.
-                let identifier = wire.known_block_identifier.take().unwrap_or_default();
-                Self::Full {
-                    identifier,
-                    block: build_block(&mut wire),
-                }
             }
-            Some(true) => {
-                // Delta: only transaction vecs are present; no block-header fields.
-                Self::Delta {
-                    identifier: wire.known_block_identifier.take().unwrap_or_default(),
-                    new_transactions: wire.transactions,
-                    new_receipts: wire.transaction_receipts,
-                    new_state_diffs: wire.transaction_state_diffs,
-                }
+        } else {
+            // Delta: only transaction vecs; no block-header fields.
+            Self::Delta {
+                identifier,
+                new_transactions: wire.transactions,
+                new_receipts: wire.transaction_receipts,
+                new_state_diffs: wire.transaction_state_diffs,
             }
         }
     }
@@ -2816,28 +2805,6 @@ mod tests {
                         }
                     );
                     assert_eq!(block.timestamp.get(), 42);
-                    assert_eq!(block.starknet_version.to_string(), "0.14.3");
-                }
-                other => panic!("expected Full, got {other:?}"),
-            }
-        }
-
-        #[test]
-        fn legacy_full_no_identifier() {
-            let json = minimal_block_json();
-            let wire: PreConfirmedPollResponseWire = serde_json::from_value(json).unwrap();
-            let response = PreConfirmedPollResponse::from(wire);
-
-            match response {
-                PreConfirmedPollResponse::Full { identifier, block } => {
-                    assert!(identifier.is_empty());
-                    assert_eq!(
-                        block.l1_gas_price,
-                        GasPrices {
-                            price_in_wei: GasPrice(0xabcdef),
-                            price_in_fri: GasPrice(0x123456),
-                        }
-                    );
                     assert_eq!(block.starknet_version.to_string(), "0.14.3");
                 }
                 other => panic!("expected Full, got {other:?}"),
