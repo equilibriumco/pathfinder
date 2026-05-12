@@ -147,8 +147,7 @@ pub(crate) fn create_from_bootstrapped_devnet_db(
     compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
 ) -> anyhow::Result<(Vec<ProposalPart>, ConsensusFinalizedL2Block)> {
-    // TODO setting these constant to higher values can lead to weird panics in
-    // other validator (Pathfinder) nodes, which we need to investigate
+    // Maximum number of batches in the proposal.
     const MAX_NUM_BATCHES: usize = 2;
     // Number of loop iterations per batch, each iteration can add at most 3
     // transactions, so max batch length is MAX_BATCH_TRIES * 3.
