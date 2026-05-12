@@ -326,24 +326,7 @@ pub fn spawn(
                 ConsensusTaskEvent::CommandFromP2P(cmd) => {
                     tracing::info!("🧠 ⚙️  {validator_address} handling command {cmd:?}");
 
-                    let cmd_height = cmd.height();
                     match &cmd {
-                        // There were no p2p messages for a height higher than the current height,
-                        // so we did start a new height upon successful decision, before any p2p
-                        // messages for the new height were received.
-                        ConsensusCommand::StartHeight(..) | ConsensusCommand::Propose(_) => {
-                            // Commands from P2P should always be for current or
-                            // future heights.
-                            let next_height = consensus
-                                .max_active_height()
-                                .unwrap_or_default()
-                                .max(consensus.last_decided_height().unwrap_or_default() + 1);
-                            debug_assert!(
-                                cmd_height >= next_height,
-                                "Received command for height {cmd_height} < current height \
-                                 {next_height}"
-                            );
-                        }
                         // Sometimes messages for the next height are received before the engine
                         // decides upon the current height. In such case we need to ensure that a
                         // consensus engine is already started for this new height carried in those
@@ -364,12 +347,13 @@ pub fn spawn(
 
                             start_height_if_inactive(
                                 &mut consensus,
-                                cmd_height,
+                                cmd.height(),
                                 validator_set_provider
-                                    .get_validator_set(cmd_height)
+                                    .get_validator_set(cmd.height())
                                     .context("Failed to get validator set")?,
                             );
                         }
+                        _ => {}
                     }
 
                     consensus.handle_command(cmd);
