@@ -28,7 +28,10 @@ use anyhow::Context;
 ///
 /// This allows us to reproduce the exact same state diff as the one we've
 /// received from the feeder gateway (or from other nodes via P2P).
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tracing::info!("Adding redeclared_classes table");
 
     tx.execute_batch(

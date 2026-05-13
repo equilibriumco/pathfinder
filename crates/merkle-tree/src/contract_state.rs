@@ -1,7 +1,7 @@
 use anyhow::Context;
+use pathfinder_common::hash::FeltHash;
 use pathfinder_common::prelude::*;
 use pathfinder_common::state_update::{ReverseContractUpdate, StateUpdateError, StorageRef};
-use pathfinder_crypto::hash::pedersen_hash;
 use pathfinder_crypto::Felt;
 use pathfinder_storage::{Transaction, TrieUpdate};
 
@@ -24,7 +24,7 @@ impl ContractStateUpdateResult {
         // Insert nodes only if we made storage updates.
         if self.did_storage_updates {
             let root_index = transaction
-                .insert_contract_trie(&self.trie_update, block)
+                .insert_contract_trie(&self.trie_update, block, &self.contract_address)
                 .context("Persisting contract trie")?;
 
             transaction
@@ -40,7 +40,7 @@ impl ContractStateUpdateResult {
 
 /// Updates a contract's state with and returns the resulting
 /// [ContractStateHash].
-pub fn update_contract_state(
+pub fn update_contract_state<H: FeltHash>(
     contract_address: ContractAddress,
     updates: StorageRef<'_>,
     new_nonce: Option<ContractNonce>,
@@ -52,10 +52,10 @@ pub fn update_contract_state(
     // Load the contract tree and insert the updates.
     let (new_root, trie_update) = if !updates.is_empty() {
         let mut contract_tree = match block.parent() {
-            Some(parent) => ContractsStorageTree::load(transaction, contract_address, parent)
+            Some(parent) => ContractsStorageTree::<H>::load(transaction, contract_address, parent)
                 .context("Loading contract storage tree")?
                 .with_verify_hashes(verify_hashes),
-            None => ContractsStorageTree::empty(transaction, contract_address),
+            None => ContractsStorageTree::<H>::empty(transaction, contract_address),
         }
         .with_verify_hashes(verify_hashes);
 
@@ -71,7 +71,7 @@ pub fn update_contract_state(
         (contract_root, trie_update)
     } else {
         let current_root = transaction
-            .contract_root(block, contract_address)
+            .contract_root(block, &contract_address)
             .context("Querying current contract root")?
             .unwrap_or_default();
 
@@ -102,7 +102,7 @@ pub fn update_contract_state(
             .unwrap_or_default()
     };
 
-    let state_hash = calculate_contract_state_hash(class_hash, new_root, nonce);
+    let state_hash = calculate_contract_state_hash::<H>(class_hash, new_root, nonce);
 
     Ok(ContractStateUpdateResult {
         contract_address,
@@ -113,7 +113,7 @@ pub fn update_contract_state(
 }
 
 /// Calculates the contract state hash from its preimage.
-pub fn calculate_contract_state_hash(
+pub fn calculate_contract_state_hash<H: FeltHash>(
     hash: ClassHash,
     root: ContractRoot,
     nonce: ContractNonce,
@@ -122,9 +122,9 @@ pub fn calculate_contract_state_hash(
 
     // The contract state hash is defined as H(H(H(hash, root), nonce),
     // CONTRACT_STATE_HASH_VERSION)
-    let hash = pedersen_hash(hash.0, root.0);
-    let hash = pedersen_hash(hash, nonce.0);
-    let hash = pedersen_hash(hash, CONTRACT_STATE_HASH_VERSION);
+    let hash = H::hash(hash.0, root.0);
+    let hash = H::hash(hash, nonce.0);
+    let hash = H::hash(hash, CONTRACT_STATE_HASH_VERSION);
 
     // Compare this with the HashChain construction used in the contract_hash: the
     // number of elements is not hashed to this hash, and this is supposed to be
@@ -135,7 +135,7 @@ pub fn calculate_contract_state_hash(
 /// Reverts Merkle tree state for a contract.
 ///
 /// Takes Merkle tree state at `head` and applies reverse updates.
-pub fn revert_contract_state(
+pub fn revert_contract_state<H: FeltHash>(
     transaction: &Transaction<'_>,
     contract_address: ContractAddress,
     head: BlockNumber,
@@ -174,7 +174,7 @@ pub fn revert_contract_state(
 
             // Apply storage updates
             let root = if !update.storage.is_empty() {
-                let mut tree = ContractsStorageTree::load(transaction, contract_address, head)
+                let mut tree = ContractsStorageTree::<H>::load(transaction, contract_address, head)
                     .context("Loading contract state")?;
 
                 for (address, value) in update.storage {
@@ -185,7 +185,7 @@ pub fn revert_contract_state(
                 let (root, trie_update) = tree.commit().context("Committing contract state")?;
 
                 let root_index = transaction
-                    .insert_contract_trie(&trie_update, target_block)
+                    .insert_contract_trie(&trie_update, target_block, &contract_address)
                     .context("Persisting contract trie")?;
 
                 transaction
@@ -195,7 +195,7 @@ pub fn revert_contract_state(
                 root
             } else {
                 transaction
-                    .contract_root(head, contract_address)?
+                    .contract_root(head, &contract_address)?
                     .unwrap_or(ContractRoot::ZERO)
             };
 
@@ -205,7 +205,7 @@ pub fn revert_contract_state(
                 // deleted
                 ContractStateHash::ZERO
             } else {
-                calculate_contract_state_hash(class_hash, root, nonce)
+                calculate_contract_state_hash::<H>(class_hash, root, nonce)
             };
 
             tracing::debug!(%state_hash, %contract_address, "Contract state rolled back");
@@ -217,6 +217,7 @@ pub fn revert_contract_state(
 
 #[cfg(test)]
 mod tests {
+    use pathfinder_common::hash::PedersenHash;
     use pathfinder_common::{felt, ClassHash, ContractNonce, ContractRoot, ContractStateHash};
 
     use super::calculate_contract_state_hash;
@@ -234,7 +235,7 @@ mod tests {
         let expected = felt!("0x7161b591c893836263a64f2a7e0d829c92f6956148a60ce5e99a3f55c7973f3");
         let expected = ContractStateHash(expected);
 
-        let result = calculate_contract_state_hash(hash, root, nonce);
+        let result = calculate_contract_state_hash::<PedersenHash>(hash, root, nonce);
 
         assert_eq!(result, expected);
     }

@@ -26,7 +26,10 @@ struct TableUpdate {
     drop_rename_create_index_stmt_batch: &'static str,
 }
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tracing::info!("Dropping FOREIGN KEY references from several state update related tables");
 
     let table_updates = [

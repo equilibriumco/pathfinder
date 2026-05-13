@@ -1,4 +1,5 @@
 use anyhow::Context;
+use pathfinder_common::hash::{PedersenHash, PoseidonHash};
 use pathfinder_common::prelude::*;
 use pathfinder_merkle_tree::{ClassCommitmentTree, StorageCommitmentTree};
 use pathfinder_storage::Transaction;
@@ -61,17 +62,18 @@ fn revert_contract_updates(
 ) -> anyhow::Result<StorageCommitment> {
     let updates = transaction.reverse_contract_updates(head, target_block)?;
 
-    let mut global_tree =
-        StorageCommitmentTree::load(transaction, head).context("Loading global storage tree")?;
+    let mut global_tree = StorageCommitmentTree::<PedersenHash>::load(transaction, head)
+        .context("Loading global storage tree")?;
 
     for (contract_address, contract_update) in updates {
-        let state_hash = pathfinder_merkle_tree::contract_state::revert_contract_state(
-            transaction,
-            contract_address,
-            head,
-            target_block,
-            contract_update,
-        )?;
+        let state_hash =
+            pathfinder_merkle_tree::contract_state::revert_contract_state::<PedersenHash>(
+                transaction,
+                contract_address,
+                head,
+                target_block,
+                contract_update,
+            )?;
 
         transaction
             .insert_contract_state_hash(target_block, contract_address, state_hash)
@@ -111,8 +113,8 @@ fn revert_class_updates(
 ) -> anyhow::Result<ClassCommitment> {
     let updates = transaction.reverse_sierra_class_updates(head, target_block)?;
 
-    let mut class_tree =
-        ClassCommitmentTree::load(transaction, head).context("Loading class commitment trie")?;
+    let mut class_tree = ClassCommitmentTree::<PoseidonHash>::load(transaction, head)
+        .context("Loading class commitment trie")?;
 
     for (class_hash, casm_update) in updates {
         let new_value = match casm_update {

@@ -71,12 +71,12 @@ use siphasher::sip::SipHasher13;
 
 /// Maximum number of blocks to aggregate in a single `AggregateBloom`.
 pub const AGGREGATE_BLOOM_BLOCK_RANGE_LEN: u64 =
-    if cfg!(any(test, feature = "small_aggregate_filters")) {
-        // Make testing faster and easier by using a smaller range.
-        24
-    } else {
-        8192
-    };
+    // if cfg!(any(test, feature = "small_aggregate_filters")) {
+    //     // Make testing faster and easier by using a smaller range.
+    //     24
+    // } else {
+    8192;
+// };
 
 /// An aggregate of all Bloom filters for a given range of blocks.
 /// Before being added to `AggregateBloom`, each [`BloomFilter`] is

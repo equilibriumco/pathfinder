@@ -6,7 +6,7 @@ use crate::bloom::AggregateBloom;
 use crate::event::RunningEventFilter;
 use crate::prelude::*;
 
-pub(crate) fn migrate(tx: &Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(tx: &Transaction<'_>, _rocksdb: &crate::RocksDBInner) -> anyhow::Result<()> {
     tracing::info!("Creating running_event_filter table");
 
     tx.execute(

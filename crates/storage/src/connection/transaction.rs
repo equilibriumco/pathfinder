@@ -7,7 +7,12 @@ use pathfinder_common::transaction::Transaction as StarknetTransaction;
 use pathfinder_common::{BlockHash, BlockId, BlockNumber, TransactionHash, TransactionIndex};
 
 use super::{EventsForBlock, TransactionDataForBlock, TransactionWithReceipt};
+use crate::columns::Column;
 use crate::prelude::*;
+
+pub const TRANSACTIONS_AND_RECEIPTS_COLUMN: Column = Column::new("transactions_and_receipts");
+pub const EVENTS_COLUMN: Column = Column::new("events");
+pub const TRANSACTION_HASHES_COLUMN: Column = Column::new("transaction_hashes");
 
 pub(crate) mod compression {
     use std::sync::LazyLock;
@@ -106,29 +111,7 @@ impl Transaction<'_> {
             return Ok(());
         }
 
-        let mut insert_transaction_stmt = self
-            .inner()
-            .prepare_cached(
-                "INSERT INTO transactions (block_number, transactions, events) VALUES \
-                 (:block_number, :transactions, :events)",
-            )
-            .context("Preparing insert transaction statement")?;
-        let mut insert_transaction_hash_stmt = self
-            .inner()
-            .prepare_cached(
-                "INSERT INTO transaction_hashes (hash, block_number, idx) VALUES (:hash, \
-                 :block_number, :idx)",
-            )
-            .context("Preparing insert transaction hash statement")?;
-
-        for (idx, (transaction, ..)) in transactions.iter().enumerate() {
-            let idx: i64 = idx.try_into()?;
-            insert_transaction_hash_stmt.execute(named_params![
-                ":hash": &transaction.hash,
-                ":block_number": &block_number,
-                ":idx": &idx,
-            ])?;
-        }
+        // Encode transactions and receipts.
         let transactions_with_receipts: Vec<_> = transactions
             .iter()
             .map(|(transaction, receipt)| dto::TransactionWithReceiptV4 {
@@ -146,6 +129,7 @@ impl Transaction<'_> {
             compression::compress_transactions(&transactions_with_receipts)
                 .context("Compressing transaction")?;
 
+        // Encode events.
         let encoded_events = events
             .map(|evts| {
                 let events = dto::EventsForBlock::V0 {
@@ -160,13 +144,35 @@ impl Transaction<'_> {
             })
             .transpose()?;
 
-        insert_transaction_stmt
-            .execute(named_params![
-                ":block_number": &block_number,
-                ":transactions": &transactions_with_receipts,
-                ":events": &encoded_events,
-            ])
-            .context("Inserting transaction data")?;
+        let mut batch = self.batch.lock().expect("Batch lock poisoned");
+        let block_number_key = block_number.get().to_be_bytes();
+
+        let transactions_and_receipts_column =
+            self.rocksdb_get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
+        batch.put_cf(
+            &transactions_and_receipts_column,
+            &block_number_key,
+            &transactions_with_receipts,
+        );
+
+        let events_column = self.rocksdb_get_column(&EVENTS_COLUMN);
+        if let Some(encoded_events) = encoded_events {
+            batch.put_cf(&events_column, &block_number_key, &encoded_events);
+        }
+
+        let transaction_hashes_column = self.rocksdb_get_column(&TRANSACTION_HASHES_COLUMN);
+        for (idx, (transaction, ..)) in transactions.iter().enumerate() {
+            let idx: u16 = idx.try_into()?;
+            let mut buffer = [0u8; 10];
+            buffer[..8].copy_from_slice(&block_number_key);
+            buffer[8..].copy_from_slice(&idx.to_be_bytes());
+
+            batch.put_cf(
+                &transaction_hashes_column,
+                transaction.hash.0.as_be_bytes(),
+                &buffer,
+            );
+        }
 
         Ok(())
     }
@@ -652,80 +658,12 @@ impl Transaction<'_> {
 }
 
 pub(crate) mod dto {
-    use std::fmt;
-
     use fake::{Dummy, Fake, Faker};
     use pathfinder_common::*;
     use pathfinder_crypto::Felt;
     use serde::{Deserialize, Serialize};
 
-    /// Minimally encoded Felt value.
-    #[derive(Clone, Debug, PartialEq, Eq, Default)]
-    pub struct MinimalFelt(Felt);
-
-    impl serde::Serialize for MinimalFelt {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
-            let bytes = self.0.as_be_bytes();
-            let zeros = bytes.iter().take_while(|&&x| x == 0).count();
-            bytes[zeros..].serialize(serializer)
-        }
-    }
-
-    impl<'de> serde::Deserialize<'de> for MinimalFelt {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            struct Visitor;
-
-            impl<'de> serde::de::Visitor<'de> for Visitor {
-                type Value = MinimalFelt;
-
-                fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    formatter.write_str("a sequence")
-                }
-
-                fn visit_seq<B>(self, mut seq: B) -> Result<Self::Value, B::Error>
-                where
-                    B: serde::de::SeqAccess<'de>,
-                {
-                    let len = seq.size_hint().unwrap();
-                    let mut bytes = [0; 32];
-                    let num_zeros = bytes.len() - len;
-                    let mut i = num_zeros;
-                    while let Some(value) = seq.next_element()? {
-                        bytes[i] = value;
-                        i += 1;
-                    }
-                    Ok(MinimalFelt(Felt::from_be_bytes(bytes).unwrap()))
-                }
-            }
-
-            deserializer.deserialize_seq(Visitor)
-        }
-    }
-
-    impl From<Felt> for MinimalFelt {
-        fn from(value: Felt) -> Self {
-            Self(value)
-        }
-    }
-
-    impl From<MinimalFelt> for Felt {
-        fn from(value: MinimalFelt) -> Self {
-            value.0
-        }
-    }
-
-    impl<T> Dummy<T> for MinimalFelt {
-        fn dummy_with_rng<R: rand::prelude::Rng + ?Sized>(config: &T, rng: &mut R) -> Self {
-            let felt: Felt = Dummy::dummy_with_rng(config, rng);
-            felt.into()
-        }
-    }
+    use crate::connection::dto::MinimalFelt;
 
     /// Represents deserialized L2 transaction entry point values.
     #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Dummy)]
@@ -1194,7 +1132,7 @@ pub(crate) mod dto {
                 payload: fake::vec![MinimalFelt; 1..10],
                 // Create a Felt using only 160 bits. This is required because p2p specification
                 // uses the wrong type to represent this field.
-                to_address: MinimalFelt(Felt::from_be_slice(&fake::vec![u8; 20]).unwrap()),
+                to_address: MinimalFelt::from(Felt::from_be_slice(&fake::vec![u8; 20]).unwrap()),
             }
         }
     }

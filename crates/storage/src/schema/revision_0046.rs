@@ -8,7 +8,10 @@ use rusqlite::params;
 use crate::bloom::BloomFilter;
 use crate::params::RowExt;
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tx.execute_batch(
         r"
         CREATE TABLE starknet_events_filters (

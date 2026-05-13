@@ -118,19 +118,8 @@ impl Transaction<'_> {
             )
             .context("Deleting block from contract_updates table")?;
 
-        self.inner()
-            .execute(
-                "DELETE FROM nonce_updates WHERE block_number = ?",
-                params![&block],
-            )
-            .context("Deleting block from nonce_updates table")?;
-
-        self.inner()
-            .execute(
-                "DELETE FROM storage_updates WHERE block_number = ?",
-                params![&block],
-            )
-            .context("Deleting block from storage_updates table")?;
+        self.purge_state_update_data(block)
+            .context("Deleting nonce and storage updates from RocksDB")?;
 
         self.inner()
             .execute(

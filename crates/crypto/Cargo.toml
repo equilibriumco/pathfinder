@@ -21,6 +21,7 @@ name = "pathfinder_crypto"
 path = "src/lib.rs"
 
 [dependencies]
+bincode = { workspace = true }
 bitvec = { workspace = true }
 fake = { workspace = true }
 num-bigint = { workspace = true }

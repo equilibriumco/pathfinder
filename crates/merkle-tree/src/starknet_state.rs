@@ -1,4 +1,5 @@
 use anyhow::Context;
+use pathfinder_common::hash::FeltHash;
 use pathfinder_common::state_update::{StateUpdateError, StateUpdateRef};
 use pathfinder_common::{BlockNumber, ClassCommitment, StorageCommitment};
 use pathfinder_storage::{Storage, Transaction};
@@ -6,7 +7,7 @@ use pathfinder_storage::{Storage, Transaction};
 use crate::contract_state::update_contract_state;
 use crate::{ClassCommitmentTree, StorageCommitmentTree};
 
-pub fn update_starknet_state(
+pub fn update_starknet_state<H: FeltHash, C: FeltHash>(
     transaction: &Transaction<'_>,
     state_update: StateUpdateRef<'_>,
     verify_hashes: bool,
@@ -18,7 +19,7 @@ pub fn update_starknet_state(
     use rayon::prelude::*;
 
     let mut storage_commitment_tree = match block.parent() {
-        Some(parent) => StorageCommitmentTree::load(transaction, parent)
+        Some(parent) => StorageCommitmentTree::<H>::load(transaction, parent)
             .context("Loading storage commitment tree")?,
         None => StorageCommitmentTree::empty(transaction),
     }
@@ -46,7 +47,7 @@ pub fn update_starknet_state(
                         let transaction = connection
                             .transaction()
                             .map_err(|e| StateUpdateError::StorageError(e.into()))?;
-                        update_contract_state(
+                        update_contract_state::<H>(
                             **contract_address,
                             update.storage,
                             *update.nonce,
@@ -77,7 +78,7 @@ pub fn update_starknet_state(
     }
 
     for (contract, update) in state_update.system_contract_updates {
-        let update_result = update_contract_state(
+        let update_result = update_contract_state::<H>(
             *contract,
             update.storage,
             None,
@@ -112,9 +113,9 @@ pub fn update_starknet_state(
 
     // Add new Sierra classes to class commitment tree.
     let mut class_commitment_tree = match block.parent() {
-        Some(parent) => ClassCommitmentTree::load(transaction, parent)
+        Some(parent) => ClassCommitmentTree::<C>::load(transaction, parent)
             .context("Loading class commitment tree")?,
-        None => ClassCommitmentTree::empty(transaction),
+        None => ClassCommitmentTree::<C>::empty(transaction),
     }
     .with_verify_hashes(verify_hashes);
 
@@ -152,6 +153,7 @@ pub fn update_starknet_state(
 
 #[cfg(test)]
 mod tests {
+    use pathfinder_common::hash::PedersenHash;
     use pathfinder_common::prelude::*;
     use pathfinder_common::{
         class_commitment,
@@ -193,18 +195,21 @@ mod tests {
         let contract_address = ContractAddress::TWO;
 
         // Create contract storage tree with single entry: key 0x0 -> value 0x80.
-        let mut contract_tree = ContractsStorageTree::empty(&tx, contract_address);
+        let mut contract_tree = ContractsStorageTree::<PedersenHash>::empty(&tx, contract_address);
         contract_tree
             .set(storage_address!("0x0"), storage_value!("0x80"))
             .unwrap();
         let (contract_root, _) = contract_tree.commit().unwrap();
 
         // For system contracts: class_hash = 0, nonce = 0.
-        let contract_state_hash =
-            calculate_contract_state_hash(ClassHash::ZERO, contract_root, ContractNonce::ZERO);
+        let contract_state_hash = calculate_contract_state_hash::<PedersenHash>(
+            ClassHash::ZERO,
+            contract_root,
+            ContractNonce::ZERO,
+        );
 
         // Create storage commitment tree with the contract.
-        let mut storage_commitment_tree = StorageCommitmentTree::empty(&tx);
+        let mut storage_commitment_tree = StorageCommitmentTree::<PedersenHash>::empty(&tx);
         storage_commitment_tree
             .set(contract_address, contract_state_hash)
             .unwrap();

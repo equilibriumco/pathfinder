@@ -31,7 +31,7 @@ flate2 = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
 http = { workspace = true }
 ipnet = { workspace = true }
-jemallocator = { workspace = true }
+tikv-jemallocator = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 num-bigint = { workspace = true }

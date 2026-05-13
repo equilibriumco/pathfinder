@@ -5,9 +5,76 @@ use bitvec::prelude::Msb0;
 use bitvec::vec::BitVec;
 use pathfinder_common::prelude::*;
 use pathfinder_crypto::Felt;
+use rust_rocksdb::ReadOptions;
 
+use crate::columns::Column;
 use crate::prelude::*;
 use crate::TriePruneMode;
+
+const TRIE_CONTRACT_PREFIX_LEN: usize = size_of::<Felt>();
+const TRIE_CONTRACT_KEY_LEN: usize = TRIE_CONTRACT_PREFIX_LEN + size_of::<TrieStorageIndex>();
+
+pub const TRIE_CLASS_COLUMN: Column = Column::new("trie_class")
+    .with_point_lookup()
+    .with_optimize_for_hits();
+pub const TRIE_CONTRACT_COLUMN: Column = Column::new("trie_contract")
+    .with_prefix_length(TRIE_CONTRACT_PREFIX_LEN)
+    .with_point_lookup()
+    .with_optimize_for_hits();
+pub const TRIE_STORAGE_COLUMN: Column = Column::new("trie_storage")
+    .with_point_lookup()
+    .with_optimize_for_hits();
+pub const TRIE_NEXT_INDEX_COLUMN: Column = Column::new("trie_next_index");
+
+/// Constructs the key for a contract trie entry.
+///
+/// Format is the following:
+/// [contract_address (32 bytes)][storage_idx (8 bytes)]
+fn contract_trie_key(
+    prefix: &Felt,
+    storage_idx: TrieStorageIndex,
+    buf: &mut [u8; TRIE_CONTRACT_KEY_LEN],
+) {
+    buf[..TRIE_CONTRACT_PREFIX_LEN].copy_from_slice(prefix.as_be_bytes());
+    let storage_idx_be_bytes = storage_idx.0.to_be_bytes();
+    buf[TRIE_CONTRACT_PREFIX_LEN..].copy_from_slice(&storage_idx_be_bytes);
+}
+
+const CONTRACT_STATE_HASHES_PREFIX_LENGTH: usize = size_of::<Felt>();
+const CONTRACT_STATE_HASHES_KEY_LENGTH: usize =
+    CONTRACT_STATE_HASHES_PREFIX_LENGTH + size_of::<u32>();
+
+pub const CONTRACT_STATE_HASHES_COLUMN: Column =
+    Column::new("contract_state_hashes").with_prefix_length(CONTRACT_STATE_HASHES_PREFIX_LENGTH);
+
+/// Constructs the key for a contract state hash entry.
+///
+/// Format is the following:
+/// [contract_address (32 bytes)][inverted block number (4 bytes)]
+///
+/// We're using an inverted block number to allow for efficient retrieval of the
+/// latest state hash for a given contract address using forward iteration.
+fn contract_state_hashes_key(
+    block_number: BlockNumber,
+    contract_address: &ContractAddress,
+) -> [u8; CONTRACT_STATE_HASHES_KEY_LENGTH] {
+    let mut key = [0u8; CONTRACT_STATE_HASHES_KEY_LENGTH];
+    let block_number: u32 = block_number
+        .get()
+        .try_into()
+        .expect("block number fits into u32");
+    let block_number: u32 = u32::MAX - block_number;
+
+    key[..CONTRACT_STATE_HASHES_PREFIX_LENGTH].copy_from_slice(contract_address.0.as_be_bytes());
+    key[CONTRACT_STATE_HASHES_PREFIX_LENGTH..].copy_from_slice(&block_number.to_be_bytes());
+    key
+}
+
+#[derive(bincode::Encode, bincode::Decode)]
+struct TrieRemovalMarker {
+    key_prefix: Option<Felt>,
+    indices: Vec<TrieStorageIndex>,
+}
 
 impl Transaction<'_> {
     pub fn class_root_index(
@@ -79,13 +146,13 @@ impl Transaction<'_> {
     pub fn contract_root_index(
         &self,
         block_number: BlockNumber,
-        contract: ContractAddress,
+        contract: &ContractAddress,
     ) -> anyhow::Result<Option<TrieStorageIndex>> {
         self.inner()
             .query_row(
                 "SELECT root_index FROM contract_roots WHERE contract_address = ? AND \
                  block_number <= ? ORDER BY block_number DESC LIMIT 1",
-                params![&contract, &block_number],
+                params![contract, &block_number],
                 |row| row.get::<_, Option<u64>>(0),
             )
             .optional()
@@ -96,18 +163,28 @@ impl Transaction<'_> {
     pub fn contract_root(
         &self,
         block_number: BlockNumber,
-        contract: ContractAddress,
+        contract: &ContractAddress,
     ) -> anyhow::Result<Option<ContractRoot>> {
-        self.inner()
+        let root_index = self.inner()
         .query_row(
-            r"SELECT hash FROM trie_contracts WHERE idx = (
+            r"
                 SELECT root_index FROM contract_roots WHERE block_number <= ? AND contract_address = ? ORDER BY block_number DESC LIMIT 1
-            )",
-            params![&block_number, &contract],
-            |row| row.get_contract_root(0),
+            ",
+            params![&block_number, contract],
+            |row| row.get_optional_i64(0),
         )
-        .optional()
-        .map_err(Into::into)
+        .optional()?
+        .flatten();
+
+        if let Some(root_index) = root_index {
+            let root_index = TrieStorageIndex(root_index.try_into()?);
+            let root = self
+                .contract_trie_node_hash(root_index, &contract)?
+                .map(ContractRoot);
+            Ok(root)
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn insert_class_root(
@@ -164,11 +241,12 @@ impl Transaction<'_> {
         contract: ContractAddress,
         state_hash: ContractStateHash,
     ) -> anyhow::Result<()> {
-        self.inner().execute(
-            "INSERT OR REPLACE INTO contract_state_hashes(block_number, contract_address, \
-             state_hash) VALUES(?,?,?)",
-            params![&block_number, &contract, &state_hash],
-        )?;
+        let column = self.rocksdb_get_column(&CONTRACT_STATE_HASHES_COLUMN);
+        self.batch.lock().expect("Batch lock poisoned").put_cf(
+            &column,
+            contract_state_hashes_key(block_number, &contract),
+            state_hash.0.as_be_bytes(),
+        );
 
         if let TriePruneMode::Prune { num_blocks_kept } = self.trie_prune_mode {
             if let Some(block_number) = block_number.checked_sub(num_blocks_kept) {
@@ -184,25 +262,27 @@ impl Transaction<'_> {
         contract: ContractAddress,
         before_block: BlockNumber,
     ) -> anyhow::Result<()> {
-        let mut stmt = self.inner().prepare_cached(
-            "SELECT block_number
-            FROM contract_state_hashes
-            WHERE contract_address = ? AND block_number <= ?
-            ORDER BY block_number DESC
-            LIMIT 1",
-        )?;
-        let last_block_with_contract_state_hash = stmt
-            .query_row(params![&contract, &before_block], |row| {
-                row.get_block_number(0)
-            })
-            .optional()?;
+        let column = self.rocksdb_get_column(&CONTRACT_STATE_HASHES_COLUMN);
+        let key = contract_state_hashes_key(before_block, &contract);
 
-        if let Some(last_block_with_contract_state_hash) = last_block_with_contract_state_hash {
-            let mut stmt = self.inner().prepare_cached(
-                "DELETE FROM contract_state_hashes WHERE contract_address = ? AND block_number < ?",
-            )?;
-            stmt.execute(params![&contract, &last_block_with_contract_state_hash])?;
+        let mut read_options = ReadOptions::default();
+        read_options.set_prefix_same_as_start(true);
+        let mut iter = self.rocksdb().raw_iterator_cf_opt(&column, read_options);
+        iter.seek(key);
+        if !iter.valid() {
+            // No entries for this contract, nothing to delete.
+            return Ok(());
         }
+
+        // Skip _last_ entry and remove the rest.
+        iter.next();
+        let mut batch = self.batch.lock().expect("Batch lock poisoned");
+        while iter.valid() {
+            let key = iter.key().expect("Iterator is valid");
+            batch.delete_cf(&column, key);
+            iter.next();
+        }
+
         Ok(())
     }
 
@@ -211,15 +291,22 @@ impl Transaction<'_> {
         block_number: BlockNumber,
         contract: ContractAddress,
     ) -> anyhow::Result<Option<ContractStateHash>> {
-        self.inner()
-            .query_row(
-                "SELECT state_hash FROM contract_state_hashes WHERE contract_address = ? AND \
-                 block_number <= ? ORDER BY block_number DESC LIMIT 1",
-                params![&contract, &block_number],
-                |row| row.get_contract_state_hash(0),
-            )
-            .optional()
-            .map_err(Into::into)
+        let column = self.rocksdb_get_column(&CONTRACT_STATE_HASHES_COLUMN);
+        let key = contract_state_hashes_key(block_number, &contract);
+
+        let mut read_options = ReadOptions::default();
+        read_options.set_prefix_same_as_start(true);
+        let mut iter = self.rocksdb().raw_iterator_cf_opt(&column, read_options);
+        iter.seek(key);
+        if !iter.valid() {
+            return Ok(None);
+        }
+
+        let value = iter
+            .value()
+            .context("Reading contract state hash value from RocksDB")?;
+        let value = Felt::from_be_slice(value).context("Parsing contract state hash value")?;
+        Ok(Some(ContractStateHash(value)))
     }
 
     pub fn insert_storage_root(
@@ -326,19 +413,31 @@ impl Transaction<'_> {
         &self,
         update: &TrieUpdate,
         block_number: BlockNumber,
+        contract_address: &ContractAddress,
     ) -> anyhow::Result<RootIndexUpdate> {
-        self.insert_trie(update, block_number, "trie_contracts")
+        self.insert_trie(
+            update,
+            block_number,
+            "trie_contracts",
+            &TRIE_CONTRACT_COLUMN,
+            Some(&contract_address.0),
+        )
     }
 
     pub fn contract_trie_node(
         &self,
         index: TrieStorageIndex,
+        contract_address: &ContractAddress,
     ) -> anyhow::Result<Option<StoredNode>> {
-        self.trie_node(index, "trie_contracts")
+        self.trie_node(index, &TRIE_CONTRACT_COLUMN, Some(&contract_address.0))
     }
 
-    pub fn contract_trie_node_hash(&self, index: TrieStorageIndex) -> anyhow::Result<Option<Felt>> {
-        self.trie_node_hash(index, "trie_contracts")
+    pub fn contract_trie_node_hash(
+        &self,
+        index: TrieStorageIndex,
+        contract_address: &ContractAddress,
+    ) -> anyhow::Result<Option<Felt>> {
+        self.trie_node_hash(index, &TRIE_CONTRACT_COLUMN, Some(&contract_address.0))
     }
 
     pub fn insert_class_trie(
@@ -346,15 +445,15 @@ impl Transaction<'_> {
         update: &TrieUpdate,
         block_number: BlockNumber,
     ) -> anyhow::Result<RootIndexUpdate> {
-        self.insert_trie(update, block_number, "trie_class")
+        self.insert_trie(update, block_number, "trie_class", &TRIE_CLASS_COLUMN, None)
     }
 
     pub fn class_trie_node(&self, index: TrieStorageIndex) -> anyhow::Result<Option<StoredNode>> {
-        self.trie_node(index, "trie_class")
+        self.trie_node(index, &TRIE_CLASS_COLUMN, None)
     }
 
     pub fn class_trie_node_hash(&self, index: TrieStorageIndex) -> anyhow::Result<Option<Felt>> {
-        self.trie_node_hash(index, "trie_class")
+        self.trie_node_hash(index, &TRIE_CLASS_COLUMN, None)
     }
 
     pub fn insert_storage_trie(
@@ -362,15 +461,21 @@ impl Transaction<'_> {
         update: &TrieUpdate,
         block_number: BlockNumber,
     ) -> anyhow::Result<RootIndexUpdate> {
-        self.insert_trie(update, block_number, "trie_storage")
+        self.insert_trie(
+            update,
+            block_number,
+            "trie_storage",
+            &TRIE_STORAGE_COLUMN,
+            None,
+        )
     }
 
     pub fn storage_trie_node(&self, index: TrieStorageIndex) -> anyhow::Result<Option<StoredNode>> {
-        self.trie_node(index, "trie_storage")
+        self.trie_node(index, &TRIE_STORAGE_COLUMN, None)
     }
 
     pub fn storage_trie_node_hash(&self, index: TrieStorageIndex) -> anyhow::Result<Option<Felt>> {
-        self.trie_node_hash(index, "trie_storage")
+        self.trie_node_hash(index, &TRIE_STORAGE_COLUMN, None)
     }
 
     /// Prune tries by removing nodes that are no longer needed at the given
@@ -383,9 +488,24 @@ impl Transaction<'_> {
             return Ok(());
         };
         tracing::info!("Cleaning up state trie");
-        self.prune_trie(block_number, num_blocks_kept, "trie_contracts")?;
-        self.prune_trie(block_number, num_blocks_kept, "trie_class")?;
-        self.prune_trie(block_number, num_blocks_kept, "trie_storage")?;
+        self.prune_trie(
+            block_number,
+            num_blocks_kept,
+            "trie_contracts",
+            &TRIE_CONTRACT_COLUMN,
+        )?;
+        self.prune_trie(
+            block_number,
+            num_blocks_kept,
+            "trie_class",
+            &TRIE_CLASS_COLUMN,
+        )?;
+        self.prune_trie(
+            block_number,
+            num_blocks_kept,
+            "trie_storage",
+            &TRIE_STORAGE_COLUMN,
+        )?;
         Ok(())
     }
 
@@ -400,21 +520,25 @@ impl Transaction<'_> {
         &self,
         removed: &[TrieStorageIndex],
         block_number: BlockNumber,
+        key_prefix: Option<&Felt>,
         table: &'static str,
     ) -> anyhow::Result<()> {
         if !removed.is_empty() {
+            let marker = TrieRemovalMarker {
+                key_prefix: key_prefix.cloned(),
+                indices: removed.to_vec(),
+            };
+            let marker = bincode::encode_to_vec(marker, bincode::config::standard())
+                .context("Serializing removal marker")?;
+
             let mut stmt = self
                 .inner()
                 .prepare_cached(&format!(
                     r"INSERT INTO {table}_removals (block_number, indices) VALUES (?, ?)"
                 ))
                 .context("Creating statement to insert removal marker")?;
-            stmt.execute(params![
-                &block_number,
-                &bincode::encode_to_vec(removed, bincode::config::standard())
-                    .context("Serializing indices")?
-            ])
-            .context("Inserting removal marker")?;
+            stmt.execute(params![&block_number, &marker,])
+                .context("Inserting removal marker")?;
         }
 
         Ok(())
@@ -452,6 +576,7 @@ impl Transaction<'_> {
         block_number: BlockNumber,
         num_blocks_kept: u64,
         table: &'static str,
+        rocksdb_column: &Column,
     ) -> anyhow::Result<()> {
         if let Some(before_block) = block_number.checked_sub(num_blocks_kept) {
             // Delete nodes that have already been marked as ready for deletion.
@@ -464,21 +589,33 @@ impl Transaction<'_> {
             let mut rows = select_stmt
                 .query(params![&before_block])
                 .context("Fetching nodes to delete")?;
-            let mut delete_stmt = self
-                .inner()
-                .prepare_cached(&format!(r"DELETE FROM {table} WHERE idx = ?"))
-                .context("Creating delete statement")?;
+
+            let hash_column = self.rocksdb_get_column(rocksdb_column);
+
+            let mut batch = self.batch.lock().expect("Batch lock poisoned");
+            let mut buf = [0u8; TRIE_CONTRACT_KEY_LEN];
+
             while let Some(row) = rows.next().context("Iterating over rows")? {
-                let (indices, _) = bincode::decode_from_slice::<Vec<u64>, _>(
+                let (marker, _) = bincode::decode_from_slice::<TrieRemovalMarker, _>(
                     row.get_blob(0)?,
                     bincode::config::standard(),
                 )
-                .context("Decoding indices")?;
-                for idx in indices.iter() {
-                    delete_stmt.execute(params![idx]).context("Deleting node")?;
+                .context("Decoding removal marker")?;
+                for idx in marker.indices.iter() {
+                    let key = match marker.key_prefix {
+                        Some(prefix) => {
+                            contract_trie_key(&prefix, *idx, &mut buf);
+                            &buf[..TRIE_CONTRACT_KEY_LEN]
+                        }
+                        None => {
+                            buf[..8].copy_from_slice(&idx.0.to_be_bytes());
+                            &buf[..8]
+                        }
+                    };
+                    batch.delete_cf(&hash_column, key);
                 }
                 metrics::counter!(METRIC_TRIE_NODES_REMOVED, "table" => table)
-                    .increment(indices.len() as u64);
+                    .increment(marker.indices.len() as u64);
             }
 
             // Delete the removal markers.
@@ -502,10 +639,12 @@ impl Transaction<'_> {
         update: &TrieUpdate,
         block_number: BlockNumber,
         table: &'static str,
+        rocksdb_hash_column: &Column,
+        key_prefix: Option<&Felt>,
     ) -> anyhow::Result<RootIndexUpdate> {
         if let TriePruneMode::Prune { num_blocks_kept } = self.trie_prune_mode {
-            self.prune_trie(block_number, num_blocks_kept, table)?;
-            self.remove_trie(&update.nodes_removed, block_number, table)?;
+            self.prune_trie(block_number, num_blocks_kept, table, rocksdb_hash_column)?;
+            self.remove_trie(&update.nodes_removed, block_number, key_prefix, table)?;
         }
 
         if update.nodes_added.is_empty() {
@@ -515,13 +654,6 @@ impl Transaction<'_> {
                 return Ok(RootIndexUpdate::Unchanged);
             }
         }
-
-        let mut stmt = self
-            .inner()
-            .prepare_cached(&format!(
-                "INSERT INTO {table} (hash, data) VALUES(?, ?) RETURNING idx",
-            ))
-            .context("Creating insert statement")?;
 
         let mut to_insert = Vec::new();
         let mut to_process = vec![NodeRef::Index(update.nodes_added.len() - 1)];
@@ -553,30 +685,61 @@ impl Transaction<'_> {
             }
         }
 
-        let mut indices = HashMap::new();
+        let column = self.rocksdb_get_column(rocksdb_hash_column);
+
+        let mut storage_idx_base = self
+            .rocksdb
+            .next_trie_storage_index(rocksdb_hash_column, to_insert.len());
+
+        // Pre-allocate storage indices for all nodes to insert. This allows us to store
+        // nodes in any order and still be able to reference their children.
+        let indices: HashMap<usize, TrieStorageIndex> = to_insert
+            .iter()
+            .enumerate()
+            .map(|(i, node_idx)| (*node_idx, storage_idx_base + i as u64))
+            .collect();
 
         // Reusable (and oversized) buffer for encoding.
         let mut buffer = [0u8; 256];
+        let mut key: [u8; 40] = [0u8; TRIE_CONTRACT_KEY_LEN];
 
-        // Insert nodes in reverse to ensure children always have an assigned index for
-        // the parent to use.
-        for idx in to_insert.into_iter().rev() {
-            let (hash, node) = &update.nodes_added.get(idx).context("Node index missing")?;
+        let mut batch = self.batch.lock().expect("Batch lock poisoned");
+
+        for idx in to_insert.iter() {
+            let (hash, node) = &update.nodes_added.get(*idx).context("Node index missing")?;
 
             let node = node.as_stored(&indices)?;
 
-            let length = node.encode(&mut buffer).context("Encoding node")?;
+            buffer[0..32].copy_from_slice(hash.as_be_bytes());
+            let length = node.encode(&mut buffer[32..]).context("Encoding node")?;
 
-            let storage_idx: u64 = stmt
-                .query_row(
-                    params![&hash.as_be_bytes().as_slice(), &&buffer[..length]],
-                    |row| row.get(0),
-                )
-                .context("Inserting node")?;
+            let storage_idx = indices.get(idx).context("Storage index missing")?;
 
-            indices.insert(idx, storage_idx.into());
+            let key_length = if let Some(key_prefix) = key_prefix {
+                contract_trie_key(key_prefix, *storage_idx, &mut key);
+                TRIE_CONTRACT_KEY_LEN
+            } else {
+                key[..8].copy_from_slice(&storage_idx.0.to_be_bytes());
+                8
+            };
+
+            batch.put_cf(&column, &key[..key_length], &buffer[..length + 32]);
 
             metrics::counter!(METRIC_TRIE_NODES_ADDED, "table" => table).increment(1);
+        }
+
+        // Store next index for future use. This is read after startup to determine the
+        // next index to use for new nodes.
+        storage_idx_base += to_insert.len() as u64;
+        let next_index_column = self.rocksdb_get_column(&TRIE_NEXT_INDEX_COLUMN);
+        batch.put_cf(
+            &next_index_column,
+            rocksdb_hash_column.name.as_bytes(),
+            &storage_idx_base.0.to_be_bytes(),
+        );
+
+        if table == "trie_storage" && block_number.get() % 10000 == 9999 {
+            self.rocksdb.log_stats();
         }
 
         Ok(RootIndexUpdate::Updated(
@@ -590,45 +753,53 @@ impl Transaction<'_> {
     fn trie_node(
         &self,
         index: TrieStorageIndex,
-        table: &'static str,
+        rocksdb_column: &Column,
+        key_prefix: Option<&Felt>,
     ) -> anyhow::Result<Option<StoredNode>> {
-        // We rely on sqlite caching the statement here. Storing the statement would be
-        // nice, however that leads to &mut requirements or interior mutable
-        // work-arounds.
-        let mut stmt = self
-            .inner()
-            .prepare_cached(&format!("SELECT data FROM {table} WHERE idx = ?"))
-            .context("Creating get statement")?;
-
-        let Some(data): Option<Vec<u8>> = stmt
-            .query_row(params![&index], |row| row.get(0))
-            .optional()?
-        else {
-            return Ok(None);
+        let mut key: [u8; 40] = [0u8; TRIE_CONTRACT_KEY_LEN];
+        let key_length = if let Some(key_prefix) = key_prefix {
+            contract_trie_key(key_prefix, index, &mut key);
+            TRIE_CONTRACT_KEY_LEN
+        } else {
+            key[..8].copy_from_slice(&index.0.to_be_bytes());
+            8
         };
+        let node = self
+            .rocksdb()
+            .get_pinned_cf(&self.rocksdb_get_column(rocksdb_column), &key[..key_length])?
+            .map(|v| StoredNode::decode(&v.as_ref()[32..]).context("Decoding node from RocksDB"))
+            .transpose()?;
 
-        let node = StoredNode::decode(&data).context("Decoding node")?;
-
-        Ok(Some(node))
+        Ok(node)
     }
 
     /// Returns the hash of the node with the given index.
     fn trie_node_hash(
         &self,
         index: TrieStorageIndex,
-        table: &'static str,
+        rocksdb_hash_column: &Column,
+        key_prefix: Option<&Felt>,
     ) -> anyhow::Result<Option<Felt>> {
-        // We rely on sqlite caching the statement here. Storing the statement would be
-        // nice, however that leads to &mut requirements or interior mutable
-        // work-arounds.
-        let mut stmt = self
-            .inner()
-            .prepare_cached(&format!("SELECT hash FROM {table} WHERE idx = ?"))
-            .context("Creating get statement")?;
+        let mut key: [u8; 40] = [0u8; TRIE_CONTRACT_KEY_LEN];
+        let key_length = if let Some(key_prefix) = key_prefix {
+            contract_trie_key(key_prefix, index, &mut key);
+            TRIE_CONTRACT_KEY_LEN
+        } else {
+            key[..8].copy_from_slice(&index.0.to_be_bytes());
+            8
+        };
+        let hash = self
+            .rocksdb()
+            .get_pinned_cf(
+                &self.rocksdb_get_column(rocksdb_hash_column),
+                &key[..key_length],
+            )?
+            .map(|v| {
+                Felt::from_be_slice(&v.as_ref()[..32]).context("Decoding node hash from RocksDB")
+            })
+            .transpose()?;
 
-        stmt.query_row(params![&index], |row| row.get_felt(0))
-            .optional()
-            .map_err(Into::into)
+        Ok(hash)
     }
 }
 
@@ -898,38 +1069,29 @@ impl StoredNode {
 }
 
 impl Node {
-    fn as_stored(
-        &self,
-        storage_indices: &HashMap<usize, TrieStorageIndex>,
-    ) -> anyhow::Result<StoredNode> {
+    fn as_stored(&self, indices: &HashMap<usize, TrieStorageIndex>) -> anyhow::Result<StoredNode> {
         let node = match self {
             Node::Binary { left, right } => {
                 let left = match left {
                     NodeRef::StorageIndex(id) => *id,
-                    NodeRef::Index(idx) => *storage_indices
-                        .get(idx)
-                        .context("Left child index missing")?,
+                    NodeRef::Index(idx) => *indices.get(idx).context("Node index missing")?,
                 };
 
                 let right = match right {
                     NodeRef::StorageIndex(id) => *id,
-                    NodeRef::Index(idx) => *storage_indices
-                        .get(idx)
-                        .context("Right child index missing")?,
+                    NodeRef::Index(idx) => *indices.get(idx).context("Node index missing")?,
                 };
 
                 StoredNode::Binary { left, right }
             }
             Node::Edge { child, path } => {
                 let child = match child {
-                    NodeRef::StorageIndex(id) => id,
-                    NodeRef::Index(idx) => {
-                        storage_indices.get(idx).context("Child index missing")?
-                    }
+                    NodeRef::StorageIndex(id) => *id,
+                    NodeRef::Index(idx) => *indices.get(idx).context("Node index missing")?,
                 };
 
                 StoredNode::Edge {
-                    child: *child,
+                    child,
                     path: path.clone(),
                 }
             }
@@ -1064,21 +1226,21 @@ mod tests {
         };
 
         let idx0_update = tx
-            .insert_contract_trie(&update, BlockNumber::GENESIS)
+            .insert_contract_trie(&update, BlockNumber::GENESIS, &c1)
             .unwrap();
         let RootIndexUpdate::Updated(idx0) = idx0_update else {
             panic!("Expected the root index to be updated");
         };
 
-        let result1 = tx.contract_root_index(BlockNumber::GENESIS, c1).unwrap();
+        let result1 = tx.contract_root_index(BlockNumber::GENESIS, &c1).unwrap();
         assert_eq!(result1, None);
 
         tx.insert_contract_root(BlockNumber::GENESIS, c1, idx0_update)
             .unwrap();
-        let result1 = tx.contract_root_index(BlockNumber::GENESIS, c1).unwrap();
-        let result2 = tx.contract_root_index(BlockNumber::GENESIS, c2).unwrap();
-        let hash1 = tx.contract_root(BlockNumber::GENESIS, c1).unwrap();
-        let hash2 = tx.contract_root(BlockNumber::GENESIS, c2).unwrap();
+        let result1 = tx.contract_root_index(BlockNumber::GENESIS, &c1).unwrap();
+        let result2 = tx.contract_root_index(BlockNumber::GENESIS, &c2).unwrap();
+        let hash1 = tx.contract_root(BlockNumber::GENESIS, &c1).unwrap();
+        let hash2 = tx.contract_root(BlockNumber::GENESIS, &c2).unwrap();
         assert_eq!(result1, Some(idx0));
         assert_eq!(result2, None);
         assert_eq!(hash1, Some(root0));
@@ -1092,7 +1254,7 @@ mod tests {
         };
 
         let idx1_update = tx
-            .insert_contract_trie(&update, BlockNumber::GENESIS + 1)
+            .insert_contract_trie(&update, BlockNumber::GENESIS + 1, &c2)
             .unwrap();
         let RootIndexUpdate::Updated(idx1) = idx1_update else {
             panic!("Expected the root index to be updated");
@@ -1106,29 +1268,29 @@ mod tests {
             RootIndexUpdate::Updated(888.into()),
         )
         .unwrap();
-        let result1 = tx.contract_root_index(BlockNumber::GENESIS, c1).unwrap();
-        let result2 = tx.contract_root_index(BlockNumber::GENESIS, c2).unwrap();
-        let hash1 = tx.contract_root(BlockNumber::GENESIS, c1).unwrap();
+        let result1 = tx.contract_root_index(BlockNumber::GENESIS, &c1).unwrap();
+        let result2 = tx.contract_root_index(BlockNumber::GENESIS, &c2).unwrap();
+        let hash1 = tx.contract_root(BlockNumber::GENESIS, &c1).unwrap();
         assert_eq!(result1, Some(idx0));
         assert_eq!(result2, None);
         assert_eq!(hash1, Some(root0));
         let result1 = tx
-            .contract_root_index(BlockNumber::GENESIS + 1, c1)
+            .contract_root_index(BlockNumber::GENESIS + 1, &c1)
             .unwrap();
         let result2 = tx
-            .contract_root_index(BlockNumber::GENESIS + 1, c2)
+            .contract_root_index(BlockNumber::GENESIS + 1, &c2)
             .unwrap();
-        let hash1 = tx.contract_root(BlockNumber::GENESIS + 1, c1).unwrap();
+        let hash1 = tx.contract_root(BlockNumber::GENESIS + 1, &c1).unwrap();
         assert_eq!(result1, Some(idx1));
         assert_eq!(result2, Some(888.into()));
         assert_eq!(hash1, Some(root1));
         let result1 = tx
-            .contract_root_index(BlockNumber::GENESIS + 2, c1)
+            .contract_root_index(BlockNumber::GENESIS + 2, &c1)
             .unwrap();
         let result2 = tx
-            .contract_root_index(BlockNumber::GENESIS + 2, c2)
+            .contract_root_index(BlockNumber::GENESIS + 2, &c2)
             .unwrap();
-        let hash1 = tx.contract_root(BlockNumber::GENESIS + 2, c1).unwrap();
+        let hash1 = tx.contract_root(BlockNumber::GENESIS + 2, &c1).unwrap();
         assert_eq!(result1, Some(idx1));
         assert_eq!(result2, Some(888.into()));
         assert_eq!(hash1, Some(root1));
@@ -1140,7 +1302,7 @@ mod tests {
             ..Default::default()
         };
         let idx2_update = tx
-            .insert_contract_trie(&update, BlockNumber::GENESIS + 10)
+            .insert_contract_trie(&update, BlockNumber::GENESIS + 10, &c1)
             .unwrap();
         let RootIndexUpdate::Updated(idx2) = idx2_update else {
             panic!("Expected the root index to be updated");
@@ -1155,44 +1317,44 @@ mod tests {
         )
         .unwrap();
         let result1 = tx
-            .contract_root_index(BlockNumber::GENESIS + 9, c1)
+            .contract_root_index(BlockNumber::GENESIS + 9, &c1)
             .unwrap();
         let result2 = tx
-            .contract_root_index(BlockNumber::GENESIS + 9, c2)
+            .contract_root_index(BlockNumber::GENESIS + 9, &c2)
             .unwrap();
-        let hash1 = tx.contract_root(BlockNumber::GENESIS + 9, c1).unwrap();
+        let hash1 = tx.contract_root(BlockNumber::GENESIS + 9, &c1).unwrap();
         assert_eq!(result1, Some(idx1));
         assert_eq!(result2, Some(888.into()));
         assert_eq!(hash1, Some(root1));
         let result1 = tx
-            .contract_root_index(BlockNumber::GENESIS + 10, c1)
+            .contract_root_index(BlockNumber::GENESIS + 10, &c1)
             .unwrap();
         let result2 = tx
-            .contract_root_index(BlockNumber::GENESIS + 10, c2)
+            .contract_root_index(BlockNumber::GENESIS + 10, &c2)
             .unwrap();
-        let hash1 = tx.contract_root(BlockNumber::GENESIS + 10, c1).unwrap();
+        let hash1 = tx.contract_root(BlockNumber::GENESIS + 10, &c1).unwrap();
         assert_eq!(result1, Some(idx2));
         assert_eq!(result2, Some(888.into()));
         assert_eq!(hash1, Some(root2));
         let result2 = tx
-            .contract_root_index(BlockNumber::GENESIS + 11, c2)
+            .contract_root_index(BlockNumber::GENESIS + 11, &c2)
             .unwrap();
-        let hash1 = tx.contract_root(BlockNumber::GENESIS + 11, c1).unwrap();
+        let hash1 = tx.contract_root(BlockNumber::GENESIS + 11, &c1).unwrap();
         assert_eq!(result2, Some(999.into()));
         assert_eq!(hash1, Some(root2));
 
         tx.insert_contract_root(BlockNumber::GENESIS + 12, c1, RootIndexUpdate::TrieEmpty)
             .unwrap();
         let result1 = tx
-            .contract_root_index(BlockNumber::GENESIS + 10, c1)
+            .contract_root_index(BlockNumber::GENESIS + 10, &c1)
             .unwrap();
-        let hash1 = tx.contract_root(BlockNumber::GENESIS + 10, c1).unwrap();
+        let hash1 = tx.contract_root(BlockNumber::GENESIS + 10, &c1).unwrap();
         assert_eq!(result1, Some(idx2));
         assert_eq!(hash1, Some(root2));
         let result1 = tx
-            .contract_root_index(BlockNumber::GENESIS + 12, c1)
+            .contract_root_index(BlockNumber::GENESIS + 12, &c1)
             .unwrap();
-        let hash1 = tx.contract_root(BlockNumber::GENESIS + 12, c1).unwrap();
+        let hash1 = tx.contract_root(BlockNumber::GENESIS + 12, &c1).unwrap();
         assert_eq!(result1, None);
         assert_eq!(hash1, None);
     }
@@ -1648,7 +1810,7 @@ mod tests {
                 BlockNumber::GENESIS,
             )
             .unwrap();
-        assert_eq!(root_update, RootIndexUpdate::Updated(1.into()));
+        assert_eq!(root_update, RootIndexUpdate::Updated(0.into()));
     }
 
     #[test]
@@ -1869,17 +2031,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            tx.contract_root_index(BlockNumber::GENESIS, contract)
+            tx.contract_root_index(BlockNumber::GENESIS, &contract)
                 .unwrap(),
             None
         );
         assert_eq!(
-            tx.contract_root_index(BlockNumber::new_or_panic(2), contract)
+            tx.contract_root_index(BlockNumber::new_or_panic(2), &contract)
                 .unwrap(),
             Some(2.into())
         );
         assert_eq!(
-            tx.contract_root_index(BlockNumber::new_or_panic(3), contract)
+            tx.contract_root_index(BlockNumber::new_or_panic(3), &contract)
                 .unwrap(),
             Some(3.into())
         );
@@ -1910,12 +2072,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            tx.contract_root_index(BlockNumber::GENESIS, contract)
+            tx.contract_root_index(BlockNumber::GENESIS, &contract)
                 .unwrap(),
             None
         );
         assert_eq!(
-            tx.contract_root_index(BlockNumber::new_or_panic(1), contract)
+            tx.contract_root_index(BlockNumber::new_or_panic(1), &contract)
                 .unwrap(),
             Some(2.into())
         );

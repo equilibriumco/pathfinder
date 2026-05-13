@@ -289,6 +289,8 @@ pub mod test_utils {
         SerializedSierraDefinition,
     };
     use pathfinder_common::event::Event;
+    use pathfinder_common::hash::PedersenHash;
+    use pathfinder_common::hash::PoseidonHash;
     use pathfinder_common::macro_prelude::*;
     use pathfinder_common::prelude::*;
     use pathfinder_common::receipt::{
@@ -430,7 +432,7 @@ pub mod test_utils {
             .unwrap();
 
         // Update block 0
-        let update_results = update_contract_state(
+        let update_results = update_contract_state::<PedersenHash>(
             contract0_addr,
             (&contract0_update).into(),
             Some(contract_nonce!("0x1")),
@@ -444,7 +446,7 @@ pub mod test_utils {
         update_results
             .insert(BlockNumber::GENESIS, &db_txn)
             .unwrap();
-        let mut storage_commitment_tree = StorageCommitmentTree::empty(&db_txn);
+        let mut storage_commitment_tree = StorageCommitmentTree::<PedersenHash>::empty(&db_txn);
         storage_commitment_tree
             .set(contract0_addr, contract_state_hash)
             .unwrap();
@@ -475,11 +477,11 @@ pub mod test_utils {
 
         // Update block 1
         let mut storage_commitment_tree =
-            StorageCommitmentTree::load(&db_txn, BlockNumber::GENESIS).unwrap();
+            StorageCommitmentTree::<PedersenHash>::load(&db_txn, BlockNumber::GENESIS).unwrap();
         storage_commitment_tree
             .set(contract1_addr, contract_state_hash)
             .unwrap();
-        let update_results = update_contract_state(
+        let update_results = update_contract_state::<PedersenHash>(
             contract1_addr,
             (&contract1_update1).into(),
             None,
@@ -525,8 +527,8 @@ pub mod test_utils {
 
         // Update block 2
         let mut storage_commitment_tree =
-            StorageCommitmentTree::load(&db_txn, BlockNumber::GENESIS + 1).unwrap();
-        let update_results = update_contract_state(
+            StorageCommitmentTree::<PedersenHash>::load(&db_txn, BlockNumber::GENESIS + 1).unwrap();
+        let update_results = update_contract_state::<PedersenHash>(
             contract1_addr,
             (&contract1_update2).into(),
             Some(contract_nonce!("0x10")),
@@ -545,7 +547,7 @@ pub mod test_utils {
             .unwrap();
 
         let mut class_commitment_tree =
-            ClassCommitmentTree::load(&db_txn, BlockNumber::GENESIS + 2).unwrap();
+            ClassCommitmentTree::<PoseidonHash>::load(&db_txn, BlockNumber::GENESIS + 2).unwrap();
         let sierra_leaf_hash =
             pathfinder_common::calculate_class_commitment_leaf_hash(sierra_casm_hash);
 
@@ -571,7 +573,7 @@ pub mod test_utils {
             .insert_class_root(BlockNumber::GENESIS + 2, class_root_idx)
             .unwrap();
 
-        let update_results = update_contract_state(
+        let update_results = update_contract_state::<PedersenHash>(
             contract2_addr,
             (&HashMap::new()).into(),
             Some(contract_nonce!("0xfeed")),

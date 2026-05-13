@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::Context;
+use pathfinder_common::hash::{PedersenHash, PoseidonHash};
 use pathfinder_common::prelude::*;
 use pathfinder_common::trie::TrieNode;
 use pathfinder_crypto::Felt;
@@ -365,7 +366,7 @@ fn get_class_proofs(
     };
 
     let nodes: Vec<NodeHashToNodeMapping> =
-        ClassCommitmentTree::get_proofs(tx, block_number, class_hashes, class_root_idx)?
+        ClassCommitmentTree::<PoseidonHash>::get_proofs(tx, block_number, class_hashes, class_root_idx)?
             .into_iter()
             .flatten()
             .map(|(node, node_hash)| NodeHashToNodeMapping {
@@ -410,7 +411,7 @@ fn get_contract_proofs(
     };
 
     let nodes =
-        StorageCommitmentTree::get_proofs(tx, block_number, contract_addresses, storage_root_idx)?
+        StorageCommitmentTree::<PedersenHash>::get_proofs(tx, block_number, contract_addresses, storage_root_idx)?
             .into_iter()
             .flatten()
             .map(|(node, node_hash)| NodeHashToNodeMapping {
@@ -437,7 +438,7 @@ fn get_contract_proofs(
                 .unwrap_or_default();
 
             let storage_root = tx
-                .contract_root(block_number, address)
+                .contract_root(block_number, &address)
                 .context("Querying contract's storage root")?
                 .unwrap_or_default();
 
@@ -466,11 +467,11 @@ fn get_contract_storage_proofs(
             let mut proofs = vec![];
             for csk in contracts_storage_keys {
                 let root = tx
-                    .contract_root_index(block_number, csk.contract_address)
+                    .contract_root_index(block_number, &csk.contract_address)
                     .context("Querying contract root index")?;
 
                 if let Some(root) = root {
-                    let nodes: Vec<NodeHashToNodeMapping> = ContractsStorageTree::get_proofs(
+                    let nodes: Vec<NodeHashToNodeMapping> = ContractsStorageTree::<PedersenHash>::get_proofs(
                         &tx,
                         csk.contract_address,
                         block_number,
@@ -823,7 +824,7 @@ mod tests {
         let blocks = pathfinder_storage::fake::generate::with_config(
             1,
             Config {
-                update_tries: Box::new(update_starknet_state),
+                update_tries: Box::new(update_starknet_state::<PedersenHash, PoseidonHash>),
                 occurrence: OccurrencePerBlock {
                     cairo: 0..=0,
                     sierra: 0..=0,
@@ -834,7 +835,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        pathfinder_storage::fake::fill(&storage, &blocks, Some(Box::new(update_starknet_state)));
+        pathfinder_storage::fake::fill(&storage, &blocks, Some(Box::new(update_starknet_state::<PedersenHash, PoseidonHash>)));
 
         let context = RpcContext::for_tests().with_storage(storage);
 
@@ -955,7 +956,7 @@ mod tests {
         let blocks = generate::with_config(
             2,
             Config {
-                update_tries: Box::new(update_starknet_state),
+                update_tries: Box::new(update_starknet_state::<PedersenHash, PoseidonHash>),
                 occurrence: OccurrencePerBlock {
                     cairo: 1..=10,
                     sierra: 1..=10,
@@ -967,7 +968,7 @@ mod tests {
             },
         );
 
-        fill(&storage, &blocks, Some(Box::new(update_starknet_state)));
+        fill(&storage, &blocks, Some(Box::new(update_starknet_state::<PedersenHash, PoseidonHash>)));
 
         let context = RpcContext::for_tests().with_storage(storage);
         let input = req.into_input(&blocks);

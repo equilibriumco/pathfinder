@@ -1582,6 +1582,7 @@ mod tests {
     }
 
     mod real_world {
+        use pathfinder_common::hash::PoseidonHash;
         use pathfinder_common::macro_prelude::*;
         use pathfinder_common::prelude::*;
         use pathfinder_storage::RootIndexUpdate;
@@ -1742,7 +1743,8 @@ mod tests {
 
             // Insert a value and commit.
             let mut uut =
-                crate::class::ClassCommitmentTree::load(&tx, BlockNumber::GENESIS).unwrap();
+                crate::class::ClassCommitmentTree::<PoseidonHash>::load(&tx, BlockNumber::GENESIS)
+                    .unwrap();
             const KEY: pathfinder_common::SierraHash = sierra_hash!("0xdeadbeef");
             const VALUE: ClassCommitmentLeafHash = class_commitment_leaf_hash!("0xfeeddefeed");
             uut.set(KEY, VALUE).unwrap();
@@ -1770,7 +1772,9 @@ mod tests {
             );
 
             // Open the tree but do no updates.
-            let uut = crate::class::ClassCommitmentTree::load(&tx, BlockNumber::GENESIS).unwrap();
+            let uut =
+                crate::class::ClassCommitmentTree::<PoseidonHash>::load(&tx, BlockNumber::GENESIS)
+                    .unwrap();
             let block_number = BlockNumber::new_or_panic(1);
             let (root_commitment, trie_update) = uut.commit().unwrap();
             assert_eq!(
@@ -1790,7 +1794,8 @@ mod tests {
             assert_eq!(tx.class_root_index(block_number).unwrap(), Some(root_index));
 
             // Delete value
-            let mut uut = crate::class::ClassCommitmentTree::load(&tx, block_number).unwrap();
+            let mut uut =
+                crate::class::ClassCommitmentTree::<PoseidonHash>::load(&tx, block_number).unwrap();
             let block_number = BlockNumber::new_or_panic(2);
             uut.set(KEY, ClassCommitmentLeafHash::ZERO).unwrap();
             let (root_commitment, trie_update) = uut.commit().unwrap();

@@ -37,10 +37,12 @@ mod revision_0074;
 mod revision_0075;
 mod revision_0076;
 mod revision_0077;
+mod revision_0078;
+mod revision_0079;
 
 pub(crate) use base::base_schema;
 
-type MigrationFn = fn(&rusqlite::Transaction<'_>) -> anyhow::Result<()>;
+type MigrationFn = fn(&rusqlite::Transaction<'_>, &crate::RocksDBInner) -> anyhow::Result<()>;
 
 /// The full list of pathfinder migrations.
 pub fn migrations() -> &'static [MigrationFn] {
@@ -91,6 +93,8 @@ const MIGRATIONS: &[MigrationFn] = &[
     revision_0075::migrate,
     revision_0076::migrate,
     revision_0077::migrate,
+    revision_0078::migrate,
+    revision_0079::migrate,
 ];
 
 // The target version is the number of null migrations which have been replaced

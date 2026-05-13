@@ -1,3 +1,4 @@
+mod bincode;
 mod bits;
 pub mod core;
 mod curveorder;

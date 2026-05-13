@@ -250,33 +250,6 @@ pub trait RowExt {
         Ok(addr)
     }
 
-    fn get_storage_address<Index: RowIndex>(
-        &self,
-        index: Index,
-    ) -> rusqlite::Result<StorageAddress> {
-        let felt = self.get_felt(index)?;
-
-        let addr = StorageAddress::new(felt).ok_or(rusqlite::types::FromSqlError::Other(
-            anyhow::anyhow!("storage address out of range").into(),
-        ))?;
-
-        Ok(addr)
-    }
-
-    fn get_optional_storage_value<Index: RowIndex>(
-        &self,
-        index: Index,
-    ) -> rusqlite::Result<Option<StorageValue>> {
-        Ok(self.get_optional_felt(index)?.map(StorageValue))
-    }
-
-    fn get_optional_nonce<Index: RowIndex>(
-        &self,
-        index: Index,
-    ) -> rusqlite::Result<Option<ContractNonce>> {
-        Ok(self.get_optional_felt(index)?.map(ContractNonce))
-    }
-
     fn get_optional_class_hash<Index: RowIndex>(
         &self,
         index: Index,
@@ -308,11 +281,7 @@ pub trait RowExt {
     row_felt_wrapper!(get_state_commitment, StateCommitment);
     row_felt_wrapper!(get_state_diff_commitment, StateDiffCommitment);
     row_felt_wrapper!(get_sequencer_address, SequencerAddress);
-    row_felt_wrapper!(get_contract_root, ContractRoot);
-    row_felt_wrapper!(get_contract_nonce, ContractNonce);
-    row_felt_wrapper!(get_storage_value, StorageValue);
     row_felt_wrapper!(get_transaction_hash, TransactionHash);
-    row_felt_wrapper!(get_contract_state_hash, ContractStateHash);
     row_felt_wrapper!(get_class_commitment_leaf, ClassCommitmentLeafHash);
     row_felt_wrapper!(
         get_block_commitment_signature_elem,

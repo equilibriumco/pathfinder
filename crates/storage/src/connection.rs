@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 mod block;
 mod class;
+pub mod dto;
 mod ethereum;
 pub mod event;
 pub mod pruning;
@@ -26,16 +27,30 @@ use pathfinder_common::{BlockNumber, TransactionHash, TransactionIndex};
 use pruning::BlockchainHistoryMode;
 // Re-export this so users don't require rusqlite as a direct dep.
 pub use rusqlite::TransactionBehavior;
+pub(crate) use state_update::{NONCE_UPDATES_COLUMN, STATE_UPDATES_COLUMN, STORAGE_UPDATES_COLUMN};
+pub(crate) use transaction::{
+    EVENTS_COLUMN,
+    TRANSACTIONS_AND_RECEIPTS_COLUMN,
+    TRANSACTION_HASHES_COLUMN,
+};
 pub use trie::{Node, NodeRef, RootIndexUpdate, StoredNode, TrieStorageIndex, TrieUpdate};
+pub(crate) use trie::{
+    CONTRACT_STATE_HASHES_COLUMN,
+    TRIE_CLASS_COLUMN,
+    TRIE_CONTRACT_COLUMN,
+    TRIE_NEXT_INDEX_COLUMN,
+    TRIE_STORAGE_COLUMN,
+};
 
 use crate::bloom::AggregateBloomCache;
 use crate::params::RowExt;
-use crate::{StorageError, VERSION_KEY};
+use crate::{RocksDB, RocksDBInner, StorageError, VERSION_KEY};
 
 type PooledConnection = r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>;
 
 pub struct Connection {
     connection: PooledConnection,
+    rocksdb: Arc<RocksDBInner>,
     event_filter_cache: Arc<AggregateBloomCache>,
     running_event_filter: Arc<Mutex<RunningEventFilter>>,
     trie_prune_mode: TriePruneMode,
@@ -45,6 +60,7 @@ pub struct Connection {
 impl Connection {
     pub(crate) fn new(
         connection: PooledConnection,
+        rocksdb: Arc<RocksDBInner>,
         event_filter_cache: Arc<AggregateBloomCache>,
         running_event_filter: Arc<Mutex<RunningEventFilter>>,
         trie_prune_mode: TriePruneMode,
@@ -52,6 +68,7 @@ impl Connection {
     ) -> Self {
         Self {
             connection,
+            rocksdb,
             event_filter_cache,
             running_event_filter,
             trie_prune_mode,
@@ -63,6 +80,8 @@ impl Connection {
         let tx = self.connection.transaction()?;
         Ok(Transaction {
             transaction: tx,
+            rocksdb: Arc::clone(&self.rocksdb),
+            batch: Mutex::new(crate::RocksDBBatch::default()),
             event_filter_cache: self.event_filter_cache.clone(),
             running_event_filter: self.running_event_filter.clone(),
             trie_prune_mode: self.trie_prune_mode,
@@ -77,6 +96,8 @@ impl Connection {
         let tx = self.connection.transaction_with_behavior(behavior)?;
         Ok(Transaction {
             transaction: tx,
+            rocksdb: Arc::clone(&self.rocksdb),
+            batch: Mutex::new(crate::RocksDBBatch::default()),
             event_filter_cache: self.event_filter_cache.clone(),
             running_event_filter: self.running_event_filter.clone(),
             trie_prune_mode: self.trie_prune_mode,
@@ -95,6 +116,8 @@ impl Connection {
 
 pub struct Transaction<'inner> {
     transaction: rusqlite::Transaction<'inner>,
+    rocksdb: Arc<super::RocksDBInner>,
+    batch: Mutex<crate::RocksDBBatch>,
     event_filter_cache: Arc<AggregateBloomCache>,
     running_event_filter: Arc<Mutex<RunningEventFilter>>,
     trie_prune_mode: TriePruneMode,
@@ -125,8 +148,23 @@ impl Transaction<'_> {
         &self.transaction
     }
 
+    pub(crate) fn rocksdb(&self) -> &RocksDB {
+        &self.rocksdb.rocksdb
+    }
+
+    pub(crate) fn rocksdb_get_column(
+        &self,
+        column: &crate::columns::Column,
+    ) -> Arc<rust_rocksdb::BoundColumnFamily<'_>> {
+        self.rocksdb.get_column(column)
+    }
+
     pub fn commit(self) -> anyhow::Result<()> {
-        Ok(self.transaction.commit()?)
+        let transaction = self.transaction;
+        let rocksdb = self.rocksdb;
+        let batch = self.batch.into_inner().expect("Batch lock poisoned");
+        rocksdb.rocksdb.write(&batch)?;
+        Ok(transaction.commit()?)
     }
 
     pub fn trie_pruning_enabled(&self) -> bool {

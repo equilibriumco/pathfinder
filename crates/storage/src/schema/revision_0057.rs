@@ -8,7 +8,10 @@ use rusqlite::params;
 use crate::connection::transaction::compression;
 use crate::params::RowExt;
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     let mut transformers = Vec::new();
     let (insert_tx, insert_rx) = mpsc::channel();
     let (transform_tx, transform_rx) =

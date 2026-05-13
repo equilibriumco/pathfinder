@@ -1,5 +1,5 @@
 use anyhow::Context;
-use pathfinder_common::hash::PoseidonHash;
+use pathfinder_common::hash::{FeltHash, PoseidonHash};
 use pathfinder_common::prelude::*;
 use pathfinder_crypto::Felt;
 use pathfinder_storage::{Transaction, TrieStorageIndex, TrieUpdate};
@@ -12,12 +12,12 @@ use crate::tree::{GetProofError, MerkleTree, TrieNodeWithHash};
 /// It maps a class's [SierraHash] to its [ClassCommitmentLeafHash]
 ///
 /// Tree data is persisted by a sqlite table 'trie_class'.
-pub struct ClassCommitmentTree<'tx> {
-    tree: MerkleTree<PoseidonHash, 251>,
+pub struct ClassCommitmentTree<'tx, H: FeltHash> {
+    tree: MerkleTree<H, 251>,
     storage: ClassStorage<'tx>,
 }
 
-impl<'tx> ClassCommitmentTree<'tx> {
+impl<'tx, H: FeltHash> ClassCommitmentTree<'tx, H> {
     pub fn empty(tx: &'tx Transaction<'tx>) -> Self {
         let storage = ClassStorage { tx, block: None };
         let tree = MerkleTree::empty();

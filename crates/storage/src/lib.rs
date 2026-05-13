@@ -8,12 +8,14 @@ mod prelude;
 mod bloom;
 use bloom::AggregateBloomCache;
 pub use bloom::AGGREGATE_BLOOM_BLOCK_RANGE_LEN;
+mod columns;
 use connection::pruning::BlockchainHistoryMode;
 mod connection;
 mod error;
 pub mod fake;
 mod params;
 mod schema;
+use rust_rocksdb::ColumnFamilyDescriptor;
 pub use schema::revision_0073::reorg_regression_checks;
 pub mod test_utils;
 
@@ -23,6 +25,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 pub use connection::*;
+pub use dto::MinimalFelt;
 pub use error::StorageError;
 use event::RunningEventFilter;
 pub use event::EVENT_KEY_FILTER_LIMIT;
@@ -36,14 +39,18 @@ pub use transaction::dto::{
     DeployAccountTransactionV4,
     InvokeTransactionV5,
     L1HandlerTransactionV0,
-    MinimalFelt,
     ResourceBound,
     ResourceBoundsV1,
     TransactionV3,
 };
 
+use crate::columns::Column;
+
 /// Sqlite key used for the PRAGMA user version.
 const VERSION_KEY: &str = "user_version";
+
+type RocksDB = rust_rocksdb::DBWithThreadMode<rust_rocksdb::MultiThreaded>;
+type RocksDBBatch = rust_rocksdb::WriteBatchWithTransaction<false>;
 
 /// Specifies the [journal mode](https://sqlite.org/pragma.html#pragma_journal_mode)
 /// of the [Storage].
@@ -69,15 +76,69 @@ struct Inner {
     /// Uses [`Arc`] to allow _shallow_ [Storage] cloning
     database_path: Arc<PathBuf>,
     pool: Pool<SqliteConnectionManager>,
+    rocksdb: Arc<RocksDBInner>,
     event_filter_cache: Arc<AggregateBloomCache>,
     running_event_filter: Arc<Mutex<RunningEventFilter>>,
     trie_prune_mode: TriePruneMode,
     blockchain_history_mode: BlockchainHistoryMode,
 }
 
+struct RocksDBInner {
+    rocksdb: RocksDB,
+    options: rust_rocksdb::Options,
+    trie_class_next_index: std::sync::atomic::AtomicU64,
+    trie_contract_next_index: std::sync::atomic::AtomicU64,
+    trie_storage_next_index: std::sync::atomic::AtomicU64,
+}
+
+impl RocksDBInner {
+    fn next_trie_storage_index(
+        &self,
+        column: &Column,
+        number_of_indices_to_allocate: usize,
+    ) -> TrieStorageIndex {
+        let next_index = match column.name {
+            name if name == crate::connection::TRIE_CLASS_COLUMN.name => {
+                self.trie_class_next_index.fetch_add(
+                    number_of_indices_to_allocate as u64,
+                    std::sync::atomic::Ordering::SeqCst,
+                )
+            }
+            name if name == crate::connection::TRIE_CONTRACT_COLUMN.name => {
+                self.trie_contract_next_index.fetch_add(
+                    number_of_indices_to_allocate as u64,
+                    std::sync::atomic::Ordering::SeqCst,
+                )
+            }
+            name if name == crate::connection::TRIE_STORAGE_COLUMN.name => {
+                self.trie_storage_next_index.fetch_add(
+                    number_of_indices_to_allocate as u64,
+                    std::sync::atomic::Ordering::SeqCst,
+                )
+            }
+            _ => panic!("Invalid column for trie storage index generation"),
+        };
+        TrieStorageIndex(next_index)
+    }
+
+    fn get_column(&self, column: &Column) -> Arc<rust_rocksdb::BoundColumnFamily<'_>> {
+        self.rocksdb
+            .cf_handle(column.name)
+            .expect("RocksDB column family missing")
+    }
+
+    fn log_stats(&self) {
+        let stats = self.options.get_statistics();
+        if let Some(stats) = stats {
+            tracing::debug!(stats = stats, "RocksDB statistics");
+        }
+    }
+}
+
 pub struct StorageManager {
     database_path: PathBuf,
     journal_mode: JournalMode,
+    rocksdb: Arc<RocksDBInner>,
     event_filter_cache: Arc<AggregateBloomCache>,
     running_event_filter: Arc<Mutex<RunningEventFilter>>,
     trie_prune_mode: TriePruneMode,
@@ -113,6 +174,7 @@ impl StorageManager {
         Ok(Storage(Inner {
             database_path: Arc::new(self.database_path.clone()),
             pool,
+            rocksdb: Arc::clone(&self.rocksdb),
             event_filter_cache: self.event_filter_cache.clone(),
             running_event_filter: self.running_event_filter.clone(),
             trie_prune_mode: self.trie_prune_mode,
@@ -328,6 +390,16 @@ impl StorageBuilder {
     /// and passed to the various components which require access to the
     /// database.
     pub fn migrate(self) -> anyhow::Result<StorageManager> {
+        let rocksdb_path = if self.database_path.starts_with("file:memdb") {
+            // in-memory database
+            // FIXME: make sure we clean this up after use
+            let tmpdir = tempfile::Builder::new().disable_cleanup(true).tempdir()?;
+            tmpdir.path().to_path_buf()
+        } else {
+            self.database_path.with_extension("rocksdb")
+        };
+        let rocksdb = Arc::new(Self::open_rocksdb(&rocksdb_path)?);
+
         let mut open_flags = OpenFlags::default();
         open_flags.remove(OpenFlags::SQLITE_OPEN_CREATE);
         let (mut connection, is_new_database) =
@@ -352,7 +424,7 @@ impl StorageBuilder {
         setup_connection(&mut connection, JournalMode::Rollback)
             .context("Setting up database connection")?;
 
-        migrate_database(&mut connection).context("Migrate database")?;
+        migrate_database(&mut connection, &rocksdb).context("Migrate database")?;
 
         // Set the journal mode to the desired value.
         setup_journal_mode(&mut connection, self.journal_mode).context("Setting journal mode")?;
@@ -384,6 +456,7 @@ impl StorageBuilder {
         Ok(StorageManager {
             database_path: self.database_path,
             journal_mode: self.journal_mode,
+            rocksdb,
             event_filter_cache: Arc::new(AggregateBloomCache::with_size(
                 self.event_filter_cache_size,
             )),
@@ -450,14 +523,118 @@ impl StorageBuilder {
             .map_err(|(_connection, error)| error)
             .context("Closing DB after loading running event filter")?;
 
+        let rocksdb_path = if database_path.starts_with("file:memdb") {
+            // in-memory database
+            // FIXME: make sure we clean this up after use
+            let tmpdir = tempfile::Builder::new().disable_cleanup(true).tempdir()?;
+            tmpdir.path().to_path_buf()
+        } else {
+            database_path.with_extension("rocksdb")
+        };
+        let rocksdb = Arc::new(Self::open_rocksdb(&rocksdb_path)?);
+
         Ok(ReadOnlyStorageManager(StorageManager {
             database_path,
             journal_mode,
+            rocksdb,
             event_filter_cache: Arc::new(AggregateBloomCache::with_size(event_filter_cache_size)),
             running_event_filter: Arc::new(Mutex::new(running_event_filter)),
             trie_prune_mode,
             blockchain_history_mode,
         }))
+    }
+
+    fn open_rocksdb(path: &Path) -> anyhow::Result<RocksDBInner> {
+        let available_parallelism = std::thread::available_parallelism()
+            .map(|e| e.get() as i32 / 2)
+            .unwrap_or(1);
+
+        let mut options = rust_rocksdb::Options::default();
+        options.create_if_missing(true);
+        options.create_missing_column_families(true);
+        options.increase_parallelism(available_parallelism);
+        options.set_max_background_jobs(available_parallelism);
+        options.set_atomic_flush(true);
+        options.set_max_subcompactions(available_parallelism as _);
+        options.set_max_write_buffer_number(5);
+        options.set_min_write_buffer_number_to_merge(2);
+        options.set_bytes_per_sync(1024 * 1024_u64);
+        options.set_wal_bytes_per_sync(512 * 1024_u64);
+        options.set_max_log_file_size(10 * 1024 * 1024_usize);
+        options.set_max_open_files(50000);
+        options.set_keep_log_file_num(3);
+        options.set_log_level(rust_rocksdb::LogLevel::Warn);
+
+        let mut env = rust_rocksdb::Env::new().context("Creating rocksdb env")?;
+        // Low priority threads are used for compaction (can be preempted by flush).
+        env.set_low_priority_background_threads(available_parallelism);
+
+        options.set_env(&env);
+
+        // TODO: make this configurable
+        let cache = rust_rocksdb::Cache::new_hyper_clock_cache(16 * 1024 * 1024 * 1024, 0);
+        let mut block_opts = rust_rocksdb::BlockBasedOptions::default();
+        block_opts.set_block_cache(&cache);
+        block_opts.set_cache_index_and_filter_blocks(true);
+        block_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
+        block_opts.set_ribbon_filter(15.0);
+
+        options.set_block_based_table_factory(&block_opts);
+
+        let cfs = columns::COLUMNS
+            .iter()
+            .map(|column| ColumnFamilyDescriptor::new(column.name, column.options(&cache)));
+
+        options.enable_statistics();
+
+        let db = RocksDB::open_cf_descriptors(&options, path, cfs)?;
+
+        let (trie_class_next_index, trie_contract_next_index, trie_storage_next_index) =
+            Self::rocksdb_fetch_next_trie_storage_indices(&db)?;
+
+        // tracing::info!("Compacting trie columns after opening RocksDB");
+        // Self::compact_trie_column(&db, &crate::connection::TRIE_CLASS_COLUMN)?;
+        // Self::compact_trie_column(&db, &crate::connection::TRIE_STORAGE_COLUMN)?;
+        // Self::compact_trie_column(&db, &crate::connection::TRIE_CONTRACT_COLUMN)?;
+
+        let db_inner = RocksDBInner {
+            rocksdb: db,
+            options,
+            trie_class_next_index: std::sync::atomic::AtomicU64::new(trie_class_next_index),
+            trie_contract_next_index: std::sync::atomic::AtomicU64::new(trie_contract_next_index),
+            trie_storage_next_index: std::sync::atomic::AtomicU64::new(trie_storage_next_index),
+        };
+        Ok(db_inner)
+    }
+
+    fn rocksdb_fetch_next_trie_storage_indices(db: &RocksDB) -> anyhow::Result<(u64, u64, u64)> {
+        let trie_class_last_index =
+            Self::trie_next_index(db, &crate::connection::TRIE_CLASS_COLUMN)?;
+        let trie_contract_last_index =
+            Self::trie_next_index(db, &crate::connection::TRIE_CONTRACT_COLUMN)?;
+        let trie_storage_last_index =
+            Self::trie_next_index(db, &crate::connection::TRIE_STORAGE_COLUMN)?;
+        Ok((
+            trie_class_last_index,
+            trie_contract_last_index,
+            trie_storage_last_index,
+        ))
+    }
+
+    fn trie_next_index(db: &RocksDB, column: &Column) -> anyhow::Result<u64> {
+        let column_handle = db
+            .cf_handle(TRIE_NEXT_INDEX_COLUMN.name)
+            .context("Getting RocksDB column for fetching next trie storage index")?;
+        let next_index = db
+            .get_cf(&column_handle, column.name.as_bytes())?
+            .map(|value| {
+                u64::from_be_bytes(
+                    value
+                        .try_into()
+                        .expect("RocksDB trie storage index value has invalid length"),
+                )
+            });
+        Ok(next_index.unwrap_or(0))
     }
 
     /// - If there is no explicitly requested configuration, assumes the user
@@ -648,6 +825,7 @@ impl Storage {
         let conn = self.0.pool.get().map_err(StorageError::from)?;
         Ok(Connection::new(
             conn,
+            Arc::clone(&self.0.rocksdb),
             self.0.event_filter_cache.clone(),
             self.0.running_event_filter.clone(),
             self.0.trie_prune_mode,
@@ -722,7 +900,10 @@ fn setup_connection(
 
 /// Migrates the database to the latest version. This __MUST__ be called
 /// at the beginning of the application.
-fn migrate_database(connection: &mut rusqlite::Connection) -> anyhow::Result<()> {
+fn migrate_database(
+    connection: &mut rusqlite::Connection,
+    rocksdb: &RocksDBInner,
+) -> anyhow::Result<()> {
     let mut current_revision = schema_version(connection)?;
     let migrations = schema::migrations();
 
@@ -785,7 +966,7 @@ fn migrate_database(connection: &mut rusqlite::Connection) -> anyhow::Result<()>
                 let transaction = connection
                     .transaction()
                     .context("Create database transaction")?;
-                migration(&transaction)?;
+                migration(&transaction, rocksdb)?;
                 transaction
                     .pragma_update(None, VERSION_KEY, current_revision)
                     .context("Failed to update the schema version number")?;
@@ -840,7 +1021,11 @@ mod tests {
     fn full_migration() {
         let mut conn = rusqlite::Connection::open_in_memory().unwrap();
         setup_connection(&mut conn, JournalMode::Rollback).unwrap();
-        migrate_database(&mut conn).unwrap();
+
+        let rocksdb_dir = tempfile::TempDir::new().unwrap();
+        let rocksdb = StorageBuilder::open_rocksdb(rocksdb_dir.path()).unwrap();
+
+        migrate_database(&mut conn, &rocksdb).unwrap();
         let version = schema_version(&conn).unwrap();
         let expected = schema::migrations().len() + schema::BASE_SCHEMA_REVISION;
         assert_eq!(version, expected);
@@ -851,13 +1036,16 @@ mod tests {
         let mut conn = rusqlite::Connection::open_in_memory().unwrap();
         setup_connection(&mut conn, JournalMode::Rollback).unwrap();
 
+        let rocksdb_dir = tempfile::TempDir::new().unwrap();
+        let rocksdb = StorageBuilder::open_rocksdb(rocksdb_dir.path()).unwrap();
+
         // Force the schema to a newer version
         let current_version = schema::migrations().len();
         conn.pragma_update(None, VERSION_KEY, current_version + 1)
             .unwrap();
 
         // Migration should fail.
-        migrate_database(&mut conn).unwrap_err();
+        migrate_database(&mut conn, &rocksdb).unwrap_err();
     }
 
     #[test]
