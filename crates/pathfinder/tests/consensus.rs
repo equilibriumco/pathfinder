@@ -162,7 +162,8 @@ mod test {
             .unwrap();
 
         let boot_port = alice.consensus_p2p_port();
-        let mut configs = configs.map(|cfg| cfg.with_boot_port(boot_port));
+        let boot_peer_id = utils::read_id_fixture("Alice").unwrap().peer_id;
+        let mut configs = configs.map(|cfg| cfg.with_boot_peer(boot_port, boot_peer_id));
 
         let bob_cfg = {
             let bob_cfg = configs.next().unwrap();
@@ -334,7 +335,8 @@ mod test {
             .unwrap();
 
         let boot_port = alice.consensus_p2p_port();
-        let mut configs = configs.map(|cfg| cfg.with_boot_port(boot_port));
+        let boot_peer_id = utils::read_id_fixture("Alice").unwrap().peer_id;
+        let mut configs = configs.map(|cfg| cfg.with_boot_peer(boot_port, boot_peer_id));
 
         let bob_cfg = configs
             .next()
@@ -533,7 +535,8 @@ mod test {
             .unwrap();
 
         let boot_port = alice.consensus_p2p_port();
-        let mut configs = configs.map(|cfg| cfg.with_boot_port(boot_port));
+        let boot_peer_id = utils::read_id_fixture("Alice").unwrap().peer_id;
+        let mut configs = configs.map(|cfg| cfg.with_boot_peer(boot_port, boot_peer_id));
 
         let bob = PathfinderInstance::spawn(configs.next().unwrap()).unwrap();
         let charlie = PathfinderInstance::spawn(configs.next().unwrap()).unwrap();
@@ -720,7 +723,8 @@ mod test {
             .unwrap();
 
         let boot_port = alice.consensus_p2p_port();
-        let mut configs = configs.map(|cfg| cfg.with_boot_port(boot_port));
+        let boot_peer_id = utils::read_id_fixture("Alice").unwrap().peer_id;
+        let mut configs = configs.map(|cfg| cfg.with_boot_peer(boot_port, boot_peer_id));
 
         let bob = PathfinderInstance::spawn(configs.next().unwrap()).unwrap();
         let charlie = PathfinderInstance::spawn(configs.next().unwrap()).unwrap();
