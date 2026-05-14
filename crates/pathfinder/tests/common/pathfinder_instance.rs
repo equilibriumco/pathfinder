@@ -125,7 +125,7 @@ impl PathfinderInstance {
                 config
                     .validator_addresses
                     .iter()
-                    .map(|a| format!("0x{a}"))
+                    .map(|a| format!("{a:#x}"))
                     .collect::<Vec<_>>()
                     .join(",")
             )
