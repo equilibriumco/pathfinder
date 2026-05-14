@@ -35,7 +35,7 @@ pub struct PathfinderInstance {
 #[derive(Clone)]
 pub struct Config {
     pub name: &'static str,
-    pub boot_port: Option<u16>,
+    pub boot_peers: Vec<BootstrapPeerConfig>,
     pub sync_enabled: bool,
     pub my_validator_address: u8,
     pub validator_addresses: Vec<u8>,
@@ -45,6 +45,12 @@ pub struct Config {
     pub inject_failure: Option<InjectFailureConfig>,
     pub local_feeder_gateway_port: Option<u16>,
     pub boot_db: Option<PathBuf>,
+}
+
+#[derive(Clone)]
+pub struct BootstrapPeerConfig {
+    pub port: u16,
+    pub id: p2p::libp2p::PeerId,
 }
 
 pub type RpcPortWatch = (watch::Sender<(u32, u16)>, watch::Receiver<(u32, u16)>);
@@ -136,11 +142,21 @@ impl PathfinderInstance {
             "--p2p.consensus.experimental.direct-connection-timeout=1",
             "--p2p.consensus.experimental.eviction-timeout=1",
         ]);
-        if let Some(boot_port) = config.boot_port {
-            // Peer ID from `fixtures/id_Alice.json`.
+        let boot_peer_addrs: Vec<_> = config
+            .boot_peers
+            .iter()
+            .map(|boot_peer| {
+                format!(
+                    "/ip4/127.0.0.1/tcp/{}/p2p/{}",
+                    boot_peer.port,
+                    boot_peer.id.to_base58()
+                )
+            })
+            .collect();
+        if !boot_peer_addrs.is_empty() {
             command.arg(format!(
-                "--p2p.consensus.bootstrap-addresses=/ip4/127.0.0.1/tcp/{boot_port}/p2p/\
-                 12D3KooWDJryKaxjwNCk6yTtZ4GbtbLrH7JrEUTngvStaDttLtid"
+                "--p2p.consensus.bootstrap-addresses={}",
+                boot_peer_addrs.join(",")
             ));
         }
         command.arg(format!("--sync.enable={}", config.sync_enabled));
@@ -347,7 +363,7 @@ impl Config {
         (0..set_size)
             .map(|i| Self {
                 name: Self::NAMES[i],
-                boot_port: None,
+                boot_peers: Vec::new(),
                 sync_enabled: false,
                 my_validator_address: (i + 1) as u8,
                 // The set is deduplicated when consensus task is started, so including the own
@@ -368,8 +384,9 @@ impl Config {
         self
     }
 
-    pub fn with_boot_port(mut self, port: u16) -> Self {
-        self.boot_port = Some(port);
+    pub fn with_boot_peer(mut self, port: u16, peer_id: p2p::libp2p::PeerId) -> Self {
+        self.boot_peers
+            .push(BootstrapPeerConfig { port, id: peer_id });
         self
     }
 

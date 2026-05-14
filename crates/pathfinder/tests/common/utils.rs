@@ -1,7 +1,7 @@
 //! Test utilities for Pathfinder integration tests.
 
 use std::fs::{File, OpenOptions};
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
@@ -10,6 +10,7 @@ use anyhow::Context as _;
 use p2p_proto::common::Address;
 use pathfinder_crypto::Felt;
 use pathfinder_lib::devnet::{init_db, BootDb};
+use serde::Deserialize;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio::task::{JoinError, JoinHandle};
@@ -127,6 +128,24 @@ pub fn feeder_gateway_bin() -> PathBuf {
     path.push("debug");
     path.push("feeder-gateway");
     path
+}
+
+#[derive(Deserialize)]
+pub struct IdFixture {
+    #[allow(dead_code)]
+    pub private_key: String,
+    pub peer_id: p2p::libp2p::PeerId,
+}
+
+pub fn read_id_fixture(name: &str) -> anyhow::Result<IdFixture> {
+    let path = fixture_dir().join(format!("id_{name}.json"));
+    let mut buf = Vec::new();
+    let mut file =
+        File::open(&path).with_context(|| format!("Opening ID fixture {}", path.display()))?;
+    file.read_to_end(&mut buf)
+        .with_context(|| format!("Reading ID fixture {}", path.display()))?;
+    serde_json::from_slice(&buf)
+        .with_context(|| format!("Deserializing ID fixture {}", path.display()))
 }
 
 fn fixture_dir() -> PathBuf {
