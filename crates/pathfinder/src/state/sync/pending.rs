@@ -86,7 +86,11 @@ impl State {
                 true
             }
 
-            PreConfirmedPollResponse::Full { identifier, block } => {
+            PreConfirmedPollResponse::Full {
+                identifier,
+                block_number: _,
+                block,
+            } => {
                 // Emit on any of three independent signals:
                 //  - the server's identifier changed (round bump, new height, or first poll)
                 //  - new transactions arrived
@@ -458,6 +462,7 @@ mod tests {
             .returning(move |_, _, _| {
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: String::new(),
+                    block_number: BlockNumber::new_or_panic(3),
                     block: PRE_CONFIRMED_BLOCK.clone(),
                 })
             });
@@ -548,6 +553,7 @@ mod tests {
 
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: String::new(),
+                    block_number: BlockNumber::new_or_panic(3),
                     block,
                 })
             });
@@ -701,6 +707,7 @@ mod tests {
 
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: String::new(),
+                    block_number: BlockNumber::new_or_panic(12),
                     block,
                 })
             });
@@ -890,6 +897,7 @@ mod tests {
             let emitted = s.apply(
                 PreConfirmedPollResponse::Full {
                     identifier: "xyz".into(),
+                    block_number: BlockNumber::new_or_panic(10),
                     block: new_block.clone(),
                 },
                 false,
@@ -908,6 +916,7 @@ mod tests {
             let emitted = s.apply(
                 PreConfirmedPollResponse::Full {
                     identifier: "abc".into(),
+                    block_number: BlockNumber::new_or_panic(10),
                     block: new_block.clone(),
                 },
                 false,
@@ -926,6 +935,7 @@ mod tests {
             let emitted = s.apply(
                 PreConfirmedPollResponse::Full {
                     identifier: "abc".into(),
+                    block_number: BlockNumber::new_or_panic(10),
                     block: same_block.clone(),
                 },
                 false,
@@ -945,6 +955,7 @@ mod tests {
             let emitted = s.apply(
                 PreConfirmedPollResponse::Full {
                     identifier: "abc".into(),
+                    block_number: BlockNumber::new_or_panic(10),
                     block: same_block,
                 },
                 false,
@@ -1020,6 +1031,7 @@ mod tests {
             .returning(move |_, _, _| {
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: String::new(),
+                    block_number: BlockNumber::new_or_panic(12),
                     block: PRE_CONFIRMED_BLOCK.clone(),
                 })
             });
