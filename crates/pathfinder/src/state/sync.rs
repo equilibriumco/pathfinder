@@ -1141,7 +1141,7 @@ fn perform_blockchain_pruning(
         }
     };
 
-    let Some(last_kept_block) = pruning_point_block.get().checked_sub(num_blocks_kept) else {
+    let Some(last_kept_block) = pruning_point_block.checked_sub(num_blocks_kept) else {
         // Not ready to prune yet.
         return Ok(());
     };
@@ -1150,8 +1150,7 @@ fn perform_blockchain_pruning(
     let earliest = tx
         .earliest_block_number()
         .context("Querying earliest block number")?
-        .expect("Blocks should exist in database")
-        .get();
+        .expect("Blocks should exist in database");
 
     let mut blocks_covered = 0;
     let start = std::time::Instant::now();
@@ -1160,8 +1159,8 @@ fn perform_blockchain_pruning(
     // checkpoint and the L2 relative pruning stops, then the node shuts down so the
     // L2 head falls behind the L1 checkpoint again. For L1 relative pruning, this
     // will cover the blocks between two L1 checkpoints.
-    for block in earliest..last_kept_block {
-        let block = BlockNumber::new_or_panic(block);
+    for block in earliest.get()..last_kept_block.get() {
+        let block = BlockNumber::new(block).expect("Valid block number");
         if tx.block_exists(block.into())? {
             tx.prune_block(block)
                 .with_context(|| format!("Pruning block {block}"))?;
@@ -2616,7 +2615,9 @@ mod tests {
         async fn blockchain_history_pruning() {
             let storage = StorageBuilder::in_memory_with_blockchain_pruning_and_pool_size(
                 // Keep only the latest block.
-                pathfinder_storage::pruning::BlockchainHistoryMode::Prune { num_blocks_kept: 0 },
+                pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
+                    num_blocks_kept: BlockNumber::ZERO,
+                },
                 std::num::NonZeroU32::new(10).unwrap(),
             )
             .unwrap();
@@ -2678,7 +2679,9 @@ mod tests {
         async fn non_prunable_blocks() {
             let storage = StorageBuilder::in_memory_with_blockchain_pruning_and_pool_size(
                 // Keep only the latest block.
-                pathfinder_storage::pruning::BlockchainHistoryMode::Prune { num_blocks_kept: 0 },
+                pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
+                    num_blocks_kept: BlockNumber::ZERO,
+                },
                 std::num::NonZeroU32::new(10).unwrap(),
             )
             .unwrap();
@@ -2780,7 +2783,9 @@ mod tests {
         async fn reorg_error() {
             let storage = StorageBuilder::in_memory_with_blockchain_pruning_and_pool_size(
                 // Keep only the latest block.
-                pathfinder_storage::pruning::BlockchainHistoryMode::Prune { num_blocks_kept: 0 },
+                pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
+                    num_blocks_kept: BlockNumber::ZERO,
+                },
                 std::num::NonZeroU32::new(10).unwrap(),
             )
             .unwrap();
@@ -2885,7 +2890,9 @@ Blockchain history must include the reorg tail and its parent block to perform a
         async fn reorg_success() {
             let storage = StorageBuilder::in_memory_with_blockchain_pruning_and_pool_size(
                 // Keep only the last 2 blocks + latest.
-                pathfinder_storage::pruning::BlockchainHistoryMode::Prune { num_blocks_kept: 2 },
+                pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
+                    num_blocks_kept: BlockNumber::new_or_panic(2),
+                },
                 std::num::NonZeroU32::new(10).unwrap(),
             )
             .unwrap();
@@ -2976,7 +2983,9 @@ Blockchain history must include the reorg tail and its parent block to perform a
             let storage = StorageBuilder::in_memory_with_blockchain_pruning_and_pool_size(
                 // Prune only blocks 0 and 1.
                 pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
-                    num_blocks_kept: num_blocks - 1 /* latest */ - 2, /* keep two blocks */
+                    num_blocks_kept: pathfinder_common::BlockNumber::new_or_panic(
+                        num_blocks - 1 /* latest */ - 2, /* keep two blocks */
+                    ),
                 },
                 std::num::NonZeroU32::new(10).unwrap(),
             )
@@ -3076,7 +3085,9 @@ Blockchain history must include the reorg tail and its parent block to perform a
         #[tokio::test(flavor = "multi_thread")]
         async fn pruning_relative_to_l1_checkpoint() {
             let storage = StorageBuilder::in_memory_with_blockchain_pruning_and_pool_size(
-                pathfinder_storage::pruning::BlockchainHistoryMode::Prune { num_blocks_kept: 1 },
+                pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
+                    num_blocks_kept: BlockNumber::new_or_panic(1),
+                },
                 std::num::NonZeroU32::new(10).unwrap(),
             )
             .unwrap();
@@ -3161,8 +3172,9 @@ Blockchain history must include the reorg tail and its parent block to perform a
             use pathfinder_storage::AGGREGATE_BLOOM_BLOCK_RANGE_LEN;
 
             let tempdir = tempfile::TempDir::new().unwrap();
-            let storage_pruning_mode =
-                pathfinder_storage::pruning::BlockchainHistoryMode::Prune { num_blocks_kept: 0 };
+            let storage_pruning_mode = pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
+                num_blocks_kept: BlockNumber::ZERO,
+            };
             let storage_pool_size = std::num::NonZeroU32::new(10).unwrap();
             let storage =
                 StorageBuilder::in_persisted_tempdir_with_blockchain_pruning_and_pool_size(

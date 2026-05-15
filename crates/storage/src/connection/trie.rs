@@ -19,10 +19,10 @@ impl Transaction<'_> {
                 "SELECT root_index FROM class_roots WHERE block_number <= ? ORDER BY block_number \
                  DESC LIMIT 1",
                 params![&block_number],
-                |row| row.get::<_, Option<u64>>(0),
+                |row| row.get_optional_trie_storage_index(0),
             )
             .optional()
-            .map(|x| x.flatten().map(TrieStorageIndex))
+            .map(|x| x.flatten())
             .map_err(Into::into)
     }
 
@@ -59,10 +59,10 @@ impl Transaction<'_> {
                 "SELECT root_index FROM storage_roots WHERE block_number <= ? ORDER BY \
                  block_number DESC LIMIT 1",
                 params![&block_number],
-                |row| row.get::<_, Option<u64>>(0),
+                |row| row.get_optional_trie_storage_index(0),
             )
             .optional()
-            .map(|x| x.flatten().map(TrieStorageIndex))
+            .map(|x| x.flatten())
             .map_err(Into::into)
     }
 
@@ -86,10 +86,10 @@ impl Transaction<'_> {
                 "SELECT root_index FROM contract_roots WHERE contract_address = ? AND \
                  block_number <= ? ORDER BY block_number DESC LIMIT 1",
                 params![&contract, &block_number],
-                |row| row.get::<_, Option<u64>>(0),
+                |row| row.get_optional_trie_storage_index(0),
             )
             .optional()
-            .map(|x| x.flatten().map(TrieStorageIndex))
+            .map(|x| x.flatten())
             .map_err(Into::into)
     }
 
@@ -450,7 +450,7 @@ impl Transaction<'_> {
     fn prune_trie(
         &self,
         block_number: BlockNumber,
-        num_blocks_kept: u64,
+        num_blocks_kept: BlockNumber,
         table: &'static str,
     ) -> anyhow::Result<()> {
         if let Some(before_block) = block_number.checked_sub(num_blocks_kept) {
@@ -475,7 +475,11 @@ impl Transaction<'_> {
                 )
                 .context("Decoding indices")?;
                 for idx in indices.iter() {
-                    delete_stmt.execute(params![idx]).context("Deleting node")?;
+                    delete_stmt
+                        .execute(params![&idx
+                            .try_into_sql_int()
+                            .context("Trie node index exceeds i64::MAX")?])
+                        .context("Deleting node")?;
                 }
                 metrics::counter!(METRIC_TRIE_NODES_REMOVED, "table" => table)
                     .increment(indices.len() as u64);
@@ -567,14 +571,14 @@ impl Transaction<'_> {
 
             let length = node.encode(&mut buffer).context("Encoding node")?;
 
-            let storage_idx: u64 = stmt
+            let storage_idx = stmt
                 .query_row(
                     params![&hash.as_be_bytes().as_slice(), &&buffer[..length]],
-                    |row| row.get(0),
+                    |row| row.get_trie_storage_index(0),
                 )
                 .context("Inserting node")?;
 
-            indices.insert(idx, storage_idx.into());
+            indices.insert(idx, storage_idx);
 
             metrics::counter!(METRIC_TRIE_NODES_ADDED, "table" => table).increment(1);
         }
@@ -1266,7 +1270,7 @@ mod tests {
     #[test]
     fn class_trie_pruning() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: 2,
+            num_blocks_kept: BlockNumber::new_or_panic(2),
         })
         .unwrap()
         .connection()
@@ -1380,7 +1384,7 @@ mod tests {
     #[test]
     fn class_trie_pruning_change_config() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: 100,
+            num_blocks_kept: BlockNumber::new_or_panic(100),
         })
         .unwrap()
         .connection()
@@ -1488,7 +1492,9 @@ mod tests {
         assert!(tx.class_trie_node(TrieStorageIndex(1)).unwrap().is_some());
 
         // Simulate a configuration change.
-        tx.trie_prune_mode = TriePruneMode::Prune { num_blocks_kept: 2 };
+        tx.trie_prune_mode = TriePruneMode::Prune {
+            num_blocks_kept: BlockNumber::new_or_panic(2),
+        };
         tx.insert_block_header(&BlockHeader {
             number: BlockNumber::GENESIS + 4,
             ..Default::default()
@@ -1503,7 +1509,7 @@ mod tests {
     #[test]
     fn class_trie_pruning_keep_zero_blocks() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: 0,
+            num_blocks_kept: BlockNumber::new_or_panic(0),
         })
         .unwrap()
         .connection()
@@ -1621,7 +1627,7 @@ mod tests {
     #[test]
     fn class_trie_root_updates() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: 0,
+            num_blocks_kept: BlockNumber::new_or_panic(0),
         })
         .unwrap()
         .connection()
@@ -1654,7 +1660,7 @@ mod tests {
     #[test]
     fn class_root_insert_should_prune_old_roots() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: 1,
+            num_blocks_kept: BlockNumber::new_or_panic(1),
         })
         .unwrap()
         .connection()
@@ -1685,7 +1691,7 @@ mod tests {
     #[test]
     fn class_root_insert_should_prune_old_roots_in_no_history_mode() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: 0,
+            num_blocks_kept: BlockNumber::new_or_panic(0),
         })
         .unwrap()
         .connection()
@@ -1707,7 +1713,7 @@ mod tests {
     #[test]
     fn contract_state_hash_insert_should_prune_old_state_hashes() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: 1,
+            num_blocks_kept: BlockNumber::new_or_panic(1),
         })
         .unwrap()
         .connection()
@@ -1751,7 +1757,7 @@ mod tests {
     #[test]
     fn contract_state_hash_insert_should_prune_all_old_state_in_no_history_mode() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: 0,
+            num_blocks_kept: BlockNumber::new_or_panic(0),
         })
         .unwrap()
         .connection()
@@ -1783,7 +1789,7 @@ mod tests {
     #[test]
     fn storage_root_insert_should_prune_old_roots() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: 1,
+            num_blocks_kept: BlockNumber::new_or_panic(1),
         })
         .unwrap()
         .connection()
@@ -1816,7 +1822,7 @@ mod tests {
     #[test]
     fn storage_root_insert_should_prune_all_old_roots_in_no_history_mode() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: 0,
+            num_blocks_kept: BlockNumber::new_or_panic(0),
         })
         .unwrap()
         .connection()
@@ -1840,7 +1846,7 @@ mod tests {
     #[test]
     fn contract_root_insert_should_prune_old_state_hashes() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: 1,
+            num_blocks_kept: BlockNumber::new_or_panic(1),
         })
         .unwrap()
         .connection()
@@ -1888,7 +1894,7 @@ mod tests {
     #[test]
     fn contract_root_insert_should_prune_all_old_roots_in_no_history_mode() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: 0,
+            num_blocks_kept: BlockNumber::new_or_panic(0),
         })
         .unwrap()
         .connection()
