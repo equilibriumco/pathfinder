@@ -134,6 +134,10 @@ pub struct PreConfirmedPollResponseWire {
     #[serde(default)]
     known_block_identifier: Option<String>,
 
+    // Block number: present on Full responses only.
+    #[serde(default)]
+    block_number: Option<BlockNumber>,
+
     // Block-header fields: present on Full responses only.
     #[serde(default)]
     l1_gas_price: Option<GasPrices>,
@@ -194,6 +198,7 @@ pub enum PreConfirmedPollResponse {
 
     Full {
         identifier: String,
+        block_number: BlockNumber,
         block: PreConfirmedBlock,
     },
 }
@@ -246,8 +251,13 @@ impl From<PreConfirmedPollResponseWire> for PreConfirmedPollResponse {
         let identifier = wire.known_block_identifier.take().unwrap_or_default();
         if wire.status.is_some() {
             // Full: block-header fields are present.
+            let block_number = wire
+                .block_number
+                .take()
+                .expect("block_number missing in pre-confirmed full block");
             Self::Full {
                 identifier,
+                block_number,
                 block: build_block(&mut wire),
             }
         } else {
@@ -2711,12 +2721,13 @@ mod tests {
     }
 
     mod preconfirmed_poll_response {
-        use pathfinder_common::{felt, GasPrice, TransactionHash};
+        use pathfinder_common::{felt, BlockNumber, GasPrice, TransactionHash};
 
         use super::super::{GasPrices, PreConfirmedPollResponse, PreConfirmedPollResponseWire};
 
         fn minimal_block_json() -> serde_json::Value {
             serde_json::json!({
+                "block_number":       1,
                 "l1_gas_price":       {"price_in_wei": "0xabcdef", "price_in_fri": "0x123456"},
                 "l1_data_gas_price":  {"price_in_wei": "0x0", "price_in_fri": "0x0"},
                 "l2_gas_price":       {"price_in_wei": "0x0", "price_in_fri": "0x0"},
@@ -2795,8 +2806,13 @@ mod tests {
             let response = PreConfirmedPollResponse::from(wire);
 
             match response {
-                PreConfirmedPollResponse::Full { identifier, block } => {
+                PreConfirmedPollResponse::Full {
+                    identifier,
+                    block_number,
+                    block,
+                } => {
                     assert_eq!(identifier, "xyz");
+                    assert_eq!(block_number, BlockNumber::new_or_panic(1));
                     assert_eq!(
                         block.l1_gas_price,
                         GasPrices {
