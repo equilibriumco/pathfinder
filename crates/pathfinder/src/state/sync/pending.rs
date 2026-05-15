@@ -1006,71 +1006,41 @@ mod tests {
         }
     }
 
-    /// The expected sequence for Starknet v0.14.0+ goes something like this:
-    ///   1) Node is on block N
-    ///   2) Sequencer is producing pre-confirmed block N + 1 (N is still
-    ///      pre-latest)
-    ///   3) Block N + 1 is promoted to pre-latest and block N + 2 is being
-    ///      built as pre-confirmed
-    ///   4) Block N + 1 is finalized and published as the new L2 block
-    ///   5) Node stores (and is now on) block N + 1
-    ///
-    /// Since we determine the next expected pre-confirmed block as:
-    ///
-    ///  if node_latest_hash == pre_latest.parent_hash {
-    ///      pre_confirmed_num = node_latest_num + 2
-    ///  } else {
-    ///      pre_confirmed_num = node_latest_num + 1
-    ///  }
-    ///
-    /// we must make sure that inconsistencies in the gateway responses do not
-    /// cause the polling task to emit inconsistent updates.
+    /// A transient gateway inconsistency could briefly resolve `latest` to a
+    /// lower height than we're already tracking. The polling loop should
+    /// skip those responses without discarding accumulated state.
     ///
     /// See also <https://github.com/equilibriumco/pathfinder/issues/3081>.
     #[tokio::test]
-    async fn ignores_inconsistent_pre_latest_from_gateway() {
+    async fn skips_poll_when_resolved_height_is_lower() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let mut sequencer = MockGatewayApi::new();
 
         let our_latest_hash = PRE_LATEST_BLOCK.parent_hash;
-        let mut fake_pre_latest = PRE_LATEST_BLOCK.clone();
-        fake_pre_latest.parent_hash = block_hash!("0xbad");
 
         static COUNT: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
 
-        sequencer.expect_pending_block().returning(move || {
-            let mut count = COUNT.lock().unwrap();
-            let block = match *count {
-                0 => {
-                    *count += 1;
-                    // Polling task has default state at the start, so this should produce an
-                    // event. It should also set the current expected pre-confirmed block number
-                    // to `latest + 2`.
-                    (PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())
-                }
-                1 => {
-                    *count += 1;
-                    // This will cause a mismatch between our latest block hash and the pre-latest
-                    // block parent hash. When these don't match, the expected pre-confirmed block
-                    // number is `latest + 1`, which is lower than before. This should be ignored.
-                    (fake_pre_latest.clone(), PENDING_UPDATE.clone())
-                }
-                _ => {
-                    // Our latest hash and the pre-latest block parent hash match again. Since, we
-                    // always send the same pre-confirmed block by the mock sequencer, this should
-                    // not produce any events.
-                    (PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())
-                }
-            };
-
-            Ok(block)
-        });
+        sequencer
+            .expect_pending_block()
+            .returning(move || Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
         sequencer
             .expect_preconfirmed_block()
             .returning(move |_, _, _| {
+                let mut count = COUNT.lock().unwrap();
+                let block_number = match *count {
+                    0 => {
+                        *count += 1;
+                        // First poll establishes the tracked height at 12.
+                        BlockNumber::new_or_panic(12)
+                    }
+                    _ => {
+                        // Subsequent polls resolve to a lower height (gateway hiccup).
+                        BlockNumber::new_or_panic(11)
+                    }
+                };
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: String::new(),
-                    block_number: BlockNumber::new_or_panic(12),
+                    block_number,
                     block: PRE_CONFIRMED_BLOCK.clone(),
                 })
             });
@@ -1092,10 +1062,19 @@ mod tests {
             .await
         });
 
-        let _ = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
+        let first = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
             .await
-            .expect("First event should be emitted");
+            .expect("First event should be emitted")
+            .unwrap();
+        assert_matches!(
+            first,
+            SyncEvent::PreConfirmed { number, .. } if number == BlockNumber::new_or_panic(12)
+        );
+
         let result = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await;
-        assert!(result.is_err(), "No event should be emitted for stale data");
+        assert!(
+            result.is_err(),
+            "No event should be emitted for a backwards-resolved height"
+        );
     }
 }
