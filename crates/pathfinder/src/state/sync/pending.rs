@@ -1,6 +1,6 @@
 use anyhow::Context;
 use pathfinder_common::{BlockHash, BlockNumber};
-use starknet_gateway_client::GatewayApi;
+use starknet_gateway_client::{BlockId, GatewayApi};
 use starknet_gateway_types::reply::{PreConfirmedBlock, PreConfirmedPollResponse};
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -141,8 +141,6 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
         }
 
         // Fetch the pre-latest block.
-        // Its presence determines the pre-confirmed block number we poll below,
-        // and it is later forwarded downstream in the emitted event.
         let pre_latest_data = match fetch_pre_latest(&sequencer, latest_number, latest_hash).await {
             Ok(r) => r.map(Box::new),
             Err(e) => {
@@ -152,39 +150,9 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             }
         };
 
-        // If the pre-latest block (latest + 1) exists then the sequencer has already
-        // started building the next pre-confirmed block (latest + 2).
-        let pre_confirmed_block_number = if pre_latest_data.is_some() {
-            latest_number + 2
-        } else {
-            latest_number + 1
-        };
-
-        // A transient gateway inconsistency (e.g. the pre-latest block briefly
-        // disappears) can cause this poll's pre-confirmed block number to drop
-        // below the height we're already tracking. Just skip the poll, the state
-        // we've accumulated for the higher height is still valid for later.
-        if pre_confirmed_block_number < state.block_number {
-            tracing::debug!(
-                pre_confirmed_block_number = %pre_confirmed_block_number,
-                current = %state.block_number,
-                "Pre-confirmed block number stepped backwards; skipping poll"
-            );
-            tokio::time::sleep_until(t_fetch + poll_interval).await;
-            continue;
-        }
-
-        // New height. Invalidate any state from prior height.
-        if pre_confirmed_block_number > state.block_number {
-            state = State {
-                block_number: pre_confirmed_block_number,
-                ..State::default()
-            };
-        }
-
         let response = match sequencer
             .preconfirmed_block(
-                pre_confirmed_block_number.into(),
+                BlockId::Latest,
                 state.block_identifier.clone(),
                 state.tx_count(),
             )
@@ -198,6 +166,37 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             }
         };
 
+        // Extract the block number from `Full` responses (`None` for
+        // `Unchanged`/`Delta`)
+        let resolved = match response {
+            PreConfirmedPollResponse::Full { block_number, .. } => Some(block_number),
+            _ => None,
+        };
+
+        if let Some(height) = resolved {
+            // A transient (?) lower-height shouldn't discard accumulated state.
+            if height < state.block_number && state.block_number != BlockNumber::GENESIS {
+                tracing::debug!(
+                    resolved = %height,
+                    current = %state.block_number,
+                    "Pre-confirmed resolved to a lower height than tracked; skipping poll"
+                );
+                tokio::time::sleep_until(t_fetch + poll_interval).await;
+                continue;
+            }
+
+            // The chain advanced: complete the previous block before resetting state.
+            if height > state.block_number {
+                if state.block_identifier.is_some() && state.accumulated.is_some() {
+                    complete_previous_block(&sequencer, &mut state, &tx_event).await;
+                }
+                state = State {
+                    block_number: height,
+                    ..State::default()
+                };
+            }
+        }
+
         if state.apply(response, pre_latest_data.is_some()) {
             let accumulated = state
                 .accumulated
@@ -206,7 +205,7 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             tracing::trace!("Emitting a pre-confirmed update");
             if let Err(e) = tx_event
                 .send(SyncEvent::PreConfirmed {
-                    number: pre_confirmed_block_number,
+                    number: state.block_number,
                     block: accumulated.clone().into(),
                     pre_latest_data,
                 })
@@ -220,6 +219,46 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
         }
 
         tokio::time::sleep_until(t_fetch + poll_interval).await;
+    }
+}
+
+/// Fetch the previously-tracked block one final time to capture any
+/// transactions that landed before it was superseded. Best-effort.
+async fn complete_previous_block<S: GatewayApi + Send + 'static>(
+    sequencer: &S,
+    state: &mut State,
+    tx_event: &tokio::sync::mpsc::Sender<SyncEvent>,
+) {
+    let response = match sequencer
+        .preconfirmed_block(
+            state.block_number.into(),
+            state.block_identifier.clone(),
+            state.tx_count(),
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::debug!(%err, "Completion query for previous pre-confirmed block failed");
+            return;
+        }
+    };
+
+    if state.apply(response, false) {
+        let accumulated = state
+            .accumulated
+            .as_ref()
+            .expect("accumulated present after successful completion apply");
+        if let Err(e) = tx_event
+            .send(SyncEvent::PreConfirmed {
+                number: state.block_number,
+                block: accumulated.clone().into(),
+                pre_latest_data: None,
+            })
+            .await
+        {
+            tracing::error!(error=%e, "Event channel closed during completion emission");
+        }
     }
 }
 
