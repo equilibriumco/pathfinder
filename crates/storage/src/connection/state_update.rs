@@ -526,9 +526,11 @@ impl Transaction<'_> {
             )
             .context("Preparing statement")?;
 
-        let max_len = u64::try_from(max_num_blocks.get()).expect("ptr size is 64 bits");
         let mut counts = stmt
-            .query_map(params![&start, &max_len], |row| row.get(0))
+            .query_map(
+                params![&start, &max_num_blocks.try_into_sql_int()?],
+                |row| row.get_usize(0),
+            )
             .context("Querying state diff lengths")?;
 
         let mut ret = VecDeque::new();
@@ -558,9 +560,11 @@ impl Transaction<'_> {
             )
             .context("Preparing get number of declared classes statement")?;
 
-        let max_len = u64::try_from(max_num_blocks.get()).expect("ptr size is 64 bits");
         let mut counts = stmt
-            .query_map(params![&start, &max_len], |row| row.get(0))
+            .query_map(
+                params![&start, &max_num_blocks.try_into_sql_int()?],
+                |row| row.get_usize(0),
+            )
             .context("Querying declared classes counts")?;
 
         let mut ret = VecDeque::new();
