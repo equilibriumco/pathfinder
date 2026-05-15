@@ -60,7 +60,7 @@ pub mod reorg_regression_checks {
             .query_row(
                 "SELECT COUNT(*) FROM contract_updates WHERE block_number >= :reorg_tail",
                 named_params! { ":reorg_tail": &reorg_tail },
-                |row| row.get(0),
+                |row| row.get_u64(0),
             )
             .unwrap();
 
@@ -77,7 +77,7 @@ pub mod reorg_regression_checks {
             .query_row(
                 "SELECT COUNT(*) FROM nonce_updates WHERE block_number >= :reorg_tail",
                 named_params! { ":reorg_tail": &reorg_tail },
-                |row| row.get(0),
+                |row| row.get_u64(0),
             )
             .unwrap();
 

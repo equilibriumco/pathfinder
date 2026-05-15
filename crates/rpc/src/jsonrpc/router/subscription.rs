@@ -238,7 +238,7 @@ where
                                 .unwrap_or(BlockNumber::GENESIS);
                             // + 1 because `starting_block` also counts as one block.
                             let requested_history = (latest + 1)
-                                .checked_sub(starting_block.get())
+                                .checked_sub(starting_block)
                                 .map(|requested| requested.get())
                                 .expect("Starting block should be behind latest");
 
@@ -1103,7 +1103,7 @@ mod tests {
                 Ok(CatchUp {
                     messages,
                     // Stop the catch-up after one batch.
-                    last_block: Some(to.checked_sub(1).unwrap()),
+                    last_block: Some(to.parent().unwrap()),
                 })
             }
 
@@ -1331,7 +1331,7 @@ mod tests {
                 Ok(CatchUp {
                     messages,
                     // Stop the catch-up after one batch.
-                    last_block: Some(to.checked_sub(1).unwrap()),
+                    last_block: Some(to.parent().unwrap()),
                 })
             }
 

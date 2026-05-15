@@ -89,7 +89,7 @@ pub async fn get_state_update(
         let Some(block_number) = tx.block_number(block_id).context("Fetching block number")? else {
             return Err(Error::BlockNotFound);
         };
-        if let Some(parent_block) = block_number.checked_sub(1) {
+        if let Some(parent_block) = block_number.parent() {
             let parent_exists = tx
                 .block_exists(parent_block.into())
                 .context("Checking if parent exists")?;

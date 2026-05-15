@@ -1,8 +1,11 @@
+use std::num::{NonZeroU64, NonZeroUsize};
+use std::rc::Rc;
+
 use anyhow::Result;
 use pathfinder_common::prelude::*;
 use pathfinder_common::{BlockCommitmentSignatureElem, L1BlockNumber};
 use pathfinder_crypto::Felt;
-use rusqlite::types::{FromSqlError, ToSqlOutput};
+use rusqlite::types::{FromSqlError, ToSqlOutput, Value};
 use rusqlite::RowIndex;
 
 use crate::TrieStorageIndex;
@@ -11,19 +14,12 @@ pub trait ToSql {
     fn to_sql(&self) -> ToSqlOutput<'_>;
 }
 
-pub trait TryIntoSql {
-    #[allow(dead_code)]
-    fn try_into_sql(&self) -> Result<ToSqlOutput<'_>>;
-}
-
 pub trait TryIntoSqlInt {
     fn try_into_sql_int(&self) -> Result<i64>;
 }
 
 impl<Inner: ToSql> ToSql for Option<Inner> {
     fn to_sql(&self) -> ToSqlOutput<'_> {
-        use rusqlite::types::Value;
-
         match self {
             Some(value) => value.to_sql(),
             None => ToSqlOutput::Owned(Value::Null),
@@ -33,14 +29,14 @@ impl<Inner: ToSql> ToSql for Option<Inner> {
 
 impl ToSql for TrieStorageIndex {
     fn to_sql(&self) -> ToSqlOutput<'_> {
-        use rusqlite::types::Value;
-        ToSqlOutput::Owned(Value::Integer(self.0 as i64))
+        ToSqlOutput::Owned(Value::Integer(
+            i64::try_from(self.0).expect("TrieStorageIndex <= i64::MAX"),
+        ))
     }
 }
 
 impl ToSql for StarknetVersion {
     fn to_sql(&self) -> ToSqlOutput<'_> {
-        use rusqlite::types::Value;
         ToSqlOutput::Owned(Value::Text(self.to_string()))
     }
 }
@@ -51,7 +47,7 @@ impl ToSql for L1DataAvailabilityMode {
             L1DataAvailabilityMode::Calldata => 0,
             L1DataAvailabilityMode::Blob => 1,
         };
-        ToSqlOutput::Owned(rusqlite::types::Value::Integer(value))
+        ToSqlOutput::Owned(Value::Integer(value))
     }
 }
 
@@ -92,8 +88,7 @@ to_sql_felt!(
 
 to_sql_compressed_felt!(ContractNonce, StorageValue, TransactionNonce);
 
-to_sql_int!(BlockNumber, BlockTimestamp);
-to_sql_int!(L1BlockNumber);
+to_sql_int_newtype!(BlockNumber, BlockTimestamp, L1BlockNumber);
 
 to_sql_builtin!(
     String,
@@ -101,20 +96,19 @@ to_sql_builtin!(
     Vec<u8>,
     &[u8],
     isize,
-    usize,
     i64,
     i32,
     i16,
     i8,
-    u64,
     u32,
     u16,
-    u8
+    u8,
+    Rc<Vec<Value>>
 );
 
-try_into_sql!(usize, u64);
-
 try_into_sql_int!(usize, u64);
+
+try_into_sql_int_newtype!(NonZeroUsize, NonZeroU64);
 
 /// Extends [rusqlite::Row] to provide getters for our own foreign types. This
 /// is a work-around for the orphan rule -- our types live in a separate crate
@@ -125,6 +119,18 @@ pub trait RowExt {
     fn get_i64<I: RowIndex>(&self, index: I) -> rusqlite::Result<i64>;
 
     fn get_optional_i64<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<i64>>;
+
+    /// Capped at i64::MAX
+    fn get_u64<I: RowIndex>(&self, index: I) -> rusqlite::Result<u64>;
+
+    /// Capped at i64::MAX
+    #[allow(dead_code)]
+    fn get_optional_u64<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<u64>>;
+
+    fn get_usize<I: RowIndex>(&self, index: I) -> rusqlite::Result<usize>;
+
+    #[allow(dead_code)]
+    fn get_optional_usize<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<usize>>;
 
     fn get_optional_str<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<&str>>;
 
@@ -154,7 +160,11 @@ pub trait RowExt {
         let num = self
             .get_optional_i64(index)?
             // Always safe since we are fetching an i64
-            .map(|x| BlockNumber::new_or_panic(x as u64));
+            .map(|x| {
+                BlockNumber::new_or_panic(
+                    u64::try_from(x).expect("BlockNumber is non-negative and within i64::MAX"),
+                )
+            });
         Ok(num)
     }
 
@@ -302,6 +312,25 @@ pub trait RowExt {
         Ok(mode)
     }
 
+    fn get_trie_storage_index<Index: RowIndex>(
+        &self,
+        index: Index,
+    ) -> rusqlite::Result<TrieStorageIndex> {
+        let idx = self.get_u64(index)?;
+        // Always safe since get_u64 is capped at i64::MAX, just like TrieStorageIndex.
+        Ok(TrieStorageIndex(idx))
+    }
+
+    fn get_optional_trie_storage_index<Index: RowIndex>(
+        &self,
+        index: Index,
+    ) -> rusqlite::Result<Option<TrieStorageIndex>> {
+        let idx = self.get_optional_u64(index)?;
+        // Always safe since get_optional_u64 is capped at i64::MAX, just like
+        // TrieStorageIndex.
+        Ok(idx.map(TrieStorageIndex))
+    }
+
     row_felt_wrapper!(get_block_hash, BlockHash);
     row_felt_wrapper!(get_casm_hash, CasmHash);
     row_felt_wrapper!(get_class_hash, ClassHash);
@@ -336,6 +365,56 @@ impl RowExt for &rusqlite::Row<'_> {
 
     fn get_optional_i64<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<i64>> {
         self.get_ref(index)?.as_i64_or_null().map_err(|e| e.into())
+    }
+
+    /// Always safe in terms of:
+    /// - maximum value, since the underlying type is i64,
+    /// - minimum value, since negative values are not inserted into storage via
+    ///   any API.
+    fn get_u64<I: RowIndex>(&self, index: I) -> rusqlite::Result<u64> {
+        self.get_ref(index)?
+            .as_i64()
+            .and_then(|v| u64::try_from(v).map_err(|_| FromSqlError::OutOfRange(v)))
+            .map_err(|e: FromSqlError| e.into())
+    }
+
+    /// Always safe in terms of:
+    /// - maximum value, since the underlying type is i64,
+    /// - minimum value, since negative values are not inserted into storage via
+    ///   any API.
+    fn get_optional_u64<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<u64>> {
+        self.get_ref(index)?
+            .as_i64_or_null()
+            .and_then(|v| {
+                v.map(|v| u64::try_from(v).map_err(|_| FromSqlError::OutOfRange(v)))
+                    .transpose()
+            })
+            .map_err(|e| e.into())
+    }
+
+    /// Always safe in terms of:
+    /// - maximum value, since the underlying type is i64,
+    /// - minimum value, since negative values are not inserted into storage via
+    ///   any API.
+    fn get_usize<I: RowIndex>(&self, index: I) -> rusqlite::Result<usize> {
+        self.get_ref(index)?
+            .as_i64()
+            .and_then(|v| usize::try_from(v).map_err(|_| FromSqlError::OutOfRange(v)))
+            .map_err(|e| e.into())
+    }
+
+    /// Always safe in terms of:
+    /// - maximum value, since the underlying type is i64,
+    /// - minimum value, since negative values are not inserted into storage via
+    ///   any API.
+    fn get_optional_usize<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<usize>> {
+        self.get_ref(index)?
+            .as_i64_or_null()
+            .and_then(|v| {
+                v.map(|v| usize::try_from(v).map_err(|_| FromSqlError::OutOfRange(v)))
+                    .transpose()
+            })
+            .map_err(|e| e.into())
     }
 
     fn get_optional_str<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<&str>> {
@@ -385,18 +464,18 @@ macro_rules! to_sql_compressed_felt {
 }
 
 /// Implements [ToSql] for the target integer newtype.
-macro_rules! to_sql_int {
+macro_rules! to_sql_int_newtype {
     ($target:ty) => {
         impl ToSql for $target {
             fn to_sql(&self) -> rusqlite::types::ToSqlOutput<'_> {
                 use rusqlite::types::{ToSqlOutput, Value};
-                ToSqlOutput::Owned(Value::Integer(self.get() as i64))
+                ToSqlOutput::Owned(Value::Integer(i64::try_from(self.get()).expect("Integer types must be non-negative and <= i64::MAX")))
             }
         }
     };
     ($head:ty, $($rest:ty),+  $(,)?) => {
-        to_sql_int!($head);
-        to_sql_int!($($rest),+);
+        to_sql_int_newtype!($head);
+        to_sql_int_newtype!($($rest),+);
     }
 }
 
@@ -404,28 +483,13 @@ macro_rules! to_sql_builtin {
     ($target:ty) => {
         impl ToSql for $target {
             fn to_sql(&self) -> rusqlite::types::ToSqlOutput<'_> {
-                rusqlite::ToSql::to_sql(self).unwrap()
+                rusqlite::ToSql::to_sql(self).expect("Builtin types never fail to convert")
             }
         }
     };
     ($head:ty, $($rest:ty),+  $(,)?) => {
         to_sql_builtin!($head);
         to_sql_builtin!($($rest),+);
-    }
-}
-
-macro_rules! try_into_sql {
-    ($target:ty) => {
-        impl TryIntoSql for $target {
-            fn try_into_sql(&self) -> anyhow::Result<rusqlite::types::ToSqlOutput<'_>> {
-                use rusqlite::types::{ToSqlOutput, Value};
-                Ok(ToSqlOutput::Owned(Value::Integer(i64::try_from(*self)?)))
-            }
-        }
-    };
-    ($head:ty, $($rest:ty),+  $(,)?) => {
-        try_into_sql!($head);
-        try_into_sql!($($rest),+);
     }
 }
 
@@ -443,6 +507,20 @@ macro_rules! try_into_sql_int {
     }
 }
 
+macro_rules! try_into_sql_int_newtype {
+    ($target:ty) => {
+        impl TryIntoSqlInt for $target {
+            fn try_into_sql_int(&self) -> anyhow::Result<i64> {
+                Ok(i64::try_from(self.get())?)
+            }
+        }
+    };
+    ($head:ty, $($rest:ty),+  $(,)?) => {
+        try_into_sql_int_newtype!($head);
+        try_into_sql_int_newtype!($($rest),+);
+    }
+}
+
 macro_rules! row_felt_wrapper {
     ($fn_name:ident, $Type:ident) => {
         fn $fn_name<I: RowIndex>(&self, index: I) -> rusqlite::Result<$Type> {
@@ -456,9 +534,9 @@ use row_felt_wrapper;
 use to_sql_builtin;
 use to_sql_compressed_felt;
 use to_sql_felt;
-use to_sql_int;
-use try_into_sql;
+use to_sql_int_newtype;
 use try_into_sql_int;
+use try_into_sql_int_newtype;
 
 /// Used in combination with our own [ToSql] trait to provide functionality
 /// equivalent to [rusqlite::params!] for our own foreign types.
