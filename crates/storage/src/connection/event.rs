@@ -449,7 +449,7 @@ impl Transaction<'_> {
                 // The `event_filters` table has a unique constraint over (from_block, to_block)
                 // pairs but tuples cannot be used here. Technically, both columns individually
                 // _should_ also have unique elements.
-                .map(|filter| i64::try_from(filter.from_block.get()).unwrap())
+                .map(|filter| filter.from_block.to_i64())
                 .map(Value::from)
                 .collect::<Vec<Value>>(),
         );
@@ -466,10 +466,9 @@ impl Transaction<'_> {
 
         let mut event_filters = load_stmt
             .query_map(
-                // Cannot use crate::params::named_params![] here because of the rarray.
-                rusqlite::named_params![
-                    ":end_block": &end_block.get(),
-                    ":start_block": &start_block.get(),
+                named_params![
+                    ":end_block": &end_block,
+                    ":start_block": &start_block,
                     ":cached_filters": &cached_filters_rarray,
                 ],
                 |row| {
@@ -694,7 +693,7 @@ impl RunningEventFilter {
         )?;
 
         let last_to_block = last_to_block_stmt
-            .query_row([], |row| row.get::<_, u64>(0))
+            .query_row([], |row| row.get_block_number(0))
             .optional()
             .context("Querying last stored event filter to_block")?;
 
@@ -709,7 +708,7 @@ impl RunningEventFilter {
                     next_block,
                 });
             }
-            Some(last_to_block) => BlockNumber::new_or_panic(last_to_block + 1),
+            Some(last_to_block) => last_to_block + 1,
             // Event filter table is empty, either because we haven't covered an entire range
             // yet or the old filters have been pruned. Either way, rebuild the running event
             // filter in the range that includes the latest block.
@@ -1646,7 +1645,7 @@ mod tests {
             .inner()
             .prepare("SELECT COUNT(*) FROM event_filters")
             .unwrap()
-            .query_row([], |row| row.get::<_, u64>(0))
+            .query_row([], |row| row.get_block_number(0))
             .unwrap();
         assert_eq!(inserted_event_filter_count, 2);
 

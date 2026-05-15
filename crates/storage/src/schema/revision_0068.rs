@@ -52,8 +52,8 @@ pub(crate) fn migrate(tx: &Transaction<'_>) -> anyhow::Result<()> {
         ",
         params![
             &1,
-            &running_event_filter.filter.from_block.get(),
-            &running_event_filter.filter.to_block.get(),
+            &running_event_filter.filter.from_block,
+            &running_event_filter.filter.to_block,
             &running_event_filter.filter.compress_bitmap(),
             &running_event_filter.next_block,
         ],
