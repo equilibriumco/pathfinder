@@ -36,7 +36,7 @@ pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
 
     let mut rows = query_statement.query([])?;
 
-    let mut prev_block_number: u64 = 0;
+    let mut prev_block_number: i64 = 0;
     let mut bloom = BloomFilter::new();
     let mut events_in_filter: usize = 0;
     let mut progress_logged = Instant::now();
@@ -45,7 +45,8 @@ pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
     while let Some(row) = rows.next().context("Fetching next receipt")? {
         let block_number = row.get_block_number("block_number")?;
 
-        let current_block_number = block_number.get();
+        let current_block_number =
+            i64::try_from(block_number.get()).context("Block number exceeds i64::MAX")?;
         if current_block_number > prev_block_number {
             if current_block_number % 1024 == 0 && progress_logged.elapsed() > LOG_RATE {
                 tracing::debug!(%current_block_number, "Processing events");

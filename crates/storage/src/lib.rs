@@ -42,6 +42,8 @@ pub use transaction::dto::{
     TransactionV3,
 };
 
+use crate::prelude::*;
+
 /// Sqlite key used for the PRAGMA user version.
 const VERSION_KEY: &str = "user_version";
 
@@ -266,7 +268,7 @@ impl StorageBuilder {
         if let BlockchainHistoryMode::Prune { num_blocks_kept } = blockchain_history_mode {
             conn.execute(
                 "INSERT INTO storage_options (option, value) VALUES ('prune_blockchain', ?)",
-                [num_blocks_kept],
+                params![&num_blocks_kept],
             )?;
         }
 
@@ -413,7 +415,7 @@ impl StorageBuilder {
             .query_row(
                 "SELECT value FROM storage_options WHERE option = 'prune_blockchain'",
                 [],
-                |row| row.get(0),
+                |row| row.get_block_number(0),
             )
             .optional()?;
 
@@ -436,7 +438,7 @@ impl StorageBuilder {
 
         let trie_prune_mode = if prune_flag_is_set {
             TriePruneMode::Prune {
-                num_blocks_kept: 20,
+                num_blocks_kept: BlockNumber::new(20).expect("No overflow"),
             }
         } else {
             TriePruneMode::Archive
@@ -482,7 +484,7 @@ impl StorageBuilder {
         let trie_prune_mode = self.trie_prune_mode.unwrap_or({
             if is_new_database || prune_flag_is_set {
                 TriePruneMode::Prune {
-                    num_blocks_kept: 20,
+                    num_blocks_kept: BlockNumber::new(20).expect("No overflow"),
                 }
             } else {
                 TriePruneMode::Archive
@@ -539,7 +541,7 @@ impl StorageBuilder {
             .query_row(
                 "SELECT value FROM storage_options WHERE option = 'prune_blockchain'",
                 [],
-                |row| row.get(0),
+                |row| row.get_block_number(0),
             )
             .optional()?;
 
@@ -565,7 +567,7 @@ impl StorageBuilder {
 
 fn validate_mode_and_update_db(
     blockchain_history_mode: BlockchainHistoryMode,
-    init_num_blocks_kept: Option<u64>,
+    init_num_blocks_kept: Option<BlockNumber>,
     is_new_database: bool,
     connection: &mut rusqlite::Connection,
 ) -> anyhow::Result<BlockchainHistoryMode> {
@@ -599,7 +601,7 @@ fn validate_mode_and_update_db(
                 VALUES ('prune_blockchain', ?)
                 ON CONFLICT(option) DO UPDATE SET value = excluded.value
                 ",
-                [num_blocks_kept],
+                params![&num_blocks_kept],
             )?;
 
             if is_new_database {
@@ -611,15 +613,15 @@ fn validate_mode_and_update_db(
             // prune the now excess blocks. If the size got increased, we don't need to do
             // anything here since the gap will be filled as new blocks are synced.
             let num_blocks_to_remove = match init_num_blocks_kept.checked_sub(num_blocks_kept) {
-                Some(block_diff) if block_diff > 0 => block_diff,
+                Some(block_diff) if block_diff > BlockNumber::ZERO => block_diff,
                 _ => return Ok(blockchain_history_mode),
             };
 
-            let oldest: Option<u64> = connection
+            let oldest: Option<BlockNumber> = connection
                 .query_row(
                     "SELECT number FROM block_headers ORDER BY number ASC LIMIT 1",
                     [],
-                    |row| row.get(0),
+                    |row| row.get_block_number(0),
                 )
                 .optional()
                 .context("Fetching oldest block number")?;
@@ -631,7 +633,7 @@ fn validate_mode_and_update_db(
             let tx = connection
                 .transaction()
                 .context("Creating database transaction")?;
-            for block in oldest..(oldest + num_blocks_to_remove) {
+            for block in oldest.get()..(oldest.get() + num_blocks_to_remove.get()) {
                 let block = BlockNumber::new_or_panic(block);
                 pruning::prune_block(&tx, block).context(format!("Pruning block {block}"))?;
             }
@@ -732,8 +734,12 @@ fn migrate_database(connection: &mut rusqlite::Connection) -> anyhow::Result<()>
             .transaction()
             .context("Create database transaction")?;
         schema::base_schema(&tx).context("Applying base schema")?;
-        tx.pragma_update(None, VERSION_KEY, schema::BASE_SCHEMA_REVISION)
-            .context("Failed to update the schema version number")?;
+        tx.pragma_update(
+            None,
+            VERSION_KEY,
+            i64::try_from(schema::BASE_SCHEMA_REVISION).expect("schema revision fits in i64"),
+        )
+        .context("Failed to update the schema version number")?;
         tx.commit().context("Commit migration transaction")?;
 
         current_revision = schema::BASE_SCHEMA_REVISION;
@@ -787,7 +793,11 @@ fn migrate_database(connection: &mut rusqlite::Connection) -> anyhow::Result<()>
                     .context("Create database transaction")?;
                 migration(&transaction)?;
                 transaction
-                    .pragma_update(None, VERSION_KEY, current_revision)
+                    .pragma_update(
+                        None,
+                        VERSION_KEY,
+                        i64::try_from(current_revision).expect("schema revision fits in i64"),
+                    )
                     .context("Failed to update the schema version number")?;
                 transaction
                     .commit()
@@ -810,9 +820,9 @@ fn schema_version(connection: &rusqlite::Connection) -> anyhow::Result<usize> {
     let version = connection.query_row(
         &format!("SELECT {VERSION_KEY} FROM pragma_user_version;"),
         [],
-        |row| row.get::<_, usize>(0),
+        |row| row.get::<_, i64>(0),
     )?;
-    Ok(version)
+    Ok(usize::try_from(version).expect("schema revision is non-negative"))
 }
 
 #[cfg(test)]
@@ -853,8 +863,12 @@ mod tests {
 
         // Force the schema to a newer version
         let current_version = schema::migrations().len();
-        conn.pragma_update(None, VERSION_KEY, current_version + 1)
-            .unwrap();
+        conn.pragma_update(
+            None,
+            VERSION_KEY,
+            i64::try_from(current_version + 1).expect("schema revision fits in i64"),
+        )
+        .unwrap();
 
         // Migration should fail.
         migrate_database(&mut conn).unwrap_err();
@@ -931,7 +945,7 @@ mod tests {
         assert_eq!(
             StorageBuilder::file(db_path)
                 .trie_prune_mode(Some(TriePruneMode::Prune {
-                    num_blocks_kept: 10
+                    num_blocks_kept: BlockNumber::new_or_panic(10),
                 }))
                 .migrate()
                 .unwrap_err()
@@ -1034,7 +1048,7 @@ mod tests {
             .unwrap()
             .prepare("SELECT COUNT(*) FROM event_filters")
             .unwrap()
-            .query_row([], |row| row.get::<_, u64>(0))
+            .query_row([], |row| row.get::<_, i64>(0))
             .unwrap();
 
         // We are using only the running event filter.
@@ -1136,10 +1150,10 @@ mod tests {
             .unwrap()
             .prepare("SELECT COUNT(*) FROM event_filters")
             .unwrap()
-            .query_row([], |row| row.get::<_, u64>(0))
+            .query_row([], |row| row.get::<_, i64>(0))
             .unwrap();
 
-        assert_eq!(inserted_event_filter_count, expected_insert_count);
+        assert_eq!(inserted_event_filter_count, expected_insert_count as i64);
 
         let expected = &emitted_events[..events_per_block * n_blocks];
         assert_eq!(events, expected);

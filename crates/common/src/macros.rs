@@ -40,6 +40,18 @@ pub(super) mod i64_backed_u64 {
                 }
             }
 
+            impl PartialEq<u32> for $target {
+                fn eq(&self, other: &u32) -> bool {
+                    self.0 == *other as u64
+                }
+            }
+
+            impl PartialEq<i32> for $target {
+                fn eq(&self, other: &i32) -> bool {
+                    u64::try_from(*other).map(|x| self == &x).unwrap_or(false)
+                }
+            }
+
             impl<T> fake::Dummy<T> for $target {
                 fn dummy_with_rng<R: rand::Rng + ?Sized>(_: &T, rng: &mut R) -> Self {
                     Self(rng.gen_range(0..i64::MAX as u64))

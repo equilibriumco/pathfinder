@@ -55,7 +55,7 @@ pub mod reorg_regression_checks {
         tx: &mut Transaction<'_>,
         reorg_tail: pathfinder_common::BlockNumber,
     ) -> bool {
-        let num_contract_updates_after_reorg_tail: u64 = tx
+        let num_contract_updates_after_reorg_tail: i64 = tx
             .inner()
             .query_row(
                 "SELECT COUNT(*) FROM contract_updates WHERE block_number >= :reorg_tail",
@@ -72,7 +72,7 @@ pub mod reorg_regression_checks {
         tx: &mut Transaction<'_>,
         reorg_tail: pathfinder_common::BlockNumber,
     ) -> bool {
-        let num_nonce_updates_after_reorg_tail: u64 = tx
+        let num_nonce_updates_after_reorg_tail: i64 = tx
             .inner()
             .query_row(
                 "SELECT COUNT(*) FROM nonce_updates WHERE block_number >= :reorg_tail",

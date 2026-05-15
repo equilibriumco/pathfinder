@@ -526,15 +526,15 @@ impl Transaction<'_> {
             )
             .context("Preparing statement")?;
 
-        let max_len = u64::try_from(max_num_blocks.get()).expect("ptr size is 64 bits");
+        let max_len = i64::try_from(max_num_blocks.get()).context("max_num_blocks > i64::MAX")?;
         let mut counts = stmt
-            .query_map(params![&start, &max_len], |row| row.get(0))
+            .query_map(params![&start, &max_len], |row| row.get::<_, isize>(0))
             .context("Querying state diff lengths")?;
 
         let mut ret = VecDeque::new();
 
         while let Some(stat) = counts.next().transpose().context("Iterating over rows")? {
-            ret.push_back(stat);
+            ret.push_back(stat.try_into().expect(">= 0"));
         }
 
         Ok(ret)
@@ -558,15 +558,15 @@ impl Transaction<'_> {
             )
             .context("Preparing get number of declared classes statement")?;
 
-        let max_len = u64::try_from(max_num_blocks.get()).expect("ptr size is 64 bits");
+        let max_len = i64::try_from(max_num_blocks.get()).context("max_num_blocks > i64::MAX")?;
         let mut counts = stmt
-            .query_map(params![&start, &max_len], |row| row.get(0))
+            .query_map(params![&start, &max_len], |row| row.get::<_, isize>(0))
             .context("Querying declared classes counts")?;
 
         let mut ret = VecDeque::new();
 
         while let Some(stat) = counts.next().transpose().context("Iterating over rows")? {
-            ret.push_back(stat);
+            ret.push_back(stat.try_into().expect(">= 0"));
         }
 
         Ok(ret)

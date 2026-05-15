@@ -101,12 +101,10 @@ to_sql_builtin!(
     Vec<u8>,
     &[u8],
     isize,
-    usize,
     i64,
     i32,
     i16,
     i8,
-    u64,
     u32,
     u16,
     u8
@@ -125,6 +123,14 @@ pub trait RowExt {
     fn get_i64<I: RowIndex>(&self, index: I) -> rusqlite::Result<i64>;
 
     fn get_optional_i64<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<i64>>;
+
+    fn get_u64<I: RowIndex>(&self, index: I) -> rusqlite::Result<u64>;
+
+    fn get_optional_u64<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<u64>>;
+
+    fn get_usize<I: RowIndex>(&self, index: I) -> rusqlite::Result<usize>;
+
+    fn get_optional_usize<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<usize>>;
 
     fn get_optional_str<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<&str>>;
 
@@ -336,6 +342,50 @@ impl RowExt for &rusqlite::Row<'_> {
 
     fn get_optional_i64<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<i64>> {
         self.get_ref(index)?.as_i64_or_null().map_err(|e| e.into())
+    }
+
+    /// Always safe in terms of:
+    /// - maximum value, since the underlying type is i64,
+    /// - minimum value, since negative values are not inserted into storage via
+    ///   any API.
+    fn get_u64<I: RowIndex>(&self, index: I) -> rusqlite::Result<u64> {
+        self.get_ref(index)?
+            .as_i64()
+            .map(|v| u64::try_from(v).expect("> 0 && <= i64::MAX"))
+            .map_err(|e| e.into())
+    }
+
+    /// Always safe in terms of:
+    /// - maximum value, since the underlying type is i64,
+    /// - minimum value, since negative values are not inserted into storage via
+    ///   any API.
+    fn get_optional_u64<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<u64>> {
+        self.get_ref(index)?
+            .as_i64_or_null()
+            .map(|v| v.map(|v| u64::try_from(v).expect("> 0 && <= i64::MAX")))
+            .map_err(|e| e.into())
+    }
+
+    /// Always safe in terms of:
+    /// - maximum value, since the underlying type is i64,
+    /// - minimum value, since negative values are not inserted into storage via
+    ///   any API.
+    fn get_usize<I: RowIndex>(&self, index: I) -> rusqlite::Result<usize> {
+        self.get_ref(index)?
+            .as_i64()
+            .map(|v| usize::try_from(v).expect("> 0 && <= i64::MAX"))
+            .map_err(|e| e.into())
+    }
+
+    /// Always safe in terms of:
+    /// - maximum value, since the underlying type is i64,
+    /// - minimum value, since negative values are not inserted into storage via
+    ///   any API.
+    fn get_optional_usize<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<usize>> {
+        self.get_ref(index)?
+            .as_i64_or_null()
+            .map(|v| v.map(|v| usize::try_from(v).expect("> 0 && <= i64::MAX")))
+            .map_err(|e| e.into())
     }
 
     fn get_optional_str<I: RowIndex>(&self, index: I) -> rusqlite::Result<Option<&str>> {

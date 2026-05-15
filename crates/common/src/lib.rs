@@ -295,6 +295,7 @@ impl BlockId {
 
 impl BlockNumber {
     pub const GENESIS: BlockNumber = BlockNumber::new_or_panic(0);
+    pub const ZERO: BlockNumber = Self::GENESIS;
     /// The maximum [BlockNumber] we can support. Restricted to `u64::MAX/2` to
     /// match Sqlite's maximum integer value.
     pub const MAX: BlockNumber = BlockNumber::new_or_panic(i64::MAX as u64);
@@ -317,8 +318,8 @@ impl BlockNumber {
         Self::new(self.0.checked_add(rhs)?)
     }
 
-    pub fn checked_sub(&self, rhs: u64) -> Option<Self> {
-        self.0.checked_sub(rhs).map(Self)
+    pub fn checked_sub(&self, rhs: Self) -> Option<Self> {
+        self.0.checked_sub(rhs.0).map(Self)
     }
 
     pub fn saturating_sub(&self, rhs: u64) -> Self {

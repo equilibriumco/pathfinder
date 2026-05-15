@@ -35,7 +35,7 @@ impl Transaction<'_> {
             ":l1_da_mode": &header.l1_da_mode,
             ":receipt_commitment": &header.receipt_commitment,
             ":state_diff_commitment": &header.state_diff_commitment,
-            ":state_diff_length": &header.state_diff_length,
+            ":state_diff_length": &header.state_diff_length.try_into_sql_int()?,
         },
         ).context("Inserting block header")?;
 
@@ -497,9 +497,11 @@ impl Transaction<'_> {
             )
             .context("Preparing get event counts statement")?;
 
-        let max_len = u64::try_from(max_len.get()).expect("ptr size is 64 bits");
+        let max_len = i64::try_from(max_len.get()).context("max_len exceeds i64::MAX")?;
         let mut counts = stmt
-            .query_map(params![&block_number, &max_len], |row| row.get(0))
+            .query_map(params![&block_number, &max_len], |row| {
+                row.get::<usize, isize>(0)
+            })
             .context("Querying event counts")?;
 
         let mut ret = VecDeque::new();
@@ -509,7 +511,7 @@ impl Transaction<'_> {
             .transpose()
             .context("Iterating over event counts rows")?
         {
-            ret.push_back(stat);
+            ret.push_back(stat.try_into().expect("Always > 0"));
         }
 
         Ok(ret)
@@ -528,9 +530,11 @@ impl Transaction<'_> {
             )
             .context("Preparing get transaction counts statement")?;
 
-        let max_len = u64::try_from(max_len.get()).expect("ptr size is 64 bits");
+        let max_len = i64::try_from(max_len.get()).context("max_len exceeds i64::MAX")?;
         let mut rows = stmt
-            .query_map(params![&block_number, &max_len], |row| row.get(0))
+            .query_map(params![&block_number, &max_len], |row| {
+                row.get::<usize, isize>(0)
+            })
             .context("Querying transaction counts")?;
 
         let mut ret = VecDeque::new();
@@ -540,7 +544,7 @@ impl Transaction<'_> {
             .transpose()
             .context("Iterating over rows of transaction counts")?
         {
-            ret.push_back(cc);
+            ret.push_back(cc.try_into().expect("Always > 0"));
         }
 
         Ok(ret)
@@ -610,15 +614,24 @@ fn parse_row_as_header(row: &rusqlite::Row<'_>) -> rusqlite::Result<BlockHeader>
     let transaction_commitment = row.get_transaction_commitment("transaction_commitment")?;
     let event_commitment = row.get_event_commitment("event_commitment")?;
     let starknet_version = row.get_starknet_version("version")?;
-    let event_count: usize = row.get("event_count")?;
-    let transaction_count: usize = row.get("transaction_count")?;
+    let event_count: usize = row
+        .get_i64("event_count")?
+        .try_into()
+        .expect("Count is always non-negative");
+    let transaction_count: usize = row
+        .get_i64("transaction_count")?
+        .try_into()
+        .expect("Count is always non-negative");
     let state_commitment = row.get_state_commitment("state_commitment")?;
     let l1_da_mode = row.get_l1_da_mode("l1_da_mode")?;
     let receipt_commitment = row.get_receipt_commitment("receipt_commitment")?;
     let state_diff_commitment = row
         .get_optional_felt("state_diff_commitment")?
         .unwrap_or_default();
-    let state_diff_length: u64 = row.get("state_diff_length")?;
+    let state_diff_length: u64 = row
+        .get_i64("state_diff_length")?
+        .try_into()
+        .expect("Count is always non-negative");
 
     let header = BlockHeader {
         hash,
