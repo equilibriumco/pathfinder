@@ -27,7 +27,7 @@ pub enum Command<ApplicationCommand> {
     /// Dial a specific peer.
     Dial {
         peer_id: PeerId,
-        addr: Multiaddr,
+        addrs: Vec<Multiaddr>,
         sender: EmptyResultSender,
     },
     /// Disconnect from a specific peer.

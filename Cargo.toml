@@ -52,6 +52,7 @@ ark-ff = "0.5.0"
 assert_matches = "1.5.0"
 async-trait = "0.1.89"
 axum = "0.8.9"
+backon = { version = "1.6.0", default-features = false, features = ["tokio-sleep"] }
 base64 = "0.22.1"
 # TODO: bincode development stopped, we should probably replace it. 3.0.0 is just a compile_error! in lib.rs
 bincode = "=2.0.1"

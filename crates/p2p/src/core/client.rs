@@ -41,12 +41,22 @@ impl<C> Client<C> {
         receiver.await.expect("Sender not to be dropped")
     }
 
+    /// Dials the peer with the given [ID](PeerId) on a single address.
+    ///
+    /// To dial on multiple address at once, use [Client::dial_many].
     pub async fn dial(&self, peer_id: PeerId, addr: Multiaddr) -> anyhow::Result<()> {
+        self.dial_many(peer_id, vec![addr]).await
+    }
+
+    /// Dials the peer with the given [ID](PeerId) on all specified addresses.
+    ///
+    /// To dial on a single address, use [Client::dial].
+    pub async fn dial_many(&self, peer_id: PeerId, addrs: Vec<Multiaddr>) -> anyhow::Result<()> {
         let (sender, receiver) = oneshot::channel();
         self.sender
             .send(Command::Dial {
                 peer_id,
-                addr,
+                addrs,
                 sender,
             })
             .expect("Command receiver not to be dropped");
