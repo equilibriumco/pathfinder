@@ -530,21 +530,19 @@ where
             // Instruct the swarm to dial a given peer.
             Command::Dial {
                 peer_id,
-                addr,
+                addrs,
                 sender,
             } => {
                 if let std::collections::hash_map::Entry::Vacant(e) =
                     self.pending_dials.entry(peer_id)
                 {
                     match self.swarm.dial(
-                        // Dial a known peer with a given address only if it's not connected yet
-                        // and we haven't started dialing yet.
-                        DialOpts::peer_id(peer_id)
-                            .addresses(vec![addr.clone()])
-                            .build(),
+                        // Dial a known peer with the given addresses only if it's not connected
+                        // yet and we haven't started dialing yet.
+                        DialOpts::peer_id(peer_id).addresses(addrs.clone()).build(),
                     ) {
                         Ok(_) => {
-                            tracing::debug!(%addr, "Dialed peer");
+                            tracing::debug!(?addrs, "Dialed peer");
                             e.insert(sender);
                         }
                         Err(e) => {
