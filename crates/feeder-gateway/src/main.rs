@@ -757,6 +757,7 @@ fn resolve_block(
         receipt_commitment: Some(receipt_commitment),
         state_diff_commitment: Some(header.state_diff_commitment),
         state_diff_length: Some(header.state_diff_length),
+        fee_actual: None,
     })
 }
 

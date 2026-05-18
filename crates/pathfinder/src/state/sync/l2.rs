@@ -1742,6 +1742,7 @@ mod tests {
             receipt_commitment: Default::default(),
             state_diff_commitment: Default::default(),
             state_diff_length: Default::default(),
+            fee_actual: None,
         });
         static BLOCK0_V2: LazyLock<reply::Block> = LazyLock::new(|| reply::Block {
             block_hash: BLOCK0_HASH_V2,
@@ -1774,6 +1775,7 @@ mod tests {
             receipt_commitment: Default::default(),
             state_diff_commitment: Default::default(),
             state_diff_length: Default::default(),
+            fee_actual: None,
         });
         static BLOCK1: LazyLock<reply::Block> = LazyLock::new(|| reply::Block {
             block_hash: BLOCK1_HASH,
@@ -1806,6 +1808,7 @@ mod tests {
             receipt_commitment: Default::default(),
             state_diff_commitment: Default::default(),
             state_diff_length: Default::default(),
+            fee_actual: None,
         });
         static BLOCK2: LazyLock<reply::Block> = LazyLock::new(|| reply::Block {
             block_hash: BLOCK2_HASH,
@@ -1838,6 +1841,7 @@ mod tests {
             receipt_commitment: Default::default(),
             state_diff_commitment: Default::default(),
             state_diff_length: Default::default(),
+            fee_actual: None,
         });
 
         static STATE_UPDATE0: LazyLock<StateUpdate> = LazyLock::new(|| {
@@ -2497,6 +2501,7 @@ mod tests {
                     receipt_commitment: Default::default(),
                     state_diff_commitment: Default::default(),
                     state_diff_length: Default::default(),
+                    fee_actual: None,
                 };
 
                 // Fetch the genesis block with respective state update and contracts
@@ -2745,6 +2750,7 @@ mod tests {
                     receipt_commitment: Default::default(),
                     state_diff_commitment: Default::default(),
                     state_diff_length: Default::default(),
+                    fee_actual: None,
                 };
                 let block2_v2 = reply::Block {
                     block_hash: BLOCK2_HASH_V2,
@@ -2777,6 +2783,7 @@ mod tests {
                     receipt_commitment: Default::default(),
                     state_diff_commitment: Default::default(),
                     state_diff_length: Default::default(),
+                    fee_actual: None,
                 };
                 let block3 = reply::Block {
                     block_hash: BLOCK3_HASH,
@@ -2809,6 +2816,7 @@ mod tests {
                     receipt_commitment: Default::default(),
                     state_diff_commitment: Default::default(),
                     state_diff_length: Default::default(),
+                    fee_actual: None,
                 };
 
                 // Fetch the genesis block with respective state update and contracts
@@ -3074,6 +3082,7 @@ mod tests {
                     receipt_commitment: Default::default(),
                     state_diff_commitment: Default::default(),
                     state_diff_length: Default::default(),
+                    fee_actual: None,
                 };
 
                 // Fetch the genesis block with respective state update and contracts
@@ -3269,6 +3278,7 @@ mod tests {
                     receipt_commitment: Default::default(),
                     state_diff_commitment: Default::default(),
                     state_diff_length: Default::default(),
+                    fee_actual: None,
                 };
                 let block2 = reply::Block {
                     block_hash: BLOCK2_HASH,
@@ -3301,6 +3311,7 @@ mod tests {
                     receipt_commitment: Default::default(),
                     state_diff_commitment: Default::default(),
                     state_diff_length: Default::default(),
+                    fee_actual: None,
                 };
 
                 // Fetch the genesis block with respective state update and contracts

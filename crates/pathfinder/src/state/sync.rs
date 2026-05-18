@@ -2042,6 +2042,7 @@ mod tests {
                     Felt::from_hex_str(&format!("0x200{}", header.number)).unwrap(),
                 )),
                 state_diff_length: Some(header.number.get()),
+                fee_actual: None,
             });
 
             let signature = Box::new(BlockCommitmentSignature {

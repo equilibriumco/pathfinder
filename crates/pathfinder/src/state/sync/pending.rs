@@ -310,6 +310,7 @@ mod tests {
         receipt_commitment: Default::default(),
         state_diff_commitment: Default::default(),
         state_diff_length: Default::default(),
+        fee_actual: None,
     });
 
     pub static PENDING_UPDATE: LazyLock<StateUpdate> =

@@ -53,6 +53,10 @@ pub struct Block {
     pub state_diff_commitment: Option<StateDiffCommitment>,
     #[serde(default)]
     pub state_diff_length: Option<u64>,
+
+    // Introduced in v0.14.3
+    #[serde(default)]
+    pub fee_actual: Option<u128>,
 }
 
 /// Represents the "pre-latest" block in Starknet, which is a block that has
