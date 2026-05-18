@@ -1077,4 +1077,145 @@ mod tests {
             "No event should be emitted for a backwards-resolved height"
         );
     }
+
+    /// When the chain advances past the pre-confirmed block we're tracking,
+    /// the loop completes the previous block with one final query (picking up
+    /// any transactions that landed just before it was superseded) before
+    /// moving on to the new height.
+    ///
+    /// Three emissions are expected across two ticks:
+    ///   1. Block N initial
+    ///   2. Block N completed (tail transaction included)
+    ///   3. Block N+1 fresh
+    #[tokio::test]
+    async fn completes_previous_block_when_chain_advances() {
+        use starknet_gateway_client::BlockId;
+
+        let our_latest_number = BlockNumber::new_or_panic(10);
+        // Pre-latest is absent throughout: our latest hash does not match
+        // PRE_LATEST_BLOCK.parent_hash, so fetch_pre_latest classifies it as None.
+        let our_latest_hash = block_hash!("0xabcd");
+
+        const BLOCK_11_ID: &str = "id-11";
+        const BLOCK_12_ID: &str = "id-12";
+
+        let tail_tx = Transaction {
+            hash: transaction_hash!("0x012345"),
+            variant: TransactionVariant::L1Handler(L1HandlerTransaction {
+                contract_address: contract_address!("0x1"),
+                entry_point_selector: entry_point!("0x55"),
+                nonce: transaction_nonce!("0x2"),
+                calldata: Vec::new(),
+            }),
+        };
+
+        // Mock gateway
+        let mut sequencer = MockGatewayApi::new();
+        sequencer
+            .expect_pending_block()
+            .returning(|| Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
+
+        // Pre-confirmed responses are scripted by dispatching on the request's
+        // (BlockId, identifier) — each pattern fires on a specific tick.
+        let tail_for_mock = tail_tx.clone();
+        sequencer
+            .expect_preconfirmed_block()
+            .returning(move |block_id, identifier, _tx_count| {
+                match (block_id, identifier.as_deref()) {
+                    // Tick 1: first poll, no cached identifier. Server returns
+                    // pre-confirmed block 11.
+                    (BlockId::Latest, None) => Ok(PreConfirmedPollResponse::Full {
+                        identifier: BLOCK_11_ID.into(),
+                        block_number: BlockNumber::new_or_panic(11),
+                        block: PRE_CONFIRMED_BLOCK.clone(),
+                    }),
+
+                    // Tick 2: chain has advanced. Server returns pre-confirmed
+                    // block 12 with a fresh identifier.
+                    (BlockId::Latest, Some(id)) if id == BLOCK_11_ID => {
+                        Ok(PreConfirmedPollResponse::Full {
+                            identifier: BLOCK_12_ID.into(),
+                            block_number: BlockNumber::new_or_panic(12),
+                            block: PRE_CONFIRMED_BLOCK.clone(),
+                        })
+                    }
+
+                    // Completion query for block 11: server returns a delta
+                    // carrying the tail transaction that landed just before
+                    // the chain advanced.
+                    (BlockId::Number(n), Some(id))
+                        if n == BlockNumber::new_or_panic(11) && id == BLOCK_11_ID =>
+                    {
+                        Ok(PreConfirmedPollResponse::Delta {
+                            identifier: BLOCK_11_ID.into(),
+                            new_transactions: vec![tail_for_mock.clone()],
+                            new_receipts: vec![None],
+                            new_state_diffs: vec![None],
+                        })
+                    }
+
+                    // Steady state on block 12: subsequent polls report no change.
+                    (BlockId::Latest, Some(id)) if id == BLOCK_12_ID => {
+                        Ok(PreConfirmedPollResponse::Unchanged)
+                    }
+
+                    _ => panic!(
+                        "unexpected preconfirmed_block call: id={:?} identifier={:?}",
+                        block_id, identifier
+                    ),
+                }
+            });
+
+        // Spawn the polling loop
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let (_, latest) = watch::channel((our_latest_number, our_latest_hash));
+        let (_, current) = watch::channel((our_latest_number, our_latest_hash));
+        let sequencer = Arc::new(sequencer);
+        let _jh = tokio::spawn(async move {
+            super::poll_pre_confirmed(tx, sequencer, std::time::Duration::ZERO, latest, current)
+                .await
+        });
+
+        // Assertions
+
+        // 1. Initial pre-confirmed at block 11.
+        let initial = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
+            .await
+            .expect("Initial event should be emitted")
+            .unwrap();
+        assert_matches!(
+            initial,
+            SyncEvent::PreConfirmed { number, block, pre_latest_data }
+                if number == BlockNumber::new_or_panic(11)
+                    && block.transactions.len() == PRE_CONFIRMED_BLOCK.transactions.len()
+                    && pre_latest_data.is_none()
+        );
+
+        // 2. Block 11 completed: same height, tail transaction appended.
+        let completed = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
+            .await
+            .expect("Completion event should be emitted")
+            .unwrap();
+        let expected_completed_len = PRE_CONFIRMED_BLOCK.transactions.len() + 1;
+        assert_matches!(
+            completed,
+            SyncEvent::PreConfirmed { number, block, pre_latest_data }
+                if number == BlockNumber::new_or_panic(11)
+                    && block.transactions.len() == expected_completed_len
+                    && pre_latest_data.is_none()
+        );
+
+        // 3. Fresh pre-confirmed at block 12.
+        let advanced = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
+            .await
+            .expect("Advance event should be emitted")
+            .unwrap();
+        assert_matches!(
+            advanced,
+            SyncEvent::PreConfirmed { number, block, pre_latest_data }
+                if number == BlockNumber::new_or_panic(12)
+                    && block.transactions.len() == PRE_CONFIRMED_BLOCK.transactions.len()
+                    && pre_latest_data.is_none()
+        );
+    }
 }
