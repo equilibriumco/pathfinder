@@ -1076,10 +1076,15 @@ mod tests {
 
         let storage_root_index = storage
             .next_index
+<<<<<<< HEAD
             .checked_add(number_of_nodes_added)
             .context("TrieStorageIndex overflow")?
             .checked_sub(1)
             .context("TrieStorageIndex underflow")?;
+=======
+            .checked_add(number_of_nodes_added - 1)
+            .context("TrieStorageIndex overflow")?;
+>>>>>>> fe8d5ece2 (fix(TrieStorageIndex): apis allow values larger than i64::MAX)
         storage.next_index = storage
             .next_index
             .checked_add(number_of_nodes_added)
