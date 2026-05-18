@@ -948,6 +948,26 @@ mod tests {
 
     use super::*;
 
+    trait TrieStorageIndexExt {
+        fn checked_add(self, rhs: usize) -> Option<Self>
+        where
+            Self: Sized;
+
+        fn checked_sub(self, rhs: usize) -> Option<Self>
+        where
+            Self: Sized;
+    }
+
+    impl TrieStorageIndexExt for TrieStorageIndex {
+        fn checked_add(self, rhs: usize) -> Option<Self> {
+            Self::new(self.get().checked_add(u64::try_from(rhs).ok()?)?)
+        }
+
+        fn checked_sub(self, rhs: usize) -> Option<Self> {
+            Self::new(self.get().checked_sub(u64::try_from(rhs).ok()?)?)
+        }
+    }
+
     type TestTree = MerkleTree<PedersenHash, 251>;
 
     #[derive(Default, Debug)]
@@ -978,14 +998,14 @@ mod tests {
     fn commit_and_persist_with_pruning<H: FeltHash, const HEIGHT: usize>(
         tree: MerkleTree<H, HEIGHT>,
         storage: &mut TestStorage,
-    ) -> (Felt, TrieStorageIndex) {
+    ) -> anyhow::Result<(Felt, TrieStorageIndex)> {
         commit_and_persist(tree, storage, true)
     }
 
     fn commit_and_persist_without_pruning<H: FeltHash, const HEIGHT: usize>(
         tree: MerkleTree<H, HEIGHT>,
         storage: &mut TestStorage,
-    ) -> (Felt, TrieStorageIndex) {
+    ) -> anyhow::Result<(Felt, TrieStorageIndex)> {
         commit_and_persist(tree, storage, false)
     }
 
@@ -994,7 +1014,7 @@ mod tests {
         tree: MerkleTree<H, HEIGHT>,
         storage: &mut TestStorage,
         prune_nodes: bool,
-    ) -> (Felt, TrieStorageIndex) {
+    ) -> anyhow::Result<(Felt, TrieStorageIndex)> {
         for (key, value) in &tree.leaves {
             let key = Felt::from_bits(key).unwrap();
             storage.leaves.insert(key, *value);
@@ -1008,19 +1028,25 @@ mod tests {
             }
         }
 
-        let number_of_nodes_added = update.nodes_added.len() as u64;
+        let number_of_nodes_added = update.nodes_added.len();
 
         for (rel_index, (hash, node)) in update.nodes_added.into_iter().enumerate() {
             let node = match node {
                 Node::Binary { left, right } => {
                     let left = match left {
                         NodeRef::StorageIndex(idx) => idx,
-                        NodeRef::Index(idx) => storage.next_index + idx as u64,
+                        NodeRef::Index(idx) => storage
+                            .next_index
+                            .checked_add(idx)
+                            .context("TrieStorageIndex overflow")?,
                     };
 
                     let right = match right {
                         NodeRef::StorageIndex(idx) => idx,
-                        NodeRef::Index(idx) => storage.next_index + idx as u64,
+                        NodeRef::Index(idx) => storage
+                            .next_index
+                            .checked_add(idx)
+                            .context("TrieStorageIndex overflow")?,
                     };
 
                     StoredNode::Binary { left, right }
@@ -1028,7 +1054,10 @@ mod tests {
                 Node::Edge { child, path } => {
                     let child = match child {
                         NodeRef::StorageIndex(idx) => idx,
-                        NodeRef::Index(idx) => storage.next_index + idx as u64,
+                        NodeRef::Index(idx) => storage
+                            .next_index
+                            .checked_add(idx)
+                            .context("TrieStorageIndex overflow")?,
                     };
 
                     StoredNode::Edge { child, path }
@@ -1037,15 +1066,26 @@ mod tests {
                 Node::LeafEdge { path } => StoredNode::LeafEdge { path },
             };
 
-            let index = storage.next_index + (rel_index as u64);
+            let index = storage
+                .next_index
+                .checked_add(rel_index)
+                .context("TrieStorageIndex overflow")?;
 
             storage.nodes.insert(index, (hash, node));
         }
 
-        let storage_root_index = storage.next_index + number_of_nodes_added - 1;
-        storage.next_index += number_of_nodes_added;
+        let storage_root_index = storage
+            .next_index
+            .checked_add(number_of_nodes_added)
+            .context("TrieStorageIndex overflow")?
+            .checked_sub(1)
+            .context("TrieStorageIndex underflow")?;
+        storage.next_index = storage
+            .next_index
+            .checked_add(number_of_nodes_added)
+            .context("TrieStorageIndex overflow")?;
 
-        (update.root_commitment, storage_root_index)
+        Ok((update.root_commitment, storage_root_index))
     }
 
     #[test]
@@ -1362,7 +1402,7 @@ mod tests {
 
             tree.set(&storage, felt!("0x1").view_bits().to_bitvec(), felt!("0x1"))
                 .unwrap();
-            let root = commit_and_persist_without_pruning(tree, &mut storage);
+            let root = commit_and_persist_without_pruning(tree, &mut storage).unwrap();
             assert_eq!(
                 root.0,
                 felt!("0x02ebbd6878f81e49560ae863bd4ef327a417037bf57b63a016130ad0a94c8fa7")
@@ -1370,7 +1410,7 @@ mod tests {
             assert_eq!(storage.nodes.len(), 1);
 
             let tree = TestTree::new(root.1);
-            let root = commit_and_persist_without_pruning(tree, &mut storage);
+            let root = commit_and_persist_without_pruning(tree, &mut storage).unwrap();
             assert_eq!(
                 root.0,
                 felt!("0x02ebbd6878f81e49560ae863bd4ef327a417037bf57b63a016130ad0a94c8fa7")
@@ -1385,7 +1425,7 @@ mod tests {
 
             tree.set(&storage, felt!("0x1").view_bits().to_bitvec(), felt!("0x1"))
                 .unwrap();
-            let root = commit_and_persist_with_pruning(tree, &mut storage);
+            let root = commit_and_persist_with_pruning(tree, &mut storage).unwrap();
             assert_eq!(
                 root.0,
                 felt!("0x02ebbd6878f81e49560ae863bd4ef327a417037bf57b63a016130ad0a94c8fa7")
@@ -1395,7 +1435,7 @@ mod tests {
             let mut tree = TestTree::new(root.1);
             tree.set(&storage, felt!("0x1").view_bits().to_bitvec(), Felt::ZERO)
                 .unwrap();
-            let root = commit_and_persist_with_pruning(tree, &mut storage);
+            let root = commit_and_persist_with_pruning(tree, &mut storage).unwrap();
             assert_eq!(root.0, Felt::ZERO);
             assert!(storage.nodes.is_empty());
         }
@@ -1421,7 +1461,7 @@ mod tests {
             uut.set(&storage, key1.clone(), val1).unwrap();
             uut.set(&storage, key2.clone(), val2).unwrap();
 
-            let root = commit_and_persist_with_pruning(uut, &mut storage);
+            let root = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             let uut = TestTree::new(root.1);
 
@@ -1467,7 +1507,7 @@ mod tests {
                 let key = key.view_bits();
                 uut.set(&storage, key.to_owned(), *val).unwrap();
             }
-            let root = commit_and_persist_with_pruning(uut, &mut storage);
+            let root = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             // Delete the final leaf; this exercises the bug as the nodes are all in storage
             // (unresolved).
@@ -1475,7 +1515,7 @@ mod tests {
             let key = leaves[4].0.view_bits().to_bitvec();
             let val = leaves[4].1;
             uut.set(&storage, key, val).unwrap();
-            let (root_hash, _) = commit_and_persist_with_pruning(uut, &mut storage);
+            let (root_hash, _) = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
             let expect = felt!("0x5f3b2b98faef39c60dbbb459dbe63d1d10f1688af47fbc032f2cab025def896");
 
             assert_eq!(root_hash, expect);
@@ -1494,15 +1534,15 @@ mod tests {
             let mut uut = TestTree::empty();
             let mut storage = TestStorage::default();
             uut.set(&storage, key0.clone(), val0).unwrap();
-            let root0 = commit_and_persist_without_pruning(uut, &mut storage);
+            let root0 = commit_and_persist_without_pruning(uut, &mut storage).unwrap();
 
             let mut uut = TestTree::new(root0.1);
             uut.set(&storage, key1.clone(), val1).unwrap();
-            let root1 = commit_and_persist_without_pruning(uut, &mut storage);
+            let root1 = commit_and_persist_without_pruning(uut, &mut storage).unwrap();
 
             let mut uut = TestTree::new(root1.1);
             uut.set(&storage, key2.clone(), val2).unwrap();
-            let root2 = commit_and_persist_without_pruning(uut, &mut storage);
+            let root2 = commit_and_persist_without_pruning(uut, &mut storage).unwrap();
 
             let uut = TestTree::new(root0.1);
             assert_eq!(uut.get(&storage, key0.clone()).unwrap(), Some(val0));
@@ -1533,15 +1573,15 @@ mod tests {
             let mut uut = TestTree::empty();
             let mut storage = TestStorage::default();
             uut.set(&storage, key0.clone(), val0).unwrap();
-            let root0 = commit_and_persist_without_pruning(uut, &mut storage);
+            let root0 = commit_and_persist_without_pruning(uut, &mut storage).unwrap();
 
             let mut uut = TestTree::new(root0.1);
             uut.set(&storage, key1.clone(), val1).unwrap();
-            let root1 = commit_and_persist_without_pruning(uut, &mut storage);
+            let root1 = commit_and_persist_without_pruning(uut, &mut storage).unwrap();
 
             let mut uut = TestTree::new(root0.1);
             uut.set(&storage, key2.clone(), val2).unwrap();
-            let root2 = commit_and_persist_without_pruning(uut, &mut storage);
+            let root2 = commit_and_persist_without_pruning(uut, &mut storage).unwrap();
 
             let uut = TestTree::new(root0.1);
             assert_eq!(uut.get(&storage, key0.clone()).unwrap(), Some(val0));
@@ -1568,13 +1608,13 @@ mod tests {
             let val = felt!("0x12345678");
             uut.set(&storage, key, val).unwrap();
 
-            let root0 = commit_and_persist_with_pruning(uut, &mut storage);
+            let root0 = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             let uut = TestTree::new(root0.1);
-            let root1 = commit_and_persist_with_pruning(uut, &mut storage);
+            let root1 = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             let uut = TestTree::new(root1.1);
-            let root2 = commit_and_persist_with_pruning(uut, &mut storage);
+            let root2 = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             assert_eq!(root0.0, root1.0);
             assert_eq!(root0.0, root2.0);
@@ -1604,7 +1644,7 @@ mod tests {
             uut.set(&storage, felt!("0x87").view_bits().to_owned(), felt!("0x2"))
                 .unwrap();
 
-            let (root, _) = commit_and_persist_with_pruning(uut, &mut storage);
+            let (root, _) = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             assert_eq!(
                 root,
@@ -1677,7 +1717,7 @@ mod tests {
                 felt!("0x15b38")
             );
 
-            let root = commit_and_persist_with_pruning(uut, &mut storage);
+            let root = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
             let mut uut = TestTree::new(root.1);
             set!(
                 uut,
@@ -1685,7 +1725,7 @@ mod tests {
                 felt!("0x15b38")
             );
 
-            let root = commit_and_persist_with_pruning(uut, &mut storage);
+            let root = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
             let mut uut = TestTree::new(root.1);
 
             let mut visited = vec![];
@@ -1701,7 +1741,7 @@ mod tests {
                 felt!("0xf502")
             );
 
-            let root = commit_and_persist_with_pruning(uut, &mut storage);
+            let root = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
             let mut uut = TestTree::new(root.1);
 
             let mut visited = vec![];
@@ -1760,7 +1800,7 @@ mod tests {
             let RootIndexUpdate::Updated(root_index) = root_index_update else {
                 panic!("Expected root index to be updated");
             };
-            assert_eq!(root_index, TrieStorageIndex(1));
+            assert_eq!(root_index, TrieStorageIndex::new(1).unwrap());
             tx.insert_class_root(BlockNumber::GENESIS, root_index_update)
                 .unwrap();
             assert!(tx.class_root_exists(BlockNumber::GENESIS).unwrap());
@@ -2145,7 +2185,7 @@ mod tests {
                     .zip(values.iter())
                     .for_each(|(k, v)| uut.set(&storage, k.view_bits().to_owned(), *v).unwrap());
 
-                let root = commit_and_persist_with_pruning(uut, &mut storage);
+                let root = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
                 Self {
                     keys,
@@ -2195,7 +2235,7 @@ mod tests {
 
             uut.set(&storage, key1.clone(), value_1).unwrap();
             uut.set(&storage, key2.clone(), value_2).unwrap();
-            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage);
+            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             let proofs = TestTree::get_proofs(root_idx, &storage, &keys).unwrap();
 
@@ -2234,7 +2274,7 @@ mod tests {
             uut.set(&storage, key2.clone(), value_2).unwrap();
             uut.set(&storage, key3.clone(), value_3).unwrap();
 
-            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage);
+            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             let proofs = TestTree::get_proofs(root_idx, &storage, &keys).unwrap();
             let verified_1 = verify_proof(root, &key1, value_1, &proofs[0]).unwrap();
@@ -2266,7 +2306,7 @@ mod tests {
 
             uut.set(&storage, key1.clone(), value_1).unwrap();
 
-            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage);
+            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             let proofs = TestTree::get_proofs(root_idx, &storage, &keys).unwrap();
             let verified_1 = verify_proof(root, &key1, value_1, &proofs[0]).unwrap();
@@ -2292,7 +2332,7 @@ mod tests {
 
             uut.set(&storage, key1.clone(), value_1).unwrap();
 
-            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage);
+            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             let proofs = TestTree::get_proofs(root_idx, &storage, &keys).unwrap();
             let verified_1 = verify_proof(root, &key1, value_1, &proofs[0]).unwrap();
@@ -2318,7 +2358,7 @@ mod tests {
 
             uut.set(&storage, key1.clone(), value_1).unwrap();
 
-            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage);
+            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             let proofs = TestTree::get_proofs(root_idx, &storage, &keys).unwrap();
             let verified_1 = verify_proof(root, &key1, value_1, &proofs[0]).unwrap();
@@ -2349,7 +2389,7 @@ mod tests {
             uut.set(&storage, key1.clone(), value_1).unwrap();
             uut.set(&storage, key2.clone(), value_2).unwrap();
 
-            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage);
+            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             let proofs = TestTree::get_proofs(root_idx, &storage, &keys).unwrap();
             let verified_1 = verify_proof(root, &key1, value_1, &proofs[0]).unwrap();
@@ -2464,7 +2504,7 @@ mod tests {
             uut.set(&storage, key1.clone(), value_1).unwrap();
             uut.set(&storage, key2.clone(), value_2).unwrap();
 
-            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage);
+            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             let mut proofs = TestTree::get_proofs(root_idx, &storage, &keys).unwrap();
 
@@ -2509,7 +2549,7 @@ mod tests {
             uut.set(&storage, key1.clone(), value_1).unwrap();
             uut.set(&storage, key2.clone(), value_2).unwrap();
 
-            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage);
+            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             let mut proofs = TestTree::get_proofs(root_idx, &storage, &keys).unwrap();
 
@@ -2549,7 +2589,7 @@ mod tests {
 
             uut.set(&storage, key1.clone(), value_1).unwrap();
 
-            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage);
+            let (root, root_idx) = commit_and_persist_with_pruning(uut, &mut storage).unwrap();
 
             let proofs = TestTree::get_proofs(root_idx, &storage, &keys).unwrap();
 

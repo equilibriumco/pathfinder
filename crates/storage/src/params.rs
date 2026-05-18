@@ -29,9 +29,7 @@ impl<Inner: ToSql> ToSql for Option<Inner> {
 
 impl ToSql for TrieStorageIndex {
     fn to_sql(&self) -> ToSqlOutput<'_> {
-        ToSqlOutput::Owned(Value::Integer(
-            i64::try_from(self.0).expect("TrieStorageIndex <= i64::MAX"),
-        ))
+        ToSqlOutput::Owned(Value::Integer(self.to_i64()))
     }
 }
 
@@ -318,7 +316,8 @@ pub trait RowExt {
     ) -> rusqlite::Result<TrieStorageIndex> {
         let idx = self.get_u64(index)?;
         // Always safe since get_u64 is capped at i64::MAX, just like TrieStorageIndex.
-        Ok(TrieStorageIndex(idx))
+        Ok(TrieStorageIndex::new(idx)
+            .expect("TrieStorageIndex is non-negative and within i64::MAX"))
     }
 
     fn get_optional_trie_storage_index<Index: RowIndex>(
@@ -328,7 +327,10 @@ pub trait RowExt {
         let idx = self.get_optional_u64(index)?;
         // Always safe since get_optional_u64 is capped at i64::MAX, just like
         // TrieStorageIndex.
-        Ok(idx.map(TrieStorageIndex))
+        Ok(idx.map(|idx| {
+            TrieStorageIndex::new(idx)
+                .expect("TrieStorageIndex is non-negative and within i64::MAX")
+        }))
     }
 
     row_felt_wrapper!(get_block_hash, BlockHash);

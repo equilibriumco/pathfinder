@@ -321,8 +321,6 @@ impl BlockNumber {
         self.0.checked_sub(rhs).map(Self)
     }
 
-    /// Always safe because block numbers are non-negative and restricted to be
-    /// at most i64::MAX.
     pub fn to_i64(&self) -> i64 {
         self.0
             .try_into()
