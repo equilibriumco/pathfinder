@@ -232,8 +232,12 @@ mod tests {
             let uut = BinaryNode {
                 storage_index: None,
                 height: 1,
-                left: Rc::new(RefCell::new(InternalNode::Unresolved(1.into()))),
-                right: Rc::new(RefCell::new(InternalNode::Unresolved(2.into()))),
+                left: Rc::new(RefCell::new(InternalNode::Unresolved(
+                    TrieStorageIndex::new(1).unwrap(),
+                ))),
+                right: Rc::new(RefCell::new(InternalNode::Unresolved(
+                    TrieStorageIndex::new(2).unwrap(),
+                ))),
             };
 
             let mut zero_key = bitvec![u8, Msb0; 1; 251];
@@ -251,8 +255,12 @@ mod tests {
 
         #[test]
         fn get_child() {
-            let left = Rc::new(RefCell::new(InternalNode::Unresolved(1.into())));
-            let right = Rc::new(RefCell::new(InternalNode::Unresolved(2.into())));
+            let left = Rc::new(RefCell::new(InternalNode::Unresolved(
+                TrieStorageIndex::new(1).unwrap(),
+            )));
+            let right = Rc::new(RefCell::new(InternalNode::Unresolved(
+                TrieStorageIndex::new(2).unwrap(),
+            )));
 
             let uut = BinaryNode {
                 storage_index: None,
@@ -320,7 +328,9 @@ mod tests {
             #[test]
             fn full() {
                 let key = felt!("0x123456789abcdef");
-                let child = Rc::new(RefCell::new(InternalNode::Unresolved(1.into())));
+                let child = Rc::new(RefCell::new(InternalNode::Unresolved(
+                    TrieStorageIndex::new(1).unwrap(),
+                )));
 
                 let uut = EdgeNode {
                     storage_index: None,
@@ -335,7 +345,9 @@ mod tests {
             #[test]
             fn prefix() {
                 let key = felt!("0x123456789abcdef");
-                let child = Rc::new(RefCell::new(InternalNode::Unresolved(1.into())));
+                let child = Rc::new(RefCell::new(InternalNode::Unresolved(
+                    TrieStorageIndex::new(1).unwrap(),
+                )));
 
                 let path = key.view_bits()[..45].to_bitvec();
 
@@ -352,7 +364,9 @@ mod tests {
             #[test]
             fn suffix() {
                 let key = felt!("0x123456789abcdef");
-                let child = Rc::new(RefCell::new(InternalNode::Unresolved(1.into())));
+                let child = Rc::new(RefCell::new(InternalNode::Unresolved(
+                    TrieStorageIndex::new(1).unwrap(),
+                )));
 
                 let path = key.view_bits()[50..].to_bitvec();
 
@@ -369,7 +383,9 @@ mod tests {
             #[test]
             fn middle_slice() {
                 let key = felt!("0x123456789abcdef");
-                let child = Rc::new(RefCell::new(InternalNode::Unresolved(1.into())));
+                let child = Rc::new(RefCell::new(InternalNode::Unresolved(
+                    TrieStorageIndex::new(1).unwrap(),
+                )));
 
                 let path = key.view_bits()[230..235].to_bitvec();
 
