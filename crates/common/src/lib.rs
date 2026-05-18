@@ -177,14 +177,6 @@ impl From<BlockNumber> for Felt {
     }
 }
 
-impl std::iter::Iterator for BlockNumber {
-    type Item = BlockNumber;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(*self + 1)
-    }
-}
-
 /// The timestamp of a Starknet block.
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Default)]
 pub struct BlockTimestamp(u64);
@@ -302,11 +294,7 @@ impl BlockNumber {
     /// Returns the parent's [BlockNumber] or [None] if the current number is
     /// genesis.
     pub fn parent(&self) -> Option<Self> {
-        if self == &Self::GENESIS {
-            None
-        } else {
-            Some(*self - 1)
-        }
+        self.checked_sub(1)
     }
 
     pub fn is_zero(&self) -> bool {
@@ -332,13 +320,16 @@ impl std::ops::Add<u64> for BlockNumber {
     type Output = BlockNumber;
 
     fn add(self, rhs: u64) -> Self::Output {
-        Self(self.0 + rhs)
+        self.checked_add(rhs)
+            .expect("Block number addition overflow")
     }
 }
 
 impl std::ops::AddAssign<u64> for BlockNumber {
     fn add_assign(&mut self, rhs: u64) {
-        self.0 += rhs;
+        *self = self
+            .checked_add(rhs)
+            .expect("Block number addition overflow");
     }
 }
 
@@ -346,13 +337,16 @@ impl std::ops::Sub<u64> for BlockNumber {
     type Output = BlockNumber;
 
     fn sub(self, rhs: u64) -> Self::Output {
-        Self(self.0 - rhs)
+        self.checked_sub(rhs)
+            .expect("BlockNumber subtraction underflow")
     }
 }
 
 impl std::ops::SubAssign<u64> for BlockNumber {
     fn sub_assign(&mut self, rhs: u64) {
-        self.0 -= rhs;
+        *self = self
+            .checked_sub(rhs)
+            .expect("BlockNumber subtraction underflow");
     }
 }
 
