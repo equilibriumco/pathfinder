@@ -655,24 +655,35 @@ pub struct TrieUpdate {
 }
 
 /// The storage index of a trie node.
+///
+/// The value range of this type is `0..i64::MAX` and hence is
+/// compatible with SQLite integer implementation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct TrieStorageIndex(pub u64);
+pub struct TrieStorageIndex(u64);
+
+impl TrieStorageIndex {
+    pub const fn new(val: u64) -> Option<Self> {
+        if val <= i64::MAX as u64 {
+            Some(Self(val))
+        } else {
+            None
+        }
+    }
+
+    pub const fn get(&self) -> u64 {
+        self.0
+    }
+
+    pub fn to_i64(&self) -> i64 {
+        self.0
+            .try_into()
+            .expect("TrieStorageIndex is always <= i64::MAX")
+    }
+}
 
 impl std::fmt::Display for TrieStorageIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
-    }
-}
-
-impl From<u64> for TrieStorageIndex {
-    fn from(index: u64) -> Self {
-        Self(index)
-    }
-}
-
-impl From<TrieStorageIndex> for u64 {
-    fn from(index: TrieStorageIndex) -> Self {
-        index.0
     }
 }
 
@@ -689,7 +700,11 @@ impl<Context> bincode::Decode<Context> for TrieStorageIndex {
     fn decode<D: bincode::de::Decoder<Context = Context>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
-        Ok(Self(u64::decode(decoder)?))
+        u64::decode(decoder).and_then(|x| {
+            TrieStorageIndex::new(x).ok_or(bincode::error::DecodeError::Other(
+                "TrieStorageIndex out of range",
+            ))
+        })
     }
 }
 
@@ -697,73 +712,11 @@ impl<'de, Context> bincode::BorrowDecode<'de, Context> for TrieStorageIndex {
     fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
-        Ok(Self(u64::borrow_decode(decoder)?))
-    }
-}
-
-impl std::ops::Add for TrieStorageIndex {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self {
-        Self(
-            self.0
-                .checked_add(rhs.0)
-                .expect("TrieStorageIndex addition overflow"),
-        )
-    }
-}
-
-impl std::ops::Add<u64> for TrieStorageIndex {
-    type Output = Self;
-
-    fn add(self, rhs: u64) -> Self {
-        Self(
-            self.0
-                .checked_add(rhs)
-                .expect("TrieStorageIndex addition overflow"),
-        )
-    }
-}
-
-impl std::ops::AddAssign<u64> for TrieStorageIndex {
-    fn add_assign(&mut self, rhs: u64) {
-        self.0 = self
-            .0
-            .checked_add(rhs)
-            .expect("TrieStorageIndex addition overflow");
-    }
-}
-
-impl std::ops::Sub for TrieStorageIndex {
-    type Output = Self;
-
-    fn sub(self, rhs: Self) -> Self {
-        Self(
-            self.0
-                .checked_sub(rhs.0)
-                .expect("TrieStorageIndex subtraction underflow"),
-        )
-    }
-}
-
-impl std::ops::Sub<u64> for TrieStorageIndex {
-    type Output = Self;
-
-    fn sub(self, rhs: u64) -> Self {
-        Self(
-            self.0
-                .checked_sub(rhs)
-                .expect("TrieStorageIndex subtraction underflow"),
-        )
-    }
-}
-
-impl std::ops::SubAssign<u64> for TrieStorageIndex {
-    fn sub_assign(&mut self, rhs: u64) {
-        self.0 = self
-            .0
-            .checked_sub(rhs)
-            .expect("TrieStorageIndex subtraction underflow");
+        u64::borrow_decode(decoder).and_then(|x| {
+            TrieStorageIndex::new(x).ok_or(bincode::error::DecodeError::Other(
+                "TrieStorageIndex out of range",
+            ))
+        })
     }
 }
 
@@ -962,34 +915,37 @@ mod tests {
         let result = tx.class_root_index(BlockNumber::GENESIS).unwrap();
         assert_eq!(result, None);
 
-        tx.insert_class_root(BlockNumber::GENESIS, RootIndexUpdate::Updated(123.into()))
-            .unwrap();
+        tx.insert_class_root(
+            BlockNumber::GENESIS,
+            RootIndexUpdate::Updated(TrieStorageIndex::new(123).unwrap()),
+        )
+        .unwrap();
         let result = tx.class_root_index(BlockNumber::GENESIS).unwrap();
-        assert_eq!(result, Some(123.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(123).unwrap()));
 
         tx.insert_class_root(
             BlockNumber::GENESIS + 1,
-            RootIndexUpdate::Updated(456.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(456).unwrap()),
         )
         .unwrap();
         let result = tx.class_root_index(BlockNumber::GENESIS).unwrap();
-        assert_eq!(result, Some(123.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(123).unwrap()));
         let result = tx.class_root_index(BlockNumber::GENESIS + 1).unwrap();
-        assert_eq!(result, Some(456.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(456).unwrap()));
         let result = tx.class_root_index(BlockNumber::GENESIS + 2).unwrap();
-        assert_eq!(result, Some(456.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(456).unwrap()));
 
         tx.insert_class_root(
             BlockNumber::GENESIS + 10,
-            RootIndexUpdate::Updated(789.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(789).unwrap()),
         )
         .unwrap();
         let result = tx.class_root_index(BlockNumber::GENESIS + 9).unwrap();
-        assert_eq!(result, Some(456.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(456).unwrap()));
         let result = tx.class_root_index(BlockNumber::GENESIS + 10).unwrap();
-        assert_eq!(result, Some(789.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(789).unwrap()));
         let result = tx.class_root_index(BlockNumber::GENESIS + 11).unwrap();
-        assert_eq!(result, Some(789.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(789).unwrap()));
 
         tx.insert_class_root(BlockNumber::GENESIS + 12, RootIndexUpdate::TrieEmpty)
             .unwrap();
@@ -1010,34 +966,37 @@ mod tests {
         let result = tx.storage_root_index(BlockNumber::GENESIS).unwrap();
         assert_eq!(result, None);
 
-        tx.insert_storage_root(BlockNumber::GENESIS, RootIndexUpdate::Updated(123.into()))
-            .unwrap();
+        tx.insert_storage_root(
+            BlockNumber::GENESIS,
+            RootIndexUpdate::Updated(TrieStorageIndex::new(123).unwrap()),
+        )
+        .unwrap();
         let result = tx.storage_root_index(BlockNumber::GENESIS).unwrap();
-        assert_eq!(result, Some(123.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(123).unwrap()));
 
         tx.insert_storage_root(
             BlockNumber::GENESIS + 1,
-            RootIndexUpdate::Updated(456.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(456).unwrap()),
         )
         .unwrap();
         let result = tx.storage_root_index(BlockNumber::GENESIS).unwrap();
-        assert_eq!(result, Some(123.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(123).unwrap()));
         let result = tx.storage_root_index(BlockNumber::GENESIS + 1).unwrap();
-        assert_eq!(result, Some(456.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(456).unwrap()));
         let result = tx.storage_root_index(BlockNumber::GENESIS + 2).unwrap();
-        assert_eq!(result, Some(456.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(456).unwrap()));
 
         tx.insert_storage_root(
             BlockNumber::GENESIS + 10,
-            RootIndexUpdate::Updated(789.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(789).unwrap()),
         )
         .unwrap();
         let result = tx.storage_root_index(BlockNumber::GENESIS + 9).unwrap();
-        assert_eq!(result, Some(456.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(456).unwrap()));
         let result = tx.storage_root_index(BlockNumber::GENESIS + 10).unwrap();
-        assert_eq!(result, Some(789.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(789).unwrap()));
         let result = tx.storage_root_index(BlockNumber::GENESIS + 11).unwrap();
-        assert_eq!(result, Some(789.into()));
+        assert_eq!(result, Some(TrieStorageIndex::new(789).unwrap()));
 
         tx.insert_storage_root(BlockNumber::GENESIS + 12, RootIndexUpdate::TrieEmpty)
             .unwrap();
@@ -1107,7 +1066,7 @@ mod tests {
         tx.insert_contract_root(
             BlockNumber::GENESIS + 1,
             c2,
-            RootIndexUpdate::Updated(888.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(888).unwrap()),
         )
         .unwrap();
         let result1 = tx.contract_root_index(BlockNumber::GENESIS, c1).unwrap();
@@ -1124,7 +1083,7 @@ mod tests {
             .unwrap();
         let hash1 = tx.contract_root(BlockNumber::GENESIS + 1, c1).unwrap();
         assert_eq!(result1, Some(idx1));
-        assert_eq!(result2, Some(888.into()));
+        assert_eq!(result2, Some(TrieStorageIndex::new(888).unwrap()));
         assert_eq!(hash1, Some(root1));
         let result1 = tx
             .contract_root_index(BlockNumber::GENESIS + 2, c1)
@@ -1134,7 +1093,7 @@ mod tests {
             .unwrap();
         let hash1 = tx.contract_root(BlockNumber::GENESIS + 2, c1).unwrap();
         assert_eq!(result1, Some(idx1));
-        assert_eq!(result2, Some(888.into()));
+        assert_eq!(result2, Some(TrieStorageIndex::new(888).unwrap()));
         assert_eq!(hash1, Some(root1));
 
         let root2 = contract_root_bytes!(b"root 2");
@@ -1155,7 +1114,7 @@ mod tests {
         tx.insert_contract_root(
             BlockNumber::GENESIS + 11,
             c2,
-            RootIndexUpdate::Updated(999.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(999).unwrap()),
         )
         .unwrap();
         let result1 = tx
@@ -1166,7 +1125,7 @@ mod tests {
             .unwrap();
         let hash1 = tx.contract_root(BlockNumber::GENESIS + 9, c1).unwrap();
         assert_eq!(result1, Some(idx1));
-        assert_eq!(result2, Some(888.into()));
+        assert_eq!(result2, Some(TrieStorageIndex::new(888).unwrap()));
         assert_eq!(hash1, Some(root1));
         let result1 = tx
             .contract_root_index(BlockNumber::GENESIS + 10, c1)
@@ -1176,13 +1135,13 @@ mod tests {
             .unwrap();
         let hash1 = tx.contract_root(BlockNumber::GENESIS + 10, c1).unwrap();
         assert_eq!(result1, Some(idx2));
-        assert_eq!(result2, Some(888.into()));
+        assert_eq!(result2, Some(TrieStorageIndex::new(888).unwrap()));
         assert_eq!(hash1, Some(root2));
         let result2 = tx
             .contract_root_index(BlockNumber::GENESIS + 11, c2)
             .unwrap();
         let hash1 = tx.contract_root(BlockNumber::GENESIS + 11, c1).unwrap();
-        assert_eq!(result2, Some(999.into()));
+        assert_eq!(result2, Some(TrieStorageIndex::new(999).unwrap()));
         assert_eq!(hash1, Some(root2));
 
         tx.insert_contract_root(BlockNumber::GENESIS + 12, c1, RootIndexUpdate::TrieEmpty)
@@ -1652,7 +1611,10 @@ mod tests {
                 BlockNumber::GENESIS,
             )
             .unwrap();
-        assert_eq!(root_update, RootIndexUpdate::Updated(1.into()));
+        assert_eq!(
+            root_update,
+            RootIndexUpdate::Updated(TrieStorageIndex::new(1).unwrap())
+        );
     }
 
     #[test]
@@ -1665,17 +1627,20 @@ mod tests {
         .unwrap();
         let tx = db.transaction().unwrap();
 
-        tx.insert_class_root(BlockNumber::GENESIS, RootIndexUpdate::Updated(1.into()))
-            .unwrap();
+        tx.insert_class_root(
+            BlockNumber::GENESIS,
+            RootIndexUpdate::Updated(TrieStorageIndex::new(1).unwrap()),
+        )
+        .unwrap();
         tx.insert_class_root(
             BlockNumber::new_or_panic(1),
-            RootIndexUpdate::Updated(2.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(2).unwrap()),
         )
         .unwrap();
         // no root inserted for block 2
         tx.insert_class_root(
             BlockNumber::new_or_panic(3),
-            RootIndexUpdate::Updated(3.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(3).unwrap()),
         )
         .unwrap();
 
@@ -1696,11 +1661,14 @@ mod tests {
         .unwrap();
         let tx = db.transaction().unwrap();
 
-        tx.insert_class_root(BlockNumber::GENESIS, RootIndexUpdate::Updated(1.into()))
-            .unwrap();
+        tx.insert_class_root(
+            BlockNumber::GENESIS,
+            RootIndexUpdate::Updated(TrieStorageIndex::new(1).unwrap()),
+        )
+        .unwrap();
         tx.insert_class_root(
             BlockNumber::new_or_panic(1),
-            RootIndexUpdate::Updated(2.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(2).unwrap()),
         )
         .unwrap();
 
@@ -1794,17 +1762,20 @@ mod tests {
         .unwrap();
         let tx = db.transaction().unwrap();
 
-        tx.insert_storage_root(BlockNumber::GENESIS, RootIndexUpdate::Updated(1.into()))
-            .unwrap();
+        tx.insert_storage_root(
+            BlockNumber::GENESIS,
+            RootIndexUpdate::Updated(TrieStorageIndex::new(1).unwrap()),
+        )
+        .unwrap();
         tx.insert_storage_root(
             BlockNumber::new_or_panic(1),
-            RootIndexUpdate::Updated(2.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(2).unwrap()),
         )
         .unwrap();
         // no new root index for block 2
         tx.insert_storage_root(
             BlockNumber::new_or_panic(3),
-            RootIndexUpdate::Updated(3.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(3).unwrap()),
         )
         .unwrap();
 
@@ -1827,11 +1798,14 @@ mod tests {
         .unwrap();
         let tx = db.transaction().unwrap();
 
-        tx.insert_storage_root(BlockNumber::GENESIS, RootIndexUpdate::Updated(1.into()))
-            .unwrap();
+        tx.insert_storage_root(
+            BlockNumber::GENESIS,
+            RootIndexUpdate::Updated(TrieStorageIndex::new(1).unwrap()),
+        )
+        .unwrap();
         tx.insert_storage_root(
             BlockNumber::new_or_panic(1),
-            RootIndexUpdate::Updated(2.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(2).unwrap()),
         )
         .unwrap();
 
@@ -1855,20 +1829,20 @@ mod tests {
         tx.insert_contract_root(
             BlockNumber::GENESIS,
             contract,
-            RootIndexUpdate::Updated(1.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(1).unwrap()),
         )
         .unwrap();
         tx.insert_contract_root(
             BlockNumber::new_or_panic(1),
             contract,
-            RootIndexUpdate::Updated(2.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(2).unwrap()),
         )
         .unwrap();
         // no new root for block 2
         tx.insert_contract_root(
             BlockNumber::new_or_panic(3),
             contract,
-            RootIndexUpdate::Updated(3.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(3).unwrap()),
         )
         .unwrap();
 
@@ -1880,12 +1854,12 @@ mod tests {
         assert_eq!(
             tx.contract_root_index(BlockNumber::new_or_panic(2), contract)
                 .unwrap(),
-            Some(2.into())
+            Some(TrieStorageIndex::new(2).unwrap())
         );
         assert_eq!(
             tx.contract_root_index(BlockNumber::new_or_panic(3), contract)
                 .unwrap(),
-            Some(3.into())
+            Some(TrieStorageIndex::new(3).unwrap())
         );
     }
 
@@ -1903,13 +1877,13 @@ mod tests {
         tx.insert_contract_root(
             BlockNumber::GENESIS,
             contract,
-            RootIndexUpdate::Updated(1.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(1).unwrap()),
         )
         .unwrap();
         tx.insert_contract_root(
             BlockNumber::new_or_panic(1),
             contract,
-            RootIndexUpdate::Updated(2.into()),
+            RootIndexUpdate::Updated(TrieStorageIndex::new(2).unwrap()),
         )
         .unwrap();
 
@@ -1921,7 +1895,7 @@ mod tests {
         assert_eq!(
             tx.contract_root_index(BlockNumber::new_or_panic(1), contract)
                 .unwrap(),
-            Some(2.into())
+            Some(TrieStorageIndex::new(2).unwrap())
         );
     }
 }
