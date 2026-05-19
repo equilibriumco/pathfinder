@@ -36,7 +36,7 @@ const NONCE_UPDATE_KEY_LEN: usize = NONCE_UPDATE_PREFIX_LEN + size_of::<u32>();
 ///
 /// We're using an inverted block number to allow for efficient retrieval of the
 /// latest nonce for a given contract address using forward iteration.
-fn nonce_update_key(
+pub(crate) fn nonce_update_key(
     block_number: BlockNumber,
     contract_address: &ContractAddress,
 ) -> [u8; NONCE_UPDATE_KEY_LEN] {
@@ -68,7 +68,7 @@ const STORAGE_UPDATE_KEY_LEN: usize =
 /// We're using an inverted block number to allow for efficient retrieval of the
 /// latest storage value for a given contract address and storage address using
 /// forward iteration.
-fn storage_update_key(
+pub(crate) fn storage_update_key(
     block_number: BlockNumber,
     contract_address: &ContractAddress,
     storage_address: &StorageAddress,
@@ -148,9 +148,10 @@ impl Transaction<'_> {
         };
         let state_update_data = dto::StateUpdateData::from(state_update_data);
         let data = bincode::serde::encode_to_vec(state_update_data, bincode::config::standard())?;
-        self.rocksdb()
-            .put_cf(&state_updates_column, key, data)
-            .context("Inserting state update into RocksDB")?;
+        self.batch
+            .lock()
+            .expect("Batch lock poisoned")
+            .put_cf(&state_updates_column, key, data);
 
         let mut insert_contract = self
             .inner()
@@ -189,7 +190,7 @@ impl Transaction<'_> {
 
         let nonce_updates_column = self.rocksdb_get_column(&NONCE_UPDATES_COLUMN);
         let storage_updates_column = self.rocksdb_get_column(&STORAGE_UPDATES_COLUMN);
-        let mut batch = rust_rocksdb::WriteBatch::default();
+        let mut batch = self.batch.lock().expect("Batch lock poisoned");
 
         for (address, update) in contract_updates {
             if let Some(class_update) = &update.class {
@@ -281,10 +282,6 @@ impl Transaction<'_> {
                 .context("Inserting migrated CASM hash")?;
         }
 
-        self.rocksdb()
-            .write(&batch)
-            .context("Writing nonce and storage updates to RocksDB")?;
-
         Ok(())
     }
 
@@ -365,7 +362,7 @@ impl Transaction<'_> {
         let storage_updates_column = self.rocksdb_get_column(&STORAGE_UPDATES_COLUMN);
         let state_updates_column = self.rocksdb_get_column(&STATE_UPDATES_COLUMN);
 
-        let mut batch = rust_rocksdb::WriteBatch::default();
+        let mut batch = self.batch.lock().expect("Batch lock poisoned");
 
         for (address, update) in &data.contract_updates {
             if update.nonce.is_some() {
@@ -392,10 +389,6 @@ impl Transaction<'_> {
         }
 
         batch.delete_cf(&state_updates_column, block_number.get().to_be_bytes());
-
-        self.rocksdb()
-            .write(&batch)
-            .context("Deleting state update data from RocksDB")?;
 
         Ok(())
     }
@@ -1016,7 +1009,7 @@ impl Transaction<'_> {
     }
 }
 
-mod dto {
+pub(crate) mod dto {
     use std::collections::{HashMap, HashSet};
 
     use pathfinder_common::prelude::*;
@@ -1640,6 +1633,187 @@ mod tests {
                 .reverse_sierra_class_updates(header.number, BlockNumber::GENESIS)
                 .unwrap();
             assert_eq!(result, vec![(SIERRA_HASH, None)]);
+        }
+
+        #[test]
+        fn state_update_writes_go_through_batch() {
+            use crate::connection::{
+                NONCE_UPDATES_COLUMN,
+                STATE_UPDATES_COLUMN,
+                STORAGE_UPDATES_COLUMN,
+            };
+
+            // Use a file-based storage to get an isolated RocksDB instance, since
+            // in_memory() shares a single RocksDB path across sequential test runs in
+            // the same process.
+            let tmpdir = tempfile::tempdir().unwrap();
+            let storage = crate::StorageBuilder::file(tmpdir.path().join("db.sqlite"))
+                .migrate()
+                .unwrap()
+                .create_pool(std::num::NonZeroU32::new(1).unwrap())
+                .unwrap();
+            let mut conn = storage.connection().unwrap();
+            let tx = conn.transaction().unwrap();
+
+            // Build a header at block 5 so the FK in contract_updates is satisfied.
+            let header = pathfinder_common::BlockHeader::builder()
+                .number(BlockNumber::new_or_panic(5))
+                .finalize_with_hash(block_hash!("0xa"));
+            tx.insert_block_header(&header).unwrap();
+
+            let contract = contract_address!("0x1");
+            let storage_key = storage_address!("0x2");
+            let storage_val = storage_value!("0x42");
+            let nonce = contract_nonce!("0x1");
+
+            let state_update = pathfinder_common::StateUpdate::default()
+                .with_contract_nonce(contract, nonce)
+                .with_storage_update(contract, storage_key, storage_val);
+            tx.insert_state_update(BlockNumber::new_or_panic(5), &state_update)
+                .unwrap();
+
+            // Before commit: nothing is visible via a direct RocksDB read.
+            let rocksdb = tx.rocksdb_for_test();
+            let state_updates_cf = rocksdb.get_column(&STATE_UPDATES_COLUMN);
+            let nonce_cf = rocksdb.get_column(&NONCE_UPDATES_COLUMN);
+            let storage_cf = rocksdb.get_column(&STORAGE_UPDATES_COLUMN);
+            assert!(
+                rocksdb
+                    .rocksdb
+                    .get_pinned_cf(&state_updates_cf, 5u64.to_be_bytes())
+                    .unwrap()
+                    .is_none(),
+                "state update visible before commit"
+            );
+
+            tx.commit().unwrap();
+
+            // After commit: all three column families now hold the data.
+            assert!(
+                rocksdb
+                    .rocksdb
+                    .get_pinned_cf(&state_updates_cf, 5u64.to_be_bytes())
+                    .unwrap()
+                    .is_some(),
+                "state update missing after commit"
+            );
+            assert!(
+                rocksdb
+                    .rocksdb
+                    .get_pinned_cf(
+                        &nonce_cf,
+                        nonce_update_key(BlockNumber::new_or_panic(5), &contract)
+                    )
+                    .unwrap()
+                    .is_some(),
+                "nonce missing after commit"
+            );
+            assert!(
+                rocksdb
+                    .rocksdb
+                    .get_pinned_cf(
+                        &storage_cf,
+                        storage_update_key(BlockNumber::new_or_panic(5), &contract, &storage_key)
+                    )
+                    .unwrap()
+                    .is_some(),
+                "storage missing after commit"
+            );
+        }
+
+        #[test]
+        fn purge_state_update_writes_go_through_batch() {
+            use crate::connection::{
+                NONCE_UPDATES_COLUMN,
+                STATE_UPDATES_COLUMN,
+                STORAGE_UPDATES_COLUMN,
+            };
+
+            // Use a file-based storage to get an isolated RocksDB instance, since
+            // in_memory() shares a single RocksDB path across sequential test runs in
+            // the same process.
+            let tmpdir = tempfile::tempdir().unwrap();
+            let storage = crate::StorageBuilder::file(tmpdir.path().join("db.sqlite"))
+                .migrate()
+                .unwrap()
+                .create_pool(std::num::NonZeroU32::new(1).unwrap())
+                .unwrap();
+            let mut conn = storage.connection().unwrap();
+
+            // Seed: insert state update and commit so the data is in RocksDB.
+            let header = pathfinder_common::BlockHeader::builder()
+                .number(BlockNumber::new_or_panic(6))
+                .finalize_with_hash(block_hash!("0xb"));
+            let contract = contract_address!("0x3");
+            let storage_key = storage_address!("0x4");
+            let state_update = pathfinder_common::StateUpdate::default()
+                .with_contract_nonce(contract, contract_nonce!("0x2"))
+                .with_storage_update(contract, storage_key, storage_value!("0x10"));
+            {
+                let tx = conn.transaction().unwrap();
+                tx.insert_block_header(&header).unwrap();
+                tx.insert_state_update(BlockNumber::new_or_panic(6), &state_update)
+                    .unwrap();
+                tx.commit().unwrap();
+            }
+
+            // Now purge in a new transaction. Pre-commit, the RocksDB rows must still
+            // be visible; post-commit, they must be gone.
+            let tx = conn.transaction().unwrap();
+            let rocksdb = tx.rocksdb_for_test();
+            let state_cf = rocksdb.get_column(&STATE_UPDATES_COLUMN);
+            let nonce_cf = rocksdb.get_column(&NONCE_UPDATES_COLUMN);
+            let storage_cf = rocksdb.get_column(&STORAGE_UPDATES_COLUMN);
+
+            assert!(rocksdb
+                .rocksdb
+                .get_pinned_cf(&state_cf, 6u64.to_be_bytes())
+                .unwrap()
+                .is_some());
+            tx.purge_state_update_data(BlockNumber::new_or_panic(6))
+                .unwrap();
+            // Pre-commit: deletes are still buffered in the batch.
+            assert!(
+                rocksdb
+                    .rocksdb
+                    .get_pinned_cf(&state_cf, 6u64.to_be_bytes())
+                    .unwrap()
+                    .is_some(),
+                "purge applied before commit"
+            );
+
+            tx.commit().unwrap();
+
+            assert!(
+                rocksdb
+                    .rocksdb
+                    .get_pinned_cf(&state_cf, 6u64.to_be_bytes())
+                    .unwrap()
+                    .is_none(),
+                "state update still present after purge+commit"
+            );
+            assert!(
+                rocksdb
+                    .rocksdb
+                    .get_pinned_cf(
+                        &nonce_cf,
+                        nonce_update_key(BlockNumber::new_or_panic(6), &contract)
+                    )
+                    .unwrap()
+                    .is_none(),
+                "nonce still present after purge+commit"
+            );
+            assert!(
+                rocksdb
+                    .rocksdb
+                    .get_pinned_cf(
+                        &storage_cf,
+                        storage_update_key(BlockNumber::new_or_panic(6), &contract, &storage_key)
+                    )
+                    .unwrap()
+                    .is_none(),
+                "storage still present after purge+commit"
+            );
         }
     }
 

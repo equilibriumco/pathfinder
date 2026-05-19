@@ -81,9 +81,12 @@ struct Inner {
     running_event_filter: Arc<Mutex<RunningEventFilter>>,
     trie_prune_mode: TriePruneMode,
     blockchain_history_mode: BlockchainHistoryMode,
+    /// Keeps the RocksDB tempdir alive for in-memory databases.
+    /// `None` for file-based databases (RocksDB lives next to the SQLite file).
+    _rocksdb_tempdir: Option<Arc<tempfile::TempDir>>,
 }
 
-struct RocksDBInner {
+pub(crate) struct RocksDBInner {
     rocksdb: RocksDB,
     options: rust_rocksdb::Options,
     trie_class_next_index: std::sync::atomic::AtomicU64,
@@ -143,6 +146,8 @@ pub struct StorageManager {
     running_event_filter: Arc<Mutex<RunningEventFilter>>,
     trie_prune_mode: TriePruneMode,
     blockchain_history_mode: BlockchainHistoryMode,
+    /// Keeps the RocksDB tempdir alive for in-memory databases.
+    rocksdb_tempdir: Option<Arc<tempfile::TempDir>>,
 }
 
 pub struct ReadOnlyStorageManager(StorageManager);
@@ -179,6 +184,7 @@ impl StorageManager {
             running_event_filter: self.running_event_filter.clone(),
             trie_prune_mode: self.trie_prune_mode,
             blockchain_history_mode: self.blockchain_history_mode,
+            _rocksdb_tempdir: self.rocksdb_tempdir.clone(),
         }))
     }
 
@@ -390,13 +396,19 @@ impl StorageBuilder {
     /// and passed to the various components which require access to the
     /// database.
     pub fn migrate(self) -> anyhow::Result<StorageManager> {
-        let rocksdb_path = if self.database_path.starts_with("file:memdb") {
-            // in-memory database
-            // FIXME: make sure we clean this up after use
-            let tmpdir = tempfile::Builder::new().disable_cleanup(true).tempdir()?;
-            tmpdir.path().to_path_buf()
+        let (rocksdb_path, rocksdb_tempdir) = if self
+            .database_path
+            .to_str()
+            .is_some_and(|s| s.starts_with("file:memdb"))
+        {
+            // in-memory SQLite database — RocksDB needs a real filesystem path,
+            // so we create a temporary directory and keep the handle alive.
+            let tmpdir =
+                tempfile::tempdir().context("Creating RocksDB tempdir for in-memory database")?;
+            let path = tmpdir.path().to_path_buf();
+            (path, Some(Arc::new(tmpdir)))
         } else {
-            self.database_path.with_extension("rocksdb")
+            (self.database_path.with_extension("rocksdb"), None)
         };
         let rocksdb = Arc::new(Self::open_rocksdb(&rocksdb_path)?);
 
@@ -425,6 +437,9 @@ impl StorageBuilder {
             .context("Setting up database connection")?;
 
         migrate_database(&mut connection, &rocksdb).context("Migrate database")?;
+
+        reconcile_rocksdb_with_sqlite(&mut connection, &rocksdb)
+            .context("Reconciling RocksDB with SQLite after migration")?;
 
         // Set the journal mode to the desired value.
         setup_journal_mode(&mut connection, self.journal_mode).context("Setting journal mode")?;
@@ -463,6 +478,7 @@ impl StorageBuilder {
             running_event_filter: Arc::new(Mutex::new(running_event_filter)),
             trie_prune_mode,
             blockchain_history_mode,
+            rocksdb_tempdir,
         })
     }
 
@@ -523,13 +539,16 @@ impl StorageBuilder {
             .map_err(|(_connection, error)| error)
             .context("Closing DB after loading running event filter")?;
 
-        let rocksdb_path = if database_path.starts_with("file:memdb") {
-            // in-memory database
-            // FIXME: make sure we clean this up after use
-            let tmpdir = tempfile::Builder::new().disable_cleanup(true).tempdir()?;
-            tmpdir.path().to_path_buf()
+        let (rocksdb_path, rocksdb_tempdir) = if database_path
+            .to_str()
+            .is_some_and(|s| s.starts_with("file:memdb"))
+        {
+            let tmpdir =
+                tempfile::tempdir().context("Creating RocksDB tempdir for in-memory database")?;
+            let path = tmpdir.path().to_path_buf();
+            (path, Some(Arc::new(tmpdir)))
         } else {
-            database_path.with_extension("rocksdb")
+            (database_path.with_extension("rocksdb"), None)
         };
         let rocksdb = Arc::new(Self::open_rocksdb(&rocksdb_path)?);
 
@@ -541,10 +560,11 @@ impl StorageBuilder {
             running_event_filter: Arc::new(Mutex::new(running_event_filter)),
             trie_prune_mode,
             blockchain_history_mode,
+            rocksdb_tempdir,
         }))
     }
 
-    fn open_rocksdb(path: &Path) -> anyhow::Result<RocksDBInner> {
+    pub(crate) fn open_rocksdb(path: &Path) -> anyhow::Result<RocksDBInner> {
         let available_parallelism = std::thread::available_parallelism()
             .map(|e| e.get() as i32 / 2)
             .unwrap_or(1);
@@ -983,6 +1003,165 @@ fn migrate_database(
     Ok(())
 }
 
+/// Deletes RocksDB rows for any block number that is ahead of the highest
+/// SQLite block header. This handles the crash window between `Transaction::
+/// commit`'s RocksDB write and its SQLite commit.
+pub(crate) fn reconcile_rocksdb_with_sqlite(
+    connection: &mut rusqlite::Connection,
+    rocksdb: &RocksDBInner,
+) -> anyhow::Result<()> {
+    use crate::connection::state_update::{nonce_update_key, storage_update_key};
+    use crate::connection::{
+        EVENTS_COLUMN,
+        NONCE_UPDATES_COLUMN,
+        STATE_UPDATES_COLUMN,
+        STORAGE_UPDATES_COLUMN,
+        TRANSACTIONS_AND_RECEIPTS_COLUMN,
+        TRANSACTION_HASHES_COLUMN,
+    };
+
+    // 1. Highest SQLite block.
+    let sqlite_highest: Option<u64> = connection
+        .query_row("SELECT MAX(number) FROM block_headers", [], |row| {
+            row.get::<_, Option<u64>>(0)
+        })
+        .context("Querying highest SQLite block")?;
+
+    // 2. Highest RocksDB block in STATE_UPDATES_COLUMN.
+    let state_updates_cf = rocksdb.get_column(&STATE_UPDATES_COLUMN);
+    let rocksdb_highest = {
+        let mut read_opts = rust_rocksdb::ReadOptions::default();
+        read_opts.set_total_order_seek(true);
+        let mut iter = rocksdb
+            .rocksdb
+            .raw_iterator_cf_opt(&state_updates_cf, read_opts);
+        iter.seek_to_last();
+        if iter.valid() {
+            let key = iter.key().context("RocksDB iterator key missing")?;
+            let bytes: [u8; 8] = key
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("Invalid STATE_UPDATES_COLUMN key length"))?;
+            Some(u64::from_be_bytes(bytes))
+        } else {
+            None
+        }
+    };
+
+    let Some(rocks_top) = rocksdb_highest else {
+        return Ok(());
+    };
+
+    let purge_from = match sqlite_highest {
+        Some(sqlite_top) if rocks_top <= sqlite_top => return Ok(()),
+        Some(sqlite_top) => sqlite_top + 1,
+        None => 0,
+    };
+
+    tracing::warn!(
+        ?sqlite_highest,
+        rocks_top,
+        "RocksDB is ahead of SQLite -- purging orphaned blocks"
+    );
+
+    // 3. Build a delete batch covering every orphaned block.
+    let mut batch = crate::RocksDBBatch::default();
+    let txs_cf = rocksdb.get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
+    let events_cf = rocksdb.get_column(&EVENTS_COLUMN);
+    let hashes_cf = rocksdb.get_column(&TRANSACTION_HASHES_COLUMN);
+    let nonce_cf = rocksdb.get_column(&NONCE_UPDATES_COLUMN);
+    let storage_cf = rocksdb.get_column(&STORAGE_UPDATES_COLUMN);
+
+    for block_number in purge_from..=rocks_top {
+        let key = block_number.to_be_bytes();
+
+        // Tx hashes: try to read the transactions blob to learn which hashes
+        // to drop. If decompression or decoding fails (e.g. partial/corrupt
+        // blob from a crash), log a warning and fall back to deleting only the
+        // block-keyed CFs.
+        if let Some(blob) = rocksdb
+            .rocksdb
+            .get_pinned_cf(&txs_cf, key)
+            .context("Reading orphaned transactions blob")?
+        {
+            if let Err(e) = (|| -> anyhow::Result<()> {
+                let decompressed =
+                    crate::connection::transaction::compression::decompress_transactions(&blob)
+                        .context("Decompressing orphaned transactions blob")?;
+                let (txs, _): (
+                    crate::connection::transaction::dto::TransactionsWithReceiptsForBlock,
+                    _,
+                ) = bincode::serde::decode_from_slice(&decompressed, bincode::config::standard())
+                    .context("Decoding orphaned transactions blob")?;
+                for tx in txs.transactions_with_receipts() {
+                    let common_tx: pathfinder_common::transaction::Transaction =
+                        tx.transaction.into();
+                    batch.delete_cf(&hashes_cf, common_tx.hash.0.as_be_bytes());
+                }
+                Ok(())
+            })() {
+                tracing::warn!(
+                    block_number,
+                    error = %e,
+                    "Failed to decode orphaned transactions blob for targeted hash cleanup; \
+                     falling back to block-keyed CF deletion only"
+                );
+            }
+        }
+
+        // State / nonce / storage: try to drive deletes from the STATE_UPDATES blob.
+        if let Some(blob) = rocksdb
+            .rocksdb
+            .get_pinned_cf(&state_updates_cf, key)
+            .context("Reading orphaned state update blob")?
+        {
+            if let Err(e) = (|| -> anyhow::Result<()> {
+                let (data, _): (crate::connection::state_update::dto::StateUpdateData, _) =
+                    bincode::serde::decode_from_slice(&blob, bincode::config::standard())
+                        .context("Decoding orphaned state update blob")?;
+                let block_number = pathfinder_common::BlockNumber::new_or_panic(block_number);
+                let data = pathfinder_common::state_update::StateUpdateData::from(data);
+                for (address, update) in &data.contract_updates {
+                    if update.nonce.is_some() {
+                        batch.delete_cf(&nonce_cf, nonce_update_key(block_number, address));
+                    }
+                    for (storage_key, _) in &update.storage {
+                        batch.delete_cf(
+                            &storage_cf,
+                            storage_update_key(block_number, address, storage_key),
+                        );
+                    }
+                }
+                for (address, update) in &data.system_contract_updates {
+                    for (storage_key, _) in &update.storage {
+                        batch.delete_cf(
+                            &storage_cf,
+                            storage_update_key(block_number, address, storage_key),
+                        );
+                    }
+                }
+                Ok(())
+            })() {
+                tracing::warn!(
+                    block_number,
+                    error = %e,
+                    "Failed to decode orphaned state update blob for targeted nonce/storage \
+                     cleanup; falling back to block-keyed CF deletion only"
+                );
+            }
+        }
+
+        batch.delete_cf(&state_updates_cf, key);
+        batch.delete_cf(&txs_cf, key);
+        batch.delete_cf(&events_cf, key);
+    }
+
+    rocksdb
+        .rocksdb
+        .write(&batch)
+        .context("Writing orphan-block delete batch to RocksDB")?;
+    Ok(())
+}
+
 /// Returns the current schema version of the existing database,
 /// or `0` if database does not yet exist.
 fn schema_version(connection: &rusqlite::Connection) -> anyhow::Result<usize> {
@@ -1232,6 +1411,174 @@ mod tests {
         for e in events_before {
             assert!(events_after.contains(&e));
         }
+    }
+
+    #[test]
+    fn reconcile_rocksdb_purges_orphaned_blocks() {
+        use pathfinder_common::macro_prelude::*;
+        use pathfinder_common::{BlockHeader, BlockNumber};
+
+        use crate::connection::{
+            EVENTS_COLUMN,
+            STATE_UPDATES_COLUMN,
+            TRANSACTIONS_AND_RECEIPTS_COLUMN,
+            TRANSACTION_HASHES_COLUMN,
+        };
+
+        // Construct a raw SQLite connection and a RocksDBInner directly,
+        // following the same pattern as the `full_migration` test.
+        let rocksdb_dir = tempfile::tempdir().unwrap();
+        let rocksdb = StorageBuilder::open_rocksdb(rocksdb_dir.path()).unwrap();
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        setup_connection(&mut conn, JournalMode::Rollback).unwrap();
+        migrate_database(&mut conn, &rocksdb).unwrap();
+
+        // Seed SQLite with block 5 header.
+        let header5 = BlockHeader::builder()
+            .number(BlockNumber::new_or_panic(5))
+            .finalize_with_hash(block_hash!("0x5"));
+        {
+            let tx = conn.transaction().unwrap();
+            tx.execute(
+                "INSERT INTO block_headers (number, hash, parent_hash, timestamp, \
+                 eth_l1_gas_price, strk_l1_gas_price, eth_l1_data_gas_price, \
+                 strk_l1_data_gas_price, eth_l2_gas_price, strk_l2_gas_price, sequencer_address, \
+                 version, transaction_commitment, event_commitment, state_commitment, \
+                 transaction_count, event_count, l1_da_mode, receipt_commitment, \
+                 state_diff_commitment, state_diff_length) VALUES (5, ?, zeroblob(32), 0, \
+                 zeroblob(16), NULL, NULL, NULL, NULL, NULL, zeroblob(32), NULL, zeroblob(32), \
+                 zeroblob(32), zeroblob(32), 0, 0, 0, zeroblob(32), NULL, 0)",
+                [header5.hash.0.as_be_bytes().to_vec()],
+            )
+            .unwrap();
+            // Write block 5 state update to RocksDB so the reconciler sees it.
+            let state_cf = rocksdb.get_column(&STATE_UPDATES_COLUMN);
+            let mut batch = crate::RocksDBBatch::default();
+            batch.put_cf(&state_cf, 5u64.to_be_bytes(), b"dummy5");
+            rocksdb.rocksdb.write(&batch).unwrap();
+            tx.commit().unwrap();
+        }
+
+        // Write block 6 data directly to RocksDB (no SQLite header), simulating
+        // the post-RocksDB / pre-SQLite-commit crash state.
+        {
+            let mut batch = crate::RocksDBBatch::default();
+            let key = 6u64.to_be_bytes();
+            batch.put_cf(&rocksdb.get_column(&STATE_UPDATES_COLUMN), key, b"dummy");
+            batch.put_cf(
+                &rocksdb.get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN),
+                key,
+                b"dummy",
+            );
+            batch.put_cf(&rocksdb.get_column(&EVENTS_COLUMN), key, b"dummy");
+            let tx_hash = transaction_hash!("0xabc");
+            let mut value = [0u8; 10];
+            value[..8].copy_from_slice(&key);
+            value[8..].copy_from_slice(&0u16.to_be_bytes());
+            batch.put_cf(
+                &rocksdb.get_column(&TRANSACTION_HASHES_COLUMN),
+                tx_hash.0.as_be_bytes(),
+                value,
+            );
+            rocksdb.rocksdb.write(&batch).unwrap();
+        }
+
+        crate::reconcile_rocksdb_with_sqlite(&mut conn, &rocksdb).unwrap();
+
+        // Block 6 must be gone from every CF the reconciler covers; block 5 stays.
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(
+                &rocksdb.get_column(&STATE_UPDATES_COLUMN),
+                6u64.to_be_bytes()
+            )
+            .unwrap()
+            .is_none());
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(
+                &rocksdb.get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN),
+                6u64.to_be_bytes()
+            )
+            .unwrap()
+            .is_none());
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(&rocksdb.get_column(&EVENTS_COLUMN), 6u64.to_be_bytes())
+            .unwrap()
+            .is_none());
+        // Block 5 state update must still be present.
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(
+                &rocksdb.get_column(&STATE_UPDATES_COLUMN),
+                5u64.to_be_bytes()
+            )
+            .unwrap()
+            .is_some());
+
+        // Tx hash entry survives because the transactions blob (b"dummy") can't
+        // be decoded, so the reconciler falls back to block-keyed CF deletion
+        // only. This is a known limitation: orphaned tx_hash entries from
+        // corrupt crash blobs are harmless since read paths validate against
+        // SQLite.
+        let tx_hash = transaction_hash!("0xabc");
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(
+                &rocksdb.get_column(&TRANSACTION_HASHES_COLUMN),
+                tx_hash.0.as_be_bytes()
+            )
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn in_memory_storage_cleans_up_rocksdb_tempdir() {
+        let dirs_before = rocksdb_tempdirs_in_tmp();
+        let rocksdb_dir;
+        {
+            let _storage = crate::StorageBuilder::in_memory().unwrap();
+            let _conn = _storage.connection().unwrap();
+            // Find the new tmpdir that appeared after creating the storage.
+            let dirs_during = rocksdb_tempdirs_in_tmp();
+            let new_dirs: Vec<_> = dirs_during
+                .iter()
+                .filter(|d| !dirs_before.contains(*d))
+                .filter(|d| d.join("IDENTITY").exists())
+                .cloned()
+                .collect();
+            assert!(
+                !new_dirs.is_empty(),
+                "expected at least one new RocksDB tempdir"
+            );
+            rocksdb_dir = new_dirs.into_iter().next().unwrap();
+            assert!(
+                rocksdb_dir.exists(),
+                "RocksDB tempdir should exist while storage is alive"
+            );
+        }
+        assert!(
+            !rocksdb_dir.exists(),
+            "in-memory storage leaked RocksDB tempdir: {}",
+            rocksdb_dir.display()
+        );
+    }
+
+    fn rocksdb_tempdirs_in_tmp() -> Vec<std::path::PathBuf> {
+        let tmp = std::env::temp_dir();
+        let Ok(entries) = std::fs::read_dir(&tmp) else {
+            return vec![];
+        };
+        entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with(".tmp") && e.file_type().map(|t| t.is_dir()).unwrap_or(false)
+            })
+            .map(|e| e.path())
+            .collect()
     }
 
     #[rstest]

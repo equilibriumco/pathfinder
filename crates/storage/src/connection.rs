@@ -124,6 +124,15 @@ pub struct Transaction<'inner> {
     pub blockchain_history_mode: BlockchainHistoryMode,
 }
 
+#[cfg(test)]
+impl<'inner> Transaction<'inner> {
+    /// Test-only: clone the shared RocksDB handle so a test can read state
+    /// outside the pending batch.
+    pub(crate) fn rocksdb_for_test(&self) -> Arc<crate::RocksDBInner> {
+        Arc::clone(&self.rocksdb)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum TriePruneMode {
     /// Keep all merkle trie history.

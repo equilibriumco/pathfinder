@@ -1,6 +1,11 @@
 use anyhow::Context;
 
-use crate::{NONCE_UPDATES_COLUMN, STORAGE_UPDATES_COLUMN, TRANSACTIONS_AND_RECEIPTS_COLUMN};
+use crate::{
+    NONCE_UPDATES_COLUMN,
+    STORAGE_UPDATES_COLUMN,
+    TRANSACTIONS_AND_RECEIPTS_COLUMN,
+    TRANSACTION_HASHES_COLUMN,
+};
 
 pub(crate) fn migrate(
     tx: &rusqlite::Transaction<'_>,
@@ -230,7 +235,7 @@ fn migrate_transaction_hashes(
         })
         .context("Querying transaction hashes")?;
 
-    let column = rocksdb.get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
+    let column = rocksdb.get_column(&TRANSACTION_HASHES_COLUMN);
     let mut batch = crate::RocksDBBatch::default();
 
     for (i, row) in rows.enumerate() {
@@ -305,4 +310,61 @@ fn migrate_events(
     tracing::info!("Events migration complete");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use pathfinder_common::macro_prelude::*;
+    use rusqlite::params;
+
+    use crate::connection::TRANSACTION_HASHES_COLUMN;
+
+    /// Verifies that `migrate_transaction_hashes` writes hashes to
+    /// `TRANSACTION_HASHES_COLUMN` (the column the runtime read path uses),
+    /// not `TRANSACTIONS_AND_RECEIPTS_COLUMN`.
+    #[test]
+    fn migrate_transaction_hashes_targets_transaction_hashes_column() {
+        let rocksdb_dir = tempfile::tempdir().unwrap();
+        let rocksdb = crate::StorageBuilder::open_rocksdb(rocksdb_dir.path()).unwrap();
+
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        // Bring SQLite to the pre-0079 state by applying base + all prior migrations.
+        let tx = conn.transaction().unwrap();
+        crate::schema::base_schema(&tx).unwrap();
+        tx.commit().unwrap();
+        let prior = &crate::schema::migrations()[..crate::schema::migrations().len() - 1];
+        for migration in prior {
+            let tx = conn.transaction().unwrap();
+            migration(&tx, &rocksdb).unwrap();
+            tx.commit().unwrap();
+        }
+
+        let hash = transaction_hash!("0xdeadbeef");
+        // Disable FK enforcement so we can insert a hash row without a
+        // matching block_headers row. We only care about the RocksDB write
+        // path, not SQLite integrity here.
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute(
+            "INSERT INTO transaction_hashes (hash, block_number, idx) VALUES (?, ?, ?)",
+            params![&hash.0.as_be_bytes().to_vec(), 7u64, 3i64],
+        )
+        .unwrap();
+
+        // Run the migration under test.
+        super::migrate_transaction_hashes(&tx, &rocksdb).unwrap();
+
+        // Hash must be readable from TRANSACTION_HASHES_COLUMN.
+        let column = rocksdb.get_column(&TRANSACTION_HASHES_COLUMN);
+        let value = rocksdb
+            .rocksdb
+            .get_pinned_cf(&column, hash.0.as_be_bytes())
+            .unwrap()
+            .expect("hash present in TRANSACTION_HASHES_COLUMN");
+        assert_eq!(value.len(), 10);
+        let block_number = u64::from_be_bytes(value[..8].try_into().unwrap());
+        let idx = u16::from_be_bytes(value[8..].try_into().unwrap());
+        assert_eq!(block_number, 7);
+        assert_eq!(idx, 3);
+    }
 }
