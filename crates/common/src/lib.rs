@@ -322,10 +322,6 @@ impl BlockNumber {
         self.0.checked_sub(rhs.0).map(Self)
     }
 
-    pub fn saturating_sub(&self, rhs: u64) -> Self {
-        Self(self.0.saturating_sub(rhs))
-    }
-
     /// Always safe because block numbers are non-negative and restricted to be
     /// at most i64::MAX.
     pub fn to_i64(&self) -> i64 {
