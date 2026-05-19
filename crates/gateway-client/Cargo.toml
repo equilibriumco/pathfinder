@@ -9,13 +9,13 @@ rust-version = { workspace = true }
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+backon = { workspace = true }
 bytes = { workspace = true }
 flate2 = { workspace = true }
 futures = { workspace = true }
 metrics = { workspace = true }
 mockall = { workspace = true }
 pathfinder-common = { path = "../common" }
-pathfinder-retry = { path = "../retry" }
 pathfinder-serde = { path = "../serde" }
 pathfinder-version = { path = "../version" }
 reqwest = { workspace = true }

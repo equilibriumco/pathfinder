@@ -52,7 +52,6 @@ pathfinder-ethereum = { path = "../ethereum" }
 pathfinder-executor = { path = "../executor" }
 pathfinder-gas-price = { path = "../gas-price" }
 pathfinder-merkle-tree = { path = "../merkle-tree" }
-pathfinder-retry = { path = "../retry" }
 pathfinder-rpc = { path = "../rpc" }
 pathfinder-serde = { path = "../serde" }
 pathfinder-storage = { path = "../storage" }

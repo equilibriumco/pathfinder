@@ -8535,7 +8535,6 @@ dependencies = [
  "pathfinder-executor",
  "pathfinder-gas-price",
  "pathfinder-merkle-tree",
- "pathfinder-retry",
  "pathfinder-rpc",
  "pathfinder-serde",
  "pathfinder-storage",
@@ -8802,14 +8801,6 @@ dependencies = [
  "rayon",
  "thiserror 2.0.18",
  "tracing",
-]
-
-[[package]]
-name = "pathfinder-retry"
-version = "0.22.3"
-dependencies = [
- "tokio",
- "tokio-retry",
 ]
 
 [[package]]
@@ -10990,6 +10981,7 @@ dependencies = [
  "anyhow",
  "assert_matches",
  "async-trait",
+ "backon",
  "base64 0.22.1",
  "bytes",
  "fake",
@@ -10999,7 +10991,6 @@ dependencies = [
  "mockall 0.14.0",
  "pathfinder-common",
  "pathfinder-crypto",
- "pathfinder-retry",
  "pathfinder-serde",
  "pathfinder-version",
  "pretty_assertions_sorted",
@@ -11561,17 +11552,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "tokio-retry"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40f644c762e9d396831ae2f8935c954b0d758c4532e924bead0f666d0c1c8640"
-dependencies = [
- "pin-project-lite",
- "rand 0.10.1",
- "tokio",
 ]
 
 [[package]]
