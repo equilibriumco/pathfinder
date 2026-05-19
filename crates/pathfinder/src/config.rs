@@ -10,7 +10,7 @@ use std::time::Duration;
 use clap::{ArgAction, CommandFactory, Parser};
 #[cfg(feature = "p2p")]
 use pathfinder_common::ContractAddress;
-use pathfinder_common::{AllowedOrigins, BlockNumber, StarknetVersion};
+use pathfinder_common::{AllowedOrigins, StarknetVersion};
 #[cfg(feature = "p2p")]
 use pathfinder_crypto::Felt;
 use pathfinder_executor::{VersionedConstants, VersionedConstantsMap};
@@ -641,7 +641,7 @@ pub enum RootRpcVersion {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BlockchainHistory {
-    Prune(BlockNumber),
+    Prune(u64),
     Archive,
 }
 
@@ -652,9 +652,12 @@ fn parse_blockchain_history(s: &str) -> Result<BlockchainHistory, String> {
             let value: u64 = s
                 .parse()
                 .map_err(|_| "Expected either `archive` or a number".to_string())?;
-            let value = BlockNumber::new(value)
-                .ok_or("Number of blocks to keep must not exceed i64::MAX".to_string())?;
-            Ok(BlockchainHistory::Prune(value))
+
+            if value <= i64::MAX as u64 {
+                Ok(BlockchainHistory::Prune(value))
+            } else {
+                Err("Number of blocks to keep must not exceed i64::MAX".to_string())
+            }
         }
     }
 }
@@ -674,7 +677,7 @@ impl From<BlockchainHistory> for pathfinder_storage::pruning::BlockchainHistoryM
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StateTries {
-    Pruned(BlockNumber),
+    Pruned(u64),
     Archive,
 }
 
@@ -685,9 +688,12 @@ fn parse_state_tries(s: &str) -> Result<StateTries, String> {
             let value: u64 = s
                 .parse()
                 .map_err(|_| "Expected either `archive` or a number".to_string())?;
-            let value = BlockNumber::new(value)
-                .ok_or("Number of blocks to keep must not exceed i64::MAX".to_string())?;
-            Ok(StateTries::Pruned(value))
+
+            if value <= i64::MAX as u64 {
+                Ok(StateTries::Pruned(value))
+            } else {
+                Err("Number of blocks to keep must not exceed i64::MAX".to_string())
+            }
         }
     }
 }

@@ -450,7 +450,7 @@ impl Transaction<'_> {
     fn prune_trie(
         &self,
         block_number: BlockNumber,
-        num_blocks_kept: BlockNumber,
+        num_blocks_kept: u64,
         table: &'static str,
     ) -> anyhow::Result<()> {
         if let Some(before_block) = block_number.checked_sub(num_blocks_kept) {
@@ -1270,7 +1270,7 @@ mod tests {
     #[test]
     fn class_trie_pruning() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: BlockNumber::new_or_panic(2),
+            num_blocks_kept: 2,
         })
         .unwrap()
         .connection()
@@ -1384,7 +1384,7 @@ mod tests {
     #[test]
     fn class_trie_pruning_change_config() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: BlockNumber::new_or_panic(100),
+            num_blocks_kept: 100,
         })
         .unwrap()
         .connection()
@@ -1492,9 +1492,7 @@ mod tests {
         assert!(tx.class_trie_node(TrieStorageIndex(1)).unwrap().is_some());
 
         // Simulate a configuration change.
-        tx.trie_prune_mode = TriePruneMode::Prune {
-            num_blocks_kept: BlockNumber::new_or_panic(2),
-        };
+        tx.trie_prune_mode = TriePruneMode::Prune { num_blocks_kept: 2 };
         tx.insert_block_header(&BlockHeader {
             number: BlockNumber::GENESIS + 4,
             ..Default::default()
@@ -1509,7 +1507,7 @@ mod tests {
     #[test]
     fn class_trie_pruning_keep_zero_blocks() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: BlockNumber::new_or_panic(0),
+            num_blocks_kept: 0,
         })
         .unwrap()
         .connection()
@@ -1627,7 +1625,7 @@ mod tests {
     #[test]
     fn class_trie_root_updates() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: BlockNumber::new_or_panic(0),
+            num_blocks_kept: 0,
         })
         .unwrap()
         .connection()
@@ -1660,7 +1658,7 @@ mod tests {
     #[test]
     fn class_root_insert_should_prune_old_roots() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: BlockNumber::new_or_panic(1),
+            num_blocks_kept: 1,
         })
         .unwrap()
         .connection()
@@ -1691,7 +1689,7 @@ mod tests {
     #[test]
     fn class_root_insert_should_prune_old_roots_in_no_history_mode() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: BlockNumber::new_or_panic(0),
+            num_blocks_kept: 0,
         })
         .unwrap()
         .connection()
@@ -1713,7 +1711,7 @@ mod tests {
     #[test]
     fn contract_state_hash_insert_should_prune_old_state_hashes() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: BlockNumber::new_or_panic(1),
+            num_blocks_kept: 1,
         })
         .unwrap()
         .connection()
@@ -1757,7 +1755,7 @@ mod tests {
     #[test]
     fn contract_state_hash_insert_should_prune_all_old_state_in_no_history_mode() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: BlockNumber::new_or_panic(0),
+            num_blocks_kept: 0,
         })
         .unwrap()
         .connection()
@@ -1789,7 +1787,7 @@ mod tests {
     #[test]
     fn storage_root_insert_should_prune_old_roots() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: BlockNumber::new_or_panic(1),
+            num_blocks_kept: 1,
         })
         .unwrap()
         .connection()
@@ -1822,7 +1820,7 @@ mod tests {
     #[test]
     fn storage_root_insert_should_prune_all_old_roots_in_no_history_mode() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: BlockNumber::new_or_panic(0),
+            num_blocks_kept: 0,
         })
         .unwrap()
         .connection()
@@ -1846,7 +1844,7 @@ mod tests {
     #[test]
     fn contract_root_insert_should_prune_old_state_hashes() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: BlockNumber::new_or_panic(1),
+            num_blocks_kept: 1,
         })
         .unwrap()
         .connection()
@@ -1894,7 +1892,7 @@ mod tests {
     #[test]
     fn contract_root_insert_should_prune_all_old_roots_in_no_history_mode() {
         let mut db = crate::StorageBuilder::in_memory_with_trie_pruning(TriePruneMode::Prune {
-            num_blocks_kept: BlockNumber::new_or_panic(0),
+            num_blocks_kept: 0,
         })
         .unwrap()
         .connection()

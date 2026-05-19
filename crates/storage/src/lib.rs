@@ -268,7 +268,7 @@ impl StorageBuilder {
         if let BlockchainHistoryMode::Prune { num_blocks_kept } = blockchain_history_mode {
             conn.execute(
                 "INSERT INTO storage_options (option, value) VALUES ('prune_blockchain', ?)",
-                params![&num_blocks_kept],
+                params![&num_blocks_kept.try_into_sql_int()?],
             )?;
         }
 
@@ -415,7 +415,7 @@ impl StorageBuilder {
             .query_row(
                 "SELECT value FROM storage_options WHERE option = 'prune_blockchain'",
                 [],
-                |row| row.get_block_number(0),
+                |row| row.get_u64(0),
             )
             .optional()?;
 
@@ -438,7 +438,7 @@ impl StorageBuilder {
 
         let trie_prune_mode = if prune_flag_is_set {
             TriePruneMode::Prune {
-                num_blocks_kept: BlockNumber::new(20).expect("No overflow"),
+                num_blocks_kept: 20,
             }
         } else {
             TriePruneMode::Archive
@@ -484,7 +484,7 @@ impl StorageBuilder {
         let trie_prune_mode = self.trie_prune_mode.unwrap_or({
             if is_new_database || prune_flag_is_set {
                 TriePruneMode::Prune {
-                    num_blocks_kept: BlockNumber::new(20).expect("No overflow"),
+                    num_blocks_kept: 20,
                 }
             } else {
                 TriePruneMode::Archive
@@ -541,7 +541,7 @@ impl StorageBuilder {
             .query_row(
                 "SELECT value FROM storage_options WHERE option = 'prune_blockchain'",
                 [],
-                |row| row.get_block_number(0),
+                |row| row.get_u64(0),
             )
             .optional()?;
 
@@ -567,7 +567,7 @@ impl StorageBuilder {
 
 fn validate_mode_and_update_db(
     blockchain_history_mode: BlockchainHistoryMode,
-    init_num_blocks_kept: Option<BlockNumber>,
+    init_num_blocks_kept: Option<u64>,
     is_new_database: bool,
     connection: &mut rusqlite::Connection,
 ) -> anyhow::Result<BlockchainHistoryMode> {
@@ -601,7 +601,7 @@ fn validate_mode_and_update_db(
                 VALUES ('prune_blockchain', ?)
                 ON CONFLICT(option) DO UPDATE SET value = excluded.value
                 ",
-                params![&num_blocks_kept],
+                params![&num_blocks_kept.try_into_sql_int()?],
             )?;
 
             if is_new_database {
@@ -613,7 +613,7 @@ fn validate_mode_and_update_db(
             // prune the now excess blocks. If the size got increased, we don't need to do
             // anything here since the gap will be filled as new blocks are synced.
             let num_blocks_to_remove = match init_num_blocks_kept.checked_sub(num_blocks_kept) {
-                Some(block_diff) if block_diff > BlockNumber::ZERO => block_diff,
+                Some(block_diff) if block_diff > 0 => block_diff,
                 _ => return Ok(blockchain_history_mode),
             };
 
@@ -633,7 +633,7 @@ fn validate_mode_and_update_db(
             let tx = connection
                 .transaction()
                 .context("Creating database transaction")?;
-            for block in oldest.get()..(oldest.get() + num_blocks_to_remove.get()) {
+            for block in oldest.get()..(oldest.get() + num_blocks_to_remove) {
                 let block = BlockNumber::new_or_panic(block);
                 pruning::prune_block(&tx, block).context(format!("Pruning block {block}"))?;
             }
@@ -951,7 +951,7 @@ mod tests {
         assert_eq!(
             StorageBuilder::file(db_path)
                 .trie_prune_mode(Some(TriePruneMode::Prune {
-                    num_blocks_kept: BlockNumber::new_or_panic(10),
+                    num_blocks_kept: 10,
                 }))
                 .migrate()
                 .unwrap_err()
