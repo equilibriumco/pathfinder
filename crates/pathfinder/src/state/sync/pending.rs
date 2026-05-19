@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use anyhow::Context;
 use pathfinder_common::{BlockHash, BlockNumber};
 use starknet_gateway_client::{BlockId, GatewayApi};
 use starknet_gateway_types::reply::{PreConfirmedBlock, PreConfirmedPollResponse};
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify};
 use tokio::time::Instant;
 
 use crate::state::sync::SyncEvent;
@@ -113,19 +115,56 @@ impl State {
     }
 }
 
+/// The polling loop's idle/wake policy.
+///
+/// `cache_read` must be notified each time the cached pre-confirmed data is
+/// read. As long as notifications keep arriving within `timeout`, the loop
+/// polls continuously. If `timeout` elapses with no notification, the loop
+/// suspends itself; the next notification wakes it back up.
+pub(super) struct InactivityTimer {
+    pub timeout: std::time::Duration,
+    cache_read: Arc<Notify>,
+}
+
+impl InactivityTimer {
+    pub(super) fn new(timeout: std::time::Duration) -> Self {
+        Self {
+            timeout,
+            cache_read: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Handle for signalling that the pre-confirmed cache was read.
+    pub(super) fn cache_read(&self) -> Arc<Notify> {
+        self.cache_read.clone()
+    }
+}
+
 /// Emits new pending data events while the current block is close to the latest
 /// block.
-#[allow(clippy::too_many_arguments)]
-pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
+///
+/// The loop suspends polling after `timer.timeout` elapses without a
+/// cache-read signal, and resumes when the next signal fires.
+pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
     tx_event: tokio::sync::mpsc::Sender<SyncEvent>,
     sequencer: S,
     poll_interval: std::time::Duration,
+    timer: InactivityTimer,
     latest: watch::Receiver<(BlockNumber, BlockHash)>,
     current: watch::Receiver<(BlockNumber, BlockHash)>,
 ) {
     let mut state = State::default();
+    let mut last_active = Instant::now();
 
     loop {
+        // Idle transition: if the configured window has elapsed with no
+        // cache-read signal, suspend polling until the next signal.
+        if last_active.elapsed() >= timer.timeout {
+            tracing::debug!("Pre-confirmed polling idle; waiting for cache reads");
+            timer.cache_read.notified().await;
+            last_active = Instant::now();
+        }
+
         let t_fetch = Instant::now();
 
         let (latest_number, latest_hash) = *latest.borrow();
@@ -136,7 +175,9 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                 latest = %latest_number.get(), current = %current_number,
                 "Not in sync yet; skipping pre-confirmed block download"
             );
-            tokio::time::sleep_until(t_fetch + poll_interval).await;
+            if wait_for_next_poll(t_fetch + poll_interval, &timer.cache_read).await {
+                last_active = Instant::now();
+            }
             continue;
         }
 
@@ -145,7 +186,9 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             Ok(r) => r.map(Box::new),
             Err(e) => {
                 tracing::debug!(%e, "Failed to fetch pre-latest block");
-                tokio::time::sleep_until(t_fetch + poll_interval).await;
+                if wait_for_next_poll(t_fetch + poll_interval, &timer.cache_read).await {
+                    last_active = Instant::now();
+                }
                 continue;
             }
         };
@@ -161,7 +204,9 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             Ok(r) => r,
             Err(err) => {
                 tracing::debug!(%err, "Failed to fetch pre-confirmed block");
-                tokio::time::sleep_until(t_fetch + poll_interval).await;
+                if wait_for_next_poll(t_fetch + poll_interval, &timer.cache_read).await {
+                    last_active = Instant::now();
+                }
                 continue;
             }
         };
@@ -181,7 +226,9 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                     current = %state.block_number,
                     "Pre-confirmed resolved to a lower height than tracked; skipping poll"
                 );
-                tokio::time::sleep_until(t_fetch + poll_interval).await;
+                if wait_for_next_poll(t_fetch + poll_interval, &timer.cache_read).await {
+                    last_active = Instant::now();
+                }
                 continue;
             }
 
@@ -218,7 +265,19 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             tracing::trace!("No change in pre-confirmed block data");
         }
 
-        tokio::time::sleep_until(t_fetch + poll_interval).await;
+        if wait_for_next_poll(t_fetch + poll_interval, &timer.cache_read).await {
+            last_active = Instant::now();
+        }
+    }
+}
+
+/// Sleeps until `deadline`, returning early if `cache_read` is notified.
+/// Returns `true` when woken by a notification, `false` when the deadline
+/// elapsed.
+async fn wait_for_next_poll(deadline: Instant, cache_read: &Notify) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep_until(deadline) => false,
+        _ = cache_read.notified() => true,
     }
 }
 
@@ -327,7 +386,7 @@ mod tests {
     };
     use tokio::sync::watch;
 
-    use super::poll_pre_confirmed;
+    use super::{InactivityTimer, poll_pre_confirmed};
     use crate::state::sync::SyncEvent;
 
     const PARENT_HASH: BlockHash = block_hash!("0x1234");
@@ -513,7 +572,15 @@ mod tests {
 
         let sequencer = Arc::new(sequencer);
         let _jh = tokio::spawn(async move {
-            poll_pre_confirmed(tx, sequencer, std::time::Duration::ZERO, latest, current).await
+            poll_pre_confirmed(
+                tx,
+                sequencer,
+                std::time::Duration::ZERO,
+                InactivityTimer::new(std::time::Duration::from_secs(60)),
+                latest,
+                current,
+            )
+            .await
         });
 
         let result = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
@@ -607,6 +674,7 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
+                InactivityTimer::new(std::time::Duration::from_secs(60)),
                 rx_latest,
                 rx_current,
             )
@@ -762,6 +830,7 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
+                InactivityTimer::new(std::time::Duration::from_secs(60)),
                 rx_latest,
                 rx_current,
             )
@@ -1056,6 +1125,7 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
+                InactivityTimer::new(std::time::Duration::from_secs(60)),
                 rx_latest,
                 rx_current,
             )
@@ -1172,8 +1242,15 @@ mod tests {
         let (_, current) = watch::channel((our_latest_number, our_latest_hash));
         let sequencer = Arc::new(sequencer);
         let _jh = tokio::spawn(async move {
-            super::poll_pre_confirmed(tx, sequencer, std::time::Duration::ZERO, latest, current)
-                .await
+            super::poll_pre_confirmed(
+                tx,
+                sequencer,
+                std::time::Duration::ZERO,
+                InactivityTimer::new(std::time::Duration::from_secs(60)),
+                latest,
+                current,
+            )
+            .await
         });
 
         // Assertions

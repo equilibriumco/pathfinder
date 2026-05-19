@@ -291,6 +291,7 @@ where
         event_sender.clone(),
         sequencer.clone(),
         head_poll_interval,
+        pending::InactivityTimer::new(Duration::from_secs(60)),
         rx_latest.clone(),
         rx_current.clone(),
     ));
@@ -304,6 +305,7 @@ where
                     event_sender.clone(),
                     sequencer.clone(),
                     Duration::from_secs(2),
+                    pending::InactivityTimer::new(Duration::from_secs(60)),
                     rx_latest.clone(),
                     rx_current.clone(),
                 ));
