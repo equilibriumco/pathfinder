@@ -135,6 +135,7 @@ impl InactivityTimer {
     }
 
     /// Handle for signalling that the pre-confirmed cache was read.
+    #[allow(dead_code)]
     pub(super) fn cache_read(&self) -> Arc<Notify> {
         self.cache_read.clone()
     }
@@ -1294,5 +1295,69 @@ mod tests {
                     && block.transactions.len() == PRE_CONFIRMED_BLOCK.transactions.len()
                     && pre_latest_data.is_none()
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_timeout_pauses_polling_until_cache_read() {
+        // The polling loop runs Active while `cache_read` keeps firing. Once
+        // `IDLE_TIMEOUT` elapses with no firings, it suspends.
+        // Notifying `cache_read` wakes it back up.
+
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+        const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+
+        // Set up: distinct identifier per call so every poll produces an emission.
+        let counter = Arc::new(std::sync::Mutex::new(0u64));
+        let mut sequencer = MockGatewayApi::new();
+        sequencer
+            .expect_pending_block()
+            .returning(|| Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
+        sequencer
+            .expect_preconfirmed_block()
+            .returning(move |_, _, _| {
+                let mut c = counter.lock().unwrap();
+                *c += 1;
+                Ok(PreConfirmedPollResponse::Full {
+                    identifier: format!("id-{}", *c),
+                    block_number: BlockNumber::new_or_panic(3),
+                    block: PRE_CONFIRMED_BLOCK.clone(),
+                })
+            });
+
+        let latest_hash = PRE_LATEST_BLOCK.parent_hash;
+        let latest_block_number = BlockNumber::new_or_panic(1);
+        let (_, latest) = watch::channel((latest_block_number, latest_hash));
+        let (_, current) = watch::channel((latest_block_number, latest_hash));
+
+        let timer = super::InactivityTimer::new(IDLE_TIMEOUT);
+        let cache_read = timer.cache_read();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let sequencer = Arc::new(sequencer);
+        let _jh = tokio::spawn(async move {
+            super::poll_pre_confirmed(tx, sequencer, POLL_INTERVAL, timer, latest, current).await
+        });
+
+        // Each `recv` either returns the next emission, or, once the loop has
+        // suspended on `cache_read`, times out, ending the loop.
+        let mut emissions_before_idle = 0;
+        loop {
+            match tokio::time::timeout(IDLE_TIMEOUT * 2, rx.recv()).await {
+                Ok(Some(_)) => emissions_before_idle += 1,
+                Ok(None) => panic!("event channel closed unexpectedly"),
+                Err(_) => break,
+            }
+        }
+        assert!(
+            emissions_before_idle >= 1,
+            "expected at least one emission while Active"
+        );
+
+        // Notifying `cache_read` wakes the loop within one poll
+        cache_read.notify_one();
+        tokio::time::timeout(POLL_INTERVAL * 2, rx.recv())
+            .await
+            .expect("loop should resume promptly after cache_read notify")
+            .expect("event channel closed");
     }
 }
