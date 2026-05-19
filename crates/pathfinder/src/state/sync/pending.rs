@@ -1,6 +1,6 @@
 use anyhow::Context;
 use pathfinder_common::{BlockHash, BlockNumber};
-use starknet_gateway_client::GatewayApi;
+use starknet_gateway_client::{BlockId, GatewayApi};
 use starknet_gateway_types::reply::{PreConfirmedBlock, PreConfirmedPollResponse};
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -86,7 +86,11 @@ impl State {
                 true
             }
 
-            PreConfirmedPollResponse::Full { identifier, block } => {
+            PreConfirmedPollResponse::Full {
+                identifier,
+                block_number: _,
+                block,
+            } => {
                 // Emit on any of three independent signals:
                 //  - the server's identifier changed (round bump, new height, or first poll)
                 //  - new transactions arrived
@@ -137,8 +141,6 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
         }
 
         // Fetch the pre-latest block.
-        // Its presence determines the pre-confirmed block number we poll below,
-        // and it is later forwarded downstream in the emitted event.
         let pre_latest_data = match fetch_pre_latest(&sequencer, latest_number, latest_hash).await {
             Ok(r) => r.map(Box::new),
             Err(e) => {
@@ -148,39 +150,9 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             }
         };
 
-        // If the pre-latest block (latest + 1) exists then the sequencer has already
-        // started building the next pre-confirmed block (latest + 2).
-        let pre_confirmed_block_number = if pre_latest_data.is_some() {
-            latest_number + 2
-        } else {
-            latest_number + 1
-        };
-
-        // A transient gateway inconsistency (e.g. the pre-latest block briefly
-        // disappears) can cause this poll's pre-confirmed block number to drop
-        // below the height we're already tracking. Just skip the poll, the state
-        // we've accumulated for the higher height is still valid for later.
-        if pre_confirmed_block_number < state.block_number {
-            tracing::debug!(
-                pre_confirmed_block_number = %pre_confirmed_block_number,
-                current = %state.block_number,
-                "Pre-confirmed block number stepped backwards; skipping poll"
-            );
-            tokio::time::sleep_until(t_fetch + poll_interval).await;
-            continue;
-        }
-
-        // New height. Invalidate any state from prior height.
-        if pre_confirmed_block_number > state.block_number {
-            state = State {
-                block_number: pre_confirmed_block_number,
-                ..State::default()
-            };
-        }
-
         let response = match sequencer
             .preconfirmed_block(
-                pre_confirmed_block_number.into(),
+                BlockId::Latest,
                 state.block_identifier.clone(),
                 state.tx_count(),
             )
@@ -194,6 +166,37 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             }
         };
 
+        // Extract the block number from `Full` responses (`None` for
+        // `Unchanged`/`Delta`)
+        let resolved = match response {
+            PreConfirmedPollResponse::Full { block_number, .. } => Some(block_number),
+            _ => None,
+        };
+
+        if let Some(height) = resolved {
+            // A transient (?) lower-height shouldn't discard accumulated state.
+            if height < state.block_number && state.block_number != BlockNumber::GENESIS {
+                tracing::debug!(
+                    resolved = %height,
+                    current = %state.block_number,
+                    "Pre-confirmed resolved to a lower height than tracked; skipping poll"
+                );
+                tokio::time::sleep_until(t_fetch + poll_interval).await;
+                continue;
+            }
+
+            // The chain advanced: complete the previous block before resetting state.
+            if height > state.block_number {
+                if state.block_identifier.is_some() && state.accumulated.is_some() {
+                    complete_previous_block(&sequencer, &mut state, &tx_event).await;
+                }
+                state = State {
+                    block_number: height,
+                    ..State::default()
+                };
+            }
+        }
+
         if state.apply(response, pre_latest_data.is_some()) {
             let accumulated = state
                 .accumulated
@@ -202,7 +205,7 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             tracing::trace!("Emitting a pre-confirmed update");
             if let Err(e) = tx_event
                 .send(SyncEvent::PreConfirmed {
-                    number: pre_confirmed_block_number,
+                    number: state.block_number,
                     block: accumulated.clone().into(),
                     pre_latest_data,
                 })
@@ -216,6 +219,46 @@ pub async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
         }
 
         tokio::time::sleep_until(t_fetch + poll_interval).await;
+    }
+}
+
+/// Fetch the previously-tracked block one final time to capture any
+/// transactions that landed before it was superseded. Best-effort.
+async fn complete_previous_block<S: GatewayApi + Send + 'static>(
+    sequencer: &S,
+    state: &mut State,
+    tx_event: &tokio::sync::mpsc::Sender<SyncEvent>,
+) {
+    let response = match sequencer
+        .preconfirmed_block(
+            state.block_number.into(),
+            state.block_identifier.clone(),
+            state.tx_count(),
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::debug!(%err, "Completion query for previous pre-confirmed block failed");
+            return;
+        }
+    };
+
+    if state.apply(response, false) {
+        let accumulated = state
+            .accumulated
+            .as_ref()
+            .expect("accumulated present after successful completion apply");
+        if let Err(e) = tx_event
+            .send(SyncEvent::PreConfirmed {
+                number: state.block_number,
+                block: accumulated.clone().into(),
+                pre_latest_data: None,
+            })
+            .await
+        {
+            tracing::error!(error=%e, "Event channel closed during completion emission");
+        }
     }
 }
 
@@ -459,6 +502,7 @@ mod tests {
             .returning(move |_, _, _| {
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: String::new(),
+                    block_number: BlockNumber::new_or_panic(3),
                     block: PRE_CONFIRMED_BLOCK.clone(),
                 })
             });
@@ -549,6 +593,7 @@ mod tests {
 
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: String::new(),
+                    block_number: BlockNumber::new_or_panic(3),
                     block,
                 })
             });
@@ -702,6 +747,7 @@ mod tests {
 
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: String::new(),
+                    block_number: BlockNumber::new_or_panic(12),
                     block,
                 })
             });
@@ -891,6 +937,7 @@ mod tests {
             let emitted = s.apply(
                 PreConfirmedPollResponse::Full {
                     identifier: "xyz".into(),
+                    block_number: BlockNumber::new_or_panic(10),
                     block: new_block.clone(),
                 },
                 false,
@@ -909,6 +956,7 @@ mod tests {
             let emitted = s.apply(
                 PreConfirmedPollResponse::Full {
                     identifier: "abc".into(),
+                    block_number: BlockNumber::new_or_panic(10),
                     block: new_block.clone(),
                 },
                 false,
@@ -927,6 +975,7 @@ mod tests {
             let emitted = s.apply(
                 PreConfirmedPollResponse::Full {
                     identifier: "abc".into(),
+                    block_number: BlockNumber::new_or_panic(10),
                     block: same_block.clone(),
                 },
                 false,
@@ -946,6 +995,7 @@ mod tests {
             let emitted = s.apply(
                 PreConfirmedPollResponse::Full {
                     identifier: "abc".into(),
+                    block_number: BlockNumber::new_or_panic(10),
                     block: same_block,
                 },
                 false,
@@ -957,70 +1007,41 @@ mod tests {
         }
     }
 
-    /// The expected sequence for Starknet v0.14.0+ goes something like this:
-    ///   1) Node is on block N
-    ///   2) Sequencer is producing pre-confirmed block N + 1 (N is still
-    ///      pre-latest)
-    ///   3) Block N + 1 is promoted to pre-latest and block N + 2 is being
-    ///      built as pre-confirmed
-    ///   4) Block N + 1 is finalized and published as the new L2 block
-    ///   5) Node stores (and is now on) block N + 1
-    ///
-    /// Since we determine the next expected pre-confirmed block as:
-    ///
-    ///  if node_latest_hash == pre_latest.parent_hash {
-    ///      pre_confirmed_num = node_latest_num + 2
-    ///  } else {
-    ///      pre_confirmed_num = node_latest_num + 1
-    ///  }
-    ///
-    /// we must make sure that inconsistencies in the gateway responses do not
-    /// cause the polling task to emit inconsistent updates.
+    /// A transient gateway inconsistency could briefly resolve `latest` to a
+    /// lower height than we're already tracking. The polling loop should
+    /// skip those responses without discarding accumulated state.
     ///
     /// See also <https://github.com/equilibriumco/pathfinder/issues/3081>.
     #[tokio::test]
-    async fn ignores_inconsistent_pre_latest_from_gateway() {
+    async fn skips_poll_when_resolved_height_is_lower() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let mut sequencer = MockGatewayApi::new();
 
         let our_latest_hash = PRE_LATEST_BLOCK.parent_hash;
-        let mut fake_pre_latest = PRE_LATEST_BLOCK.clone();
-        fake_pre_latest.parent_hash = block_hash!("0xbad");
 
         static COUNT: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
 
-        sequencer.expect_pending_block().returning(move || {
-            let mut count = COUNT.lock().unwrap();
-            let block = match *count {
-                0 => {
-                    *count += 1;
-                    // Polling task has default state at the start, so this should produce an
-                    // event. It should also set the current expected pre-confirmed block number
-                    // to `latest + 2`.
-                    (PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())
-                }
-                1 => {
-                    *count += 1;
-                    // This will cause a mismatch between our latest block hash and the pre-latest
-                    // block parent hash. When these don't match, the expected pre-confirmed block
-                    // number is `latest + 1`, which is lower than before. This should be ignored.
-                    (fake_pre_latest.clone(), PENDING_UPDATE.clone())
-                }
-                _ => {
-                    // Our latest hash and the pre-latest block parent hash match again. Since, we
-                    // always send the same pre-confirmed block by the mock sequencer, this should
-                    // not produce any events.
-                    (PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())
-                }
-            };
-
-            Ok(block)
-        });
+        sequencer
+            .expect_pending_block()
+            .returning(move || Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
         sequencer
             .expect_preconfirmed_block()
             .returning(move |_, _, _| {
+                let mut count = COUNT.lock().unwrap();
+                let block_number = match *count {
+                    0 => {
+                        *count += 1;
+                        // First poll establishes the tracked height at 12.
+                        BlockNumber::new_or_panic(12)
+                    }
+                    _ => {
+                        // Subsequent polls resolve to a lower height (gateway hiccup).
+                        BlockNumber::new_or_panic(11)
+                    }
+                };
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: String::new(),
+                    block_number,
                     block: PRE_CONFIRMED_BLOCK.clone(),
                 })
             });
@@ -1042,10 +1063,160 @@ mod tests {
             .await
         });
 
-        let _ = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
+        let first = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
             .await
-            .expect("First event should be emitted");
+            .expect("First event should be emitted")
+            .unwrap();
+        assert_matches!(
+            first,
+            SyncEvent::PreConfirmed { number, .. } if number == BlockNumber::new_or_panic(12)
+        );
+
         let result = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await;
-        assert!(result.is_err(), "No event should be emitted for stale data");
+        assert!(
+            result.is_err(),
+            "No event should be emitted for a backwards-resolved height"
+        );
+    }
+
+    /// When the chain advances past the pre-confirmed block we're tracking,
+    /// the loop completes the previous block with one final query (picking up
+    /// any transactions that landed just before it was superseded) before
+    /// moving on to the new height.
+    ///
+    /// Three emissions are expected across two ticks:
+    ///   1. Block N initial
+    ///   2. Block N completed (tail transaction included)
+    ///   3. Block N+1 fresh
+    #[tokio::test]
+    async fn completes_previous_block_when_chain_advances() {
+        use starknet_gateway_client::BlockId;
+
+        let our_latest_number = BlockNumber::new_or_panic(10);
+        // Pre-latest is absent throughout: our latest hash does not match
+        // PRE_LATEST_BLOCK.parent_hash, so fetch_pre_latest classifies it as None.
+        let our_latest_hash = block_hash!("0xabcd");
+
+        const BLOCK_11_ID: &str = "id-11";
+        const BLOCK_12_ID: &str = "id-12";
+
+        let tail_tx = Transaction {
+            hash: transaction_hash!("0x012345"),
+            variant: TransactionVariant::L1Handler(L1HandlerTransaction {
+                contract_address: contract_address!("0x1"),
+                entry_point_selector: entry_point!("0x55"),
+                nonce: transaction_nonce!("0x2"),
+                calldata: Vec::new(),
+            }),
+        };
+
+        // Mock gateway
+        let mut sequencer = MockGatewayApi::new();
+        sequencer
+            .expect_pending_block()
+            .returning(|| Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
+
+        // Pre-confirmed responses are scripted by dispatching on the request's
+        // (BlockId, identifier) — each pattern fires on a specific tick.
+        let tail_for_mock = tail_tx.clone();
+        sequencer
+            .expect_preconfirmed_block()
+            .returning(move |block_id, identifier, _tx_count| {
+                match (block_id, identifier.as_deref()) {
+                    // Tick 1: first poll, no cached identifier. Server returns
+                    // pre-confirmed block 11.
+                    (BlockId::Latest, None) => Ok(PreConfirmedPollResponse::Full {
+                        identifier: BLOCK_11_ID.into(),
+                        block_number: BlockNumber::new_or_panic(11),
+                        block: PRE_CONFIRMED_BLOCK.clone(),
+                    }),
+
+                    // Tick 2: chain has advanced. Server returns pre-confirmed
+                    // block 12 with a fresh identifier.
+                    (BlockId::Latest, Some(id)) if id == BLOCK_11_ID => {
+                        Ok(PreConfirmedPollResponse::Full {
+                            identifier: BLOCK_12_ID.into(),
+                            block_number: BlockNumber::new_or_panic(12),
+                            block: PRE_CONFIRMED_BLOCK.clone(),
+                        })
+                    }
+
+                    // Completion query for block 11: server returns a delta
+                    // carrying the tail transaction that landed just before
+                    // the chain advanced.
+                    (BlockId::Number(n), Some(id))
+                        if n == BlockNumber::new_or_panic(11) && id == BLOCK_11_ID =>
+                    {
+                        Ok(PreConfirmedPollResponse::Delta {
+                            identifier: BLOCK_11_ID.into(),
+                            new_transactions: vec![tail_for_mock.clone()],
+                            new_receipts: vec![None],
+                            new_state_diffs: vec![None],
+                        })
+                    }
+
+                    // Steady state on block 12: subsequent polls report no change.
+                    (BlockId::Latest, Some(id)) if id == BLOCK_12_ID => {
+                        Ok(PreConfirmedPollResponse::Unchanged)
+                    }
+
+                    _ => panic!(
+                        "unexpected preconfirmed_block call: id={:?} identifier={:?}",
+                        block_id, identifier
+                    ),
+                }
+            });
+
+        // Spawn the polling loop
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let (_, latest) = watch::channel((our_latest_number, our_latest_hash));
+        let (_, current) = watch::channel((our_latest_number, our_latest_hash));
+        let sequencer = Arc::new(sequencer);
+        let _jh = tokio::spawn(async move {
+            super::poll_pre_confirmed(tx, sequencer, std::time::Duration::ZERO, latest, current)
+                .await
+        });
+
+        // Assertions
+
+        // 1. Initial pre-confirmed at block 11.
+        let initial = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
+            .await
+            .expect("Initial event should be emitted")
+            .unwrap();
+        assert_matches!(
+            initial,
+            SyncEvent::PreConfirmed { number, block, pre_latest_data }
+                if number == BlockNumber::new_or_panic(11)
+                    && block.transactions.len() == PRE_CONFIRMED_BLOCK.transactions.len()
+                    && pre_latest_data.is_none()
+        );
+
+        // 2. Block 11 completed: same height, tail transaction appended.
+        let completed = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
+            .await
+            .expect("Completion event should be emitted")
+            .unwrap();
+        let expected_completed_len = PRE_CONFIRMED_BLOCK.transactions.len() + 1;
+        assert_matches!(
+            completed,
+            SyncEvent::PreConfirmed { number, block, pre_latest_data }
+                if number == BlockNumber::new_or_panic(11)
+                    && block.transactions.len() == expected_completed_len
+                    && pre_latest_data.is_none()
+        );
+
+        // 3. Fresh pre-confirmed at block 12.
+        let advanced = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
+            .await
+            .expect("Advance event should be emitted")
+            .unwrap();
+        assert_matches!(
+            advanced,
+            SyncEvent::PreConfirmed { number, block, pre_latest_data }
+                if number == BlockNumber::new_or_panic(12)
+                    && block.transactions.len() == PRE_CONFIRMED_BLOCK.transactions.len()
+                    && pre_latest_data.is_none()
+        );
     }
 }

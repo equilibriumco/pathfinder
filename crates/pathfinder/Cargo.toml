@@ -20,6 +20,7 @@ p2p = ["pathfinder-consensus", "pathfinder-validator"]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
+backon = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true, features = ["serde"] }
 bitvec = { workspace = true }
