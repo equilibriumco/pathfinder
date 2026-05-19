@@ -14,6 +14,7 @@
 //!      is then executed.
 use std::io::Write as _;
 
+use backon::Retryable;
 use pathfinder_common::{ClassHash, TransactionHash};
 use reqwest::header::CONTENT_ENCODING;
 use starknet_gateway_types::error::SequencerError;
@@ -478,15 +479,11 @@ where
     FutureFactory: FnMut() -> Fut,
     Ret: FnMut(&SequencerError) -> bool,
 {
-    use std::num::NonZeroU64;
-
-    use pathfinder_retry::Retry;
-
-    Retry::exponential(future_factory, NonZeroU64::new(2).unwrap())
-        .factor(NonZeroU64::new(1).unwrap())
-        .max_delay(std::time::Duration::from_secs(10))
-        .when(retry_condition)
-        .await
+    let backoff = backon::ExponentialBuilder::new()
+        .with_min_delay(std::time::Duration::from_secs(2))
+        .with_max_delay(std::time::Duration::from_secs(10))
+        .without_max_times();
+    future_factory.retry(backoff).when(retry_condition).await
 }
 
 /// Determines if an error is retryable or not.
