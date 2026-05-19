@@ -107,7 +107,7 @@ pub enum TriePruneMode {
     Archive,
     /// Prune merkle trie history. Only keep the last few blocks, as well as the
     /// latest block.
-    Prune { num_blocks_kept: BlockNumber },
+    Prune { num_blocks_kept: u64 },
 }
 
 type TransactionWithReceipt = (StarknetTransaction, Receipt, Vec<Event>, BlockNumber);

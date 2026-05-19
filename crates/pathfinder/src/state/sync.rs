@@ -2615,9 +2615,7 @@ mod tests {
         async fn blockchain_history_pruning() {
             let storage = StorageBuilder::in_memory_with_blockchain_pruning_and_pool_size(
                 // Keep only the latest block.
-                pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
-                    num_blocks_kept: BlockNumber::ZERO,
-                },
+                pathfinder_storage::pruning::BlockchainHistoryMode::Prune { num_blocks_kept: 0 },
                 std::num::NonZeroU32::new(10).unwrap(),
             )
             .unwrap();
@@ -2679,9 +2677,7 @@ mod tests {
         async fn non_prunable_blocks() {
             let storage = StorageBuilder::in_memory_with_blockchain_pruning_and_pool_size(
                 // Keep only the latest block.
-                pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
-                    num_blocks_kept: BlockNumber::ZERO,
-                },
+                pathfinder_storage::pruning::BlockchainHistoryMode::Prune { num_blocks_kept: 0 },
                 std::num::NonZeroU32::new(10).unwrap(),
             )
             .unwrap();
@@ -2783,9 +2779,7 @@ mod tests {
         async fn reorg_error() {
             let storage = StorageBuilder::in_memory_with_blockchain_pruning_and_pool_size(
                 // Keep only the latest block.
-                pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
-                    num_blocks_kept: BlockNumber::ZERO,
-                },
+                pathfinder_storage::pruning::BlockchainHistoryMode::Prune { num_blocks_kept: 0 },
                 std::num::NonZeroU32::new(10).unwrap(),
             )
             .unwrap();
@@ -2890,9 +2884,7 @@ Blockchain history must include the reorg tail and its parent block to perform a
         async fn reorg_success() {
             let storage = StorageBuilder::in_memory_with_blockchain_pruning_and_pool_size(
                 // Keep only the last 2 blocks + latest.
-                pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
-                    num_blocks_kept: BlockNumber::new_or_panic(2),
-                },
+                pathfinder_storage::pruning::BlockchainHistoryMode::Prune { num_blocks_kept: 2 },
                 std::num::NonZeroU32::new(10).unwrap(),
             )
             .unwrap();
@@ -2983,9 +2975,7 @@ Blockchain history must include the reorg tail and its parent block to perform a
             let storage = StorageBuilder::in_memory_with_blockchain_pruning_and_pool_size(
                 // Prune only blocks 0 and 1.
                 pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
-                    num_blocks_kept: pathfinder_common::BlockNumber::new_or_panic(
-                        num_blocks - 1 /* latest */ - 2, /* keep two blocks */
-                    ),
+                    num_blocks_kept: num_blocks - 1 /* latest */ - 2, /* keep two blocks */
                 },
                 std::num::NonZeroU32::new(10).unwrap(),
             )
@@ -3085,9 +3075,7 @@ Blockchain history must include the reorg tail and its parent block to perform a
         #[tokio::test(flavor = "multi_thread")]
         async fn pruning_relative_to_l1_checkpoint() {
             let storage = StorageBuilder::in_memory_with_blockchain_pruning_and_pool_size(
-                pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
-                    num_blocks_kept: BlockNumber::new_or_panic(1),
-                },
+                pathfinder_storage::pruning::BlockchainHistoryMode::Prune { num_blocks_kept: 1 },
                 std::num::NonZeroU32::new(10).unwrap(),
             )
             .unwrap();
@@ -3172,9 +3160,8 @@ Blockchain history must include the reorg tail and its parent block to perform a
             use pathfinder_storage::AGGREGATE_BLOOM_BLOCK_RANGE_LEN;
 
             let tempdir = tempfile::TempDir::new().unwrap();
-            let storage_pruning_mode = pathfinder_storage::pruning::BlockchainHistoryMode::Prune {
-                num_blocks_kept: BlockNumber::ZERO,
-            };
+            let storage_pruning_mode =
+                pathfinder_storage::pruning::BlockchainHistoryMode::Prune { num_blocks_kept: 0 };
             let storage_pool_size = std::num::NonZeroU32::new(10).unwrap();
             let storage =
                 StorageBuilder::in_persisted_tempdir_with_blockchain_pruning_and_pool_size(
