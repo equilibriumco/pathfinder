@@ -1733,9 +1733,7 @@ mod tests {
         #[test]
         fn root_index_updates() {
             let mut db = pathfinder_storage::StorageBuilder::in_memory_with_trie_pruning(
-                pathfinder_storage::TriePruneMode::Prune {
-                    num_blocks_kept: BlockNumber::ZERO,
-                },
+                pathfinder_storage::TriePruneMode::Prune { num_blocks_kept: 0 },
             )
             .unwrap()
             .connection()

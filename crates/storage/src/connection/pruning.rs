@@ -33,7 +33,7 @@ pub enum BlockchainHistoryMode {
     Archive,
     /// Prune the blockchain history. Only keep the last `num_blocks_kept`
     /// blocks as well as the latest block.
-    Prune { num_blocks_kept: BlockNumber },
+    Prune { num_blocks_kept: u64 },
 }
 
 impl Transaction<'_> {
