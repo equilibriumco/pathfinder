@@ -39,6 +39,7 @@ use starknet_gateway_types::error::{KnownStarknetErrorCode, SequencerError};
 use starknet_gateway_types::reply::{Block, GasPrices, PreConfirmedBlock, PreLatestBlock};
 use tokio::sync::mpsc::{self, Receiver};
 use tokio::sync::watch::{self, Sender as WatchSender};
+use tokio::sync::Notify;
 
 use crate::state::l1::L1SyncContext;
 use crate::state::l2::{BlockChain, L2SyncContext};
@@ -113,6 +114,7 @@ pub struct SyncContext<G, E> {
     pub head_poll_interval: Duration,
     pub l1_poll_interval: Duration,
     pub pending_data: WatchSender<PendingData>,
+    pub pre_confirmed_on_read: Arc<Notify>,
     pub submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker,
     pub block_validation_mode: l2::BlockValidationMode,
     pub notifications: Notifications,
@@ -194,6 +196,7 @@ where
         head_poll_interval,
         l1_poll_interval: _,
         pending_data,
+        pre_confirmed_on_read,
         submitted_tx_tracker,
         block_validation_mode: _,
         notifications,
@@ -291,7 +294,7 @@ where
         event_sender.clone(),
         sequencer.clone(),
         head_poll_interval,
-        pending::InactivityTimer::new(Duration::from_secs(60)),
+        pending::InactivityTimer::new(Duration::from_secs(60), pre_confirmed_on_read.clone()),
         rx_latest.clone(),
         rx_current.clone(),
     ));
@@ -305,7 +308,10 @@ where
                     event_sender.clone(),
                     sequencer.clone(),
                     Duration::from_secs(2),
-                    pending::InactivityTimer::new(Duration::from_secs(60)),
+                    pending::InactivityTimer::new(
+                        Duration::from_secs(60),
+                        pre_confirmed_on_read.clone(),
+                    ),
                     rx_latest.clone(),
                     rx_current.clone(),
                 ));
@@ -484,6 +490,7 @@ where
         head_poll_interval,
         l1_poll_interval: _,
         pending_data,
+        pre_confirmed_on_read: _,
         submitted_tx_tracker,
         block_validation_mode: _,
         notifications,
