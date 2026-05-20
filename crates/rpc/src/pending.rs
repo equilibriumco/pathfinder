@@ -16,6 +16,7 @@ use pathfinder_common::{
 use pathfinder_storage::Transaction;
 use starknet_gateway_types::reply::{GasPrices, Status};
 use tokio::sync::watch::Receiver as WatchReceiver;
+use tokio::sync::Notify;
 
 use crate::RpcVersion;
 
@@ -36,8 +37,14 @@ pub struct FinalizedTxData {
 
 /// Provides the latest [PendingData] which is consistent with a given
 /// view of storage.
+///
+/// Reading data fires `on_read`, signalling the upstream polling loop
+/// that the cache is in use.
 #[derive(Clone)]
-pub struct PendingWatcher(pub WatchReceiver<PendingData>);
+pub struct PendingWatcher {
+    receiver: WatchReceiver<PendingData>,
+    on_read: Arc<Notify>,
+}
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct PreConfirmedBlock {
@@ -593,7 +600,20 @@ impl PendingData {
 
 impl PendingWatcher {
     pub fn new(receiver: WatchReceiver<PendingData>) -> Self {
-        Self(receiver)
+        Self {
+            receiver,
+            on_read: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Handle for awaiting cache-read events fired by [`Self::get`].
+    pub fn on_read(&self) -> Arc<Notify> {
+        self.on_read.clone()
+    }
+
+    /// A fresh receiver for awaiting changes directly.
+    pub fn subscribe(&self) -> WatchReceiver<PendingData> {
+        self.receiver.clone()
     }
 
     /// Returns [PendingData] which has been validated against the latest block
@@ -607,12 +627,14 @@ impl PendingWatcher {
         tx: &Transaction<'_>,
         rpc_version: RpcVersion,
     ) -> anyhow::Result<PendingData> {
+        self.on_read.notify_one();
+
         let latest = tx
             .block_header(pathfinder_common::BlockId::Latest)
             .context("Querying latest block header")?
             .unwrap_or_default();
 
-        let watched_pending_data = self.0.borrow();
+        let watched_pending_data = self.receiver.borrow();
         let watched_pending_blocks = watched_pending_data.pending_block();
         let PendingBlocks {
             pre_confirmed,
@@ -719,7 +741,7 @@ impl PendingWatcher {
 
     #[cfg(test)]
     pub fn get_unchecked(&self) -> PendingData {
-        self.0.borrow().clone()
+        self.receiver.borrow().clone()
     }
 }
 

@@ -142,7 +142,7 @@ impl RpcSubscriptionFlow for SubscribeTransactionStatus {
                 last_block_number: BlockNumber::GENESIS, // Initial value not important.
             };
 
-            let mut pending_data = state.pending_data.0.clone();
+            let mut pending_data = state.pending_data.subscribe();
             let storage = state.storage.clone();
 
             if let Some((block_number, finality_status, execution_status)) =

@@ -30,6 +30,7 @@ use pathfinder_rpc::{Notifications, SyncState};
 use pathfinder_storage::Storage;
 use starknet_gateway_client::GatewayApi;
 use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::Notify;
 use tokio::task::JoinError;
 use tracing::info;
 
@@ -281,6 +282,7 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
         ethereum.client.clone(),
         rpc_config,
     );
+    let pre_confirmed_on_read = context.pending_data.on_read();
 
     let context = if config.websocket.enabled {
         context.with_websockets(WebsocketContext::new(config.websocket.max_history.into()))
@@ -516,6 +518,7 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
             &config,
             submitted_tx_tracker,
             tx_pending,
+            pre_confirmed_on_read.clone(),
             consensus_channels,
             notifications,
             gateway_public_key,
@@ -721,6 +724,7 @@ fn start_sync(
     config: &config::Config,
     submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker,
     tx_pending: tokio::sync::watch::Sender<pathfinder_rpc::PendingData>,
+    pre_confirmed_on_read: Arc<Notify>,
     consensus_channels: Option<ConsensusChannels>,
     notifications: Notifications,
     gateway_public_key: pathfinder_common::PublicKey,
@@ -735,6 +739,7 @@ fn start_sync(
             config,
             submitted_tx_tracker,
             tx_pending,
+            pre_confirmed_on_read,
             notifications,
             gateway_public_key,
         )
@@ -747,6 +752,7 @@ fn start_sync(
             config,
             submitted_tx_tracker,
             tx_pending,
+            pre_confirmed_on_read,
             notifications,
             gateway_public_key,
             consensus_channels,
@@ -777,6 +783,7 @@ fn start_sync(
     config: &config::Config,
     submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker,
     tx_pending: tokio::sync::watch::Sender<pathfinder_rpc::PendingData>,
+    pre_confirmed_on_read: Arc<Notify>,
     _consensus_channels: Option<ConsensusChannels>,
     notifications: Notifications,
     gateway_public_key: pathfinder_common::PublicKey,
@@ -790,6 +797,7 @@ fn start_sync(
         config,
         submitted_tx_tracker,
         tx_pending,
+        pre_confirmed_on_read,
         notifications,
         gateway_public_key,
     )
@@ -804,6 +812,7 @@ fn start_feeder_gateway_sync(
     config: &config::Config,
     submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker,
     tx_pending: tokio::sync::watch::Sender<pathfinder_rpc::PendingData>,
+    pre_confirmed_on_read: Arc<Notify>,
     notifications: Notifications,
     gateway_public_key: pathfinder_common::PublicKey,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
@@ -818,6 +827,7 @@ fn start_feeder_gateway_sync(
         head_poll_interval: config.poll_interval,
         l1_poll_interval: config.l1_poll_interval,
         pending_data: tx_pending,
+        pre_confirmed_on_read,
         submitted_tx_tracker,
         block_validation_mode: state::l2::BlockValidationMode::Strict,
         notifications,
@@ -844,6 +854,7 @@ fn start_consensus_aware_fgw_sync(
     config: &config::Config,
     submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker,
     tx_pending: tokio::sync::watch::Sender<pathfinder_rpc::PendingData>,
+    pre_confirmed_on_read: Arc<Notify>,
     notifications: Notifications,
     gateway_public_key: pathfinder_common::PublicKey,
     consensus_channels: ConsensusChannels,
@@ -859,6 +870,7 @@ fn start_consensus_aware_fgw_sync(
         head_poll_interval: config.poll_interval,
         l1_poll_interval: config.l1_poll_interval,
         pending_data: tx_pending,
+        pre_confirmed_on_read,
         submitted_tx_tracker,
         block_validation_mode: state::l2::BlockValidationMode::Strict,
         notifications,
