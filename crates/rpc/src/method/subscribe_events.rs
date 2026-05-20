@@ -259,7 +259,7 @@ impl RpcSubscriptionFlow for SubscribeEvents {
 
         let mut blocks = state.notifications.l2_blocks.subscribe();
         let mut reorgs = state.notifications.reorgs.subscribe();
-        let mut pending_data = state.pending_data.0.clone();
+        let mut pending_data = state.pending_data.subscribe();
 
         if let Some(ref mut keys) = params.keys {
             // Truncate empty key lists from the end of the key filter.

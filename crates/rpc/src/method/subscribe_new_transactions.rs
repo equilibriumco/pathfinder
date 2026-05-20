@@ -197,7 +197,7 @@ impl RpcSubscriptionFlow for SubscribeNewTransactions {
 
         let mut blocks = state.notifications.l2_blocks.subscribe();
         let mut reorgs = state.notifications.reorgs.subscribe();
-        let mut pending_data = state.pending_data.0.clone();
+        let mut pending_data = state.pending_data.subscribe();
         let submission_tracker = state.submission_tracker.clone();
         let mut received_watcher = submission_tracker.subscribe();
 

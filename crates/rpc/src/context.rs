@@ -283,8 +283,6 @@ impl RpcContext {
 
     #[cfg(test)]
     pub async fn for_tests_with_pre_confirmed() -> Self {
-        // This is a bit silly with the arc in and out, but since its for tests the
-        // ergonomics of having Arc also constructed is nice.
         let context = Self::for_tests();
         let pending_data =
             super::test_utils::create_pre_confirmed_data(context.storage.clone()).await;

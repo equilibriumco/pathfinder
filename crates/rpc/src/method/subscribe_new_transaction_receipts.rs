@@ -154,7 +154,7 @@ impl RpcSubscriptionFlow for SubscribeNewTransactionReceipts {
 
         let mut blocks = state.notifications.l2_blocks.subscribe();
         let mut reorgs = state.notifications.reorgs.subscribe();
-        let mut pending_data = state.pending_data.0.clone();
+        let mut pending_data = state.pending_data.subscribe();
 
         // Keep track of the updates already sent for each block. This is done in order
         // to avoid sending duplicate notifications when seeing the same block multiple
