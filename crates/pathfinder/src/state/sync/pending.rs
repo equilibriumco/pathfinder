@@ -117,27 +117,18 @@ impl State {
 
 /// The polling loop's idle/wake policy.
 ///
-/// `cache_read` must be notified each time the cached pre-confirmed data is
+/// `on_read` must be notified each time the cached pre-confirmed data is
 /// read. As long as notifications keep arriving within `timeout`, the loop
 /// polls continuously. If `timeout` elapses with no notification, the loop
 /// suspends itself; the next notification wakes it back up.
 pub(super) struct InactivityTimer {
     pub timeout: std::time::Duration,
-    cache_read: Arc<Notify>,
+    on_read: Arc<Notify>,
 }
 
 impl InactivityTimer {
-    pub(super) fn new(timeout: std::time::Duration) -> Self {
-        Self {
-            timeout,
-            cache_read: Arc::new(Notify::new()),
-        }
-    }
-
-    /// Handle for signalling that the pre-confirmed cache was read.
-    #[allow(dead_code)]
-    pub(super) fn cache_read(&self) -> Arc<Notify> {
-        self.cache_read.clone()
+    pub(super) fn new(timeout: std::time::Duration, on_read: Arc<Notify>) -> Self {
+        Self { timeout, on_read }
     }
 }
 
@@ -162,7 +153,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
         // cache-read signal, suspend polling until the next signal.
         if last_active.elapsed() >= timer.timeout {
             tracing::debug!("Pre-confirmed polling idle; waiting for cache reads");
-            timer.cache_read.notified().await;
+            timer.on_read.notified().await;
             last_active = Instant::now();
         }
 
@@ -176,7 +167,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                 latest = %latest_number.get(), current = %current_number,
                 "Not in sync yet; skipping pre-confirmed block download"
             );
-            if wait_for_next_poll(t_fetch + poll_interval, &timer.cache_read).await {
+            if wait_for_next_poll(t_fetch + poll_interval, &timer.on_read).await {
                 last_active = Instant::now();
             }
             continue;
@@ -187,7 +178,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             Ok(r) => r.map(Box::new),
             Err(e) => {
                 tracing::debug!(%e, "Failed to fetch pre-latest block");
-                if wait_for_next_poll(t_fetch + poll_interval, &timer.cache_read).await {
+                if wait_for_next_poll(t_fetch + poll_interval, &timer.on_read).await {
                     last_active = Instant::now();
                 }
                 continue;
@@ -205,7 +196,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             Ok(r) => r,
             Err(err) => {
                 tracing::debug!(%err, "Failed to fetch pre-confirmed block");
-                if wait_for_next_poll(t_fetch + poll_interval, &timer.cache_read).await {
+                if wait_for_next_poll(t_fetch + poll_interval, &timer.on_read).await {
                     last_active = Instant::now();
                 }
                 continue;
@@ -227,7 +218,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                     current = %state.block_number,
                     "Pre-confirmed resolved to a lower height than tracked; skipping poll"
                 );
-                if wait_for_next_poll(t_fetch + poll_interval, &timer.cache_read).await {
+                if wait_for_next_poll(t_fetch + poll_interval, &timer.on_read).await {
                     last_active = Instant::now();
                 }
                 continue;
@@ -266,19 +257,19 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             tracing::trace!("No change in pre-confirmed block data");
         }
 
-        if wait_for_next_poll(t_fetch + poll_interval, &timer.cache_read).await {
+        if wait_for_next_poll(t_fetch + poll_interval, &timer.on_read).await {
             last_active = Instant::now();
         }
     }
 }
 
-/// Sleeps until `deadline`, returning early if `cache_read` is notified.
+/// Sleeps until `deadline`, returning early if `on_read` is notified.
 /// Returns `true` when woken by a notification, `false` when the deadline
 /// elapsed.
-async fn wait_for_next_poll(deadline: Instant, cache_read: &Notify) -> bool {
+async fn wait_for_next_poll(deadline: Instant, on_read: &Notify) -> bool {
     tokio::select! {
         _ = tokio::time::sleep_until(deadline) => false,
-        _ = cache_read.notified() => true,
+        _ = on_read.notified() => true,
     }
 }
 
@@ -385,9 +376,9 @@ mod tests {
         PreLatestBlock,
         Status,
     };
-    use tokio::sync::watch;
+    use tokio::sync::{watch, Notify};
 
-    use super::{InactivityTimer, poll_pre_confirmed};
+    use super::{poll_pre_confirmed, InactivityTimer};
     use crate::state::sync::SyncEvent;
 
     const PARENT_HASH: BlockHash = block_hash!("0x1234");
@@ -577,7 +568,7 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                InactivityTimer::new(std::time::Duration::from_secs(60)),
+                InactivityTimer::new(std::time::Duration::from_secs(60), Arc::new(Notify::new())),
                 latest,
                 current,
             )
@@ -675,7 +666,7 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                InactivityTimer::new(std::time::Duration::from_secs(60)),
+                InactivityTimer::new(std::time::Duration::from_secs(60), Arc::new(Notify::new())),
                 rx_latest,
                 rx_current,
             )
@@ -831,7 +822,7 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                InactivityTimer::new(std::time::Duration::from_secs(60)),
+                InactivityTimer::new(std::time::Duration::from_secs(60), Arc::new(Notify::new())),
                 rx_latest,
                 rx_current,
             )
@@ -1126,7 +1117,7 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                InactivityTimer::new(std::time::Duration::from_secs(60)),
+                InactivityTimer::new(std::time::Duration::from_secs(60), Arc::new(Notify::new())),
                 rx_latest,
                 rx_current,
             )
@@ -1247,7 +1238,7 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                InactivityTimer::new(std::time::Duration::from_secs(60)),
+                InactivityTimer::new(std::time::Duration::from_secs(60), Arc::new(Notify::new())),
                 latest,
                 current,
             )
@@ -1299,9 +1290,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn idle_timeout_pauses_polling_until_cache_read() {
-        // The polling loop runs Active while `cache_read` keeps firing. Once
+        // The polling loop runs Active while `on_read` keeps firing. Once
         // `IDLE_TIMEOUT` elapses with no firings, it suspends.
-        // Notifying `cache_read` wakes it back up.
+        // Notifying `on_read` wakes it back up.
 
         const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
         const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
@@ -1329,8 +1320,8 @@ mod tests {
         let (_, latest) = watch::channel((latest_block_number, latest_hash));
         let (_, current) = watch::channel((latest_block_number, latest_hash));
 
-        let timer = super::InactivityTimer::new(IDLE_TIMEOUT);
-        let cache_read = timer.cache_read();
+        let on_read = Arc::new(Notify::new());
+        let timer = super::InactivityTimer::new(IDLE_TIMEOUT, on_read.clone());
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
         let sequencer = Arc::new(sequencer);
@@ -1339,7 +1330,7 @@ mod tests {
         });
 
         // Each `recv` either returns the next emission, or, once the loop has
-        // suspended on `cache_read`, times out, ending the loop.
+        // suspended on `on_read`, times out, ending the loop.
         let mut emissions_before_idle = 0;
         loop {
             match tokio::time::timeout(IDLE_TIMEOUT * 2, rx.recv()).await {
@@ -1353,11 +1344,11 @@ mod tests {
             "expected at least one emission while Active"
         );
 
-        // Notifying `cache_read` wakes the loop within one poll
-        cache_read.notify_one();
+        // Notifying `on_read` wakes the loop within one poll
+        on_read.notify_one();
         tokio::time::timeout(POLL_INTERVAL * 2, rx.recv())
             .await
-            .expect("loop should resume promptly after cache_read notify")
+            .expect("loop should resume promptly after on_read notify")
             .expect("event channel closed");
     }
 }
