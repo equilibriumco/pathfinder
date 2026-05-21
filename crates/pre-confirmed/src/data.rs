@@ -453,4 +453,11 @@ impl PendingData {
     pub fn class_is_declared(&self, class_hash: ClassHash) -> bool {
         self.aggregated_state_update().class_is_declared(class_hash)
     }
+
+    /// True if `block` matches the pre-latest or pre-confirmed block number.
+    pub fn is_pre_latest_or_pre_confirmed(&self, block: BlockNumber) -> bool {
+        self.pre_latest_block_number()
+            .is_some_and(|pre_latest| pre_latest == block)
+            || self.pre_confirmed_block_number() == block
+    }
 }
