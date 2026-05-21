@@ -244,12 +244,15 @@ fn set_resource_limits(
     // variables etc. inside the closure.
     unsafe {
         cmd.pre_exec(move || {
-            let mem_limit = libc::rlimit {
-                rlim_cur: resource_limits.memory_usage,
-                rlim_max: resource_limits.memory_usage,
-            };
-            if libc::setrlimit(libc::RLIMIT_AS, &mem_limit) != 0 {
-                return Err(std::io::Error::last_os_error());
+            #[cfg(target_os = "linux")]
+            {
+                let mem_limit = libc::rlimit {
+                    rlim_cur: resource_limits.memory_usage,
+                    rlim_max: resource_limits.memory_usage,
+                };
+                if libc::setrlimit(libc::RLIMIT_AS, &mem_limit) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
             }
 
             let cpu_limit = libc::rlimit {
