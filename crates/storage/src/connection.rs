@@ -148,6 +148,28 @@ type TransactionDataForBlock = (StarknetTransaction, Receipt, Vec<Event>);
 
 type EventsForBlock = ((TransactionHash, TransactionIndex), Vec<Event>);
 
+impl<'inner> Transaction<'inner> {
+    /// Create a `Transaction` from raw components. Used during startup
+    /// (migrate / readonly) when only a bare `rusqlite::Connection` is
+    /// available and the `Connection` pool does not yet exist.
+    pub(crate) fn from_raw_parts(
+        transaction: rusqlite::Transaction<'inner>,
+        event_filter_cache: Arc<AggregateBloomCache>,
+        running_event_filter: Arc<Mutex<RunningEventFilter>>,
+        rocksdb: Arc<crate::RocksDBInner>,
+    ) -> Transaction<'inner> {
+        Transaction {
+            transaction,
+            event_filter_cache,
+            running_event_filter,
+            trie_prune_mode: TriePruneMode::Archive,
+            blockchain_history_mode: BlockchainHistoryMode::Archive,
+            batch: Mutex::new(crate::RocksDBBatch::default()),
+            rocksdb,
+        }
+    }
+}
+
 impl Transaction<'_> {
     // The implementations here are intentionally kept as simple wrappers. This lets
     // the real implementations be kept in separate files with more reasonable

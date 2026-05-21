@@ -483,8 +483,24 @@ impl StorageBuilder {
             tracing::info!("Merkle trie pruning disabled");
         }
 
-        let running_event_filter = event::RunningEventFilter::load(&connection.transaction()?)
-            .context("Loading running event filter")?;
+        let running_event_filter = {
+            // Build a temporary storage Transaction wrapping the raw
+            // rusqlite connection and the RocksDB handle so that
+            // RunningEventFilter::load (and ::rebuild, if needed) can
+            // access both SQLite and RocksDB.
+            let dummy_ref = Arc::new(Mutex::new(event::RunningEventFilter {
+                filter: crate::bloom::AggregateBloom::new(BlockNumber::GENESIS),
+                next_block: BlockNumber::GENESIS,
+            }));
+            let raw_tx = connection.transaction()?;
+            let storage_tx = crate::connection::Transaction::from_raw_parts(
+                raw_tx,
+                Arc::new(AggregateBloomCache::with_size(self.event_filter_cache_size)),
+                dummy_ref,
+                rocksdb.clone(),
+            );
+            event::RunningEventFilter::load(&storage_tx).context("Loading running event filter")?
+        };
 
         connection
             .close()
@@ -555,14 +571,10 @@ impl StorageBuilder {
             TriePruneMode::Archive
         };
 
-        let running_event_filter = event::RunningEventFilter::load(&connection.transaction()?)
-            .context("Loading running event filter")?;
-
-        connection
-            .close()
-            .map_err(|(_connection, error)| error)
-            .context("Closing DB after loading running event filter")?;
-
+        // Open RocksDB before loading the event filter so that
+        // RunningEventFilter::load/rebuild can read the EVENTS_COLUMN.
+        // TODO: open RocksDB read-only here (DB::open_cf_for_read_only) to
+        // avoid taking a write lock that could conflict with a running node.
         let (rocksdb_path, rocksdb_tempdir) = if database_path
             .to_str()
             .is_some_and(|s| s.starts_with("file:memdb"))
@@ -575,6 +587,26 @@ impl StorageBuilder {
             (database_path.with_extension("rocksdb"), None)
         };
         let rocksdb = Arc::new(Self::open_rocksdb(&rocksdb_path)?);
+
+        let running_event_filter = {
+            let dummy_ref = Arc::new(Mutex::new(event::RunningEventFilter {
+                filter: crate::bloom::AggregateBloom::new(BlockNumber::GENESIS),
+                next_block: BlockNumber::GENESIS,
+            }));
+            let raw_tx = connection.transaction()?;
+            let storage_tx = crate::connection::Transaction::from_raw_parts(
+                raw_tx,
+                Arc::new(AggregateBloomCache::with_size(event_filter_cache_size)),
+                dummy_ref,
+                rocksdb.clone(),
+            );
+            event::RunningEventFilter::load(&storage_tx).context("Loading running event filter")?
+        };
+
+        connection
+            .close()
+            .map_err(|(_connection, error)| error)
+            .context("Closing DB after loading running event filter")?;
 
         Ok(ReadOnlyStorageManager(StorageManager {
             database_path,

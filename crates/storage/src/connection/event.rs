@@ -92,7 +92,7 @@ impl Transaction<'_> {
     }
 
     pub fn rebuild_running_event_filter(&self, head: BlockNumber) -> anyhow::Result<()> {
-        let rebuilt = RunningEventFilter::rebuild(self.inner(), head)?;
+        let rebuilt = RunningEventFilter::rebuild(self, head)?;
 
         let mut running = self.running_event_filter.lock().unwrap();
         *running = rebuilt;
@@ -613,8 +613,9 @@ impl RunningEventFilter {
     /// Load the [running event filter](RunningEventFilter) from the database if
     /// it was stored during graceful shutdown. Otherwise, rebuild it from
     /// events.
-    pub(crate) fn load(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<Self> {
+    pub(crate) fn load(tx: &super::Transaction<'_>) -> anyhow::Result<Self> {
         let Some(latest) = tx
+            .inner()
             .query_row(
                 "SELECT number FROM block_headers ORDER BY number DESC LIMIT 1",
                 [],
@@ -631,6 +632,7 @@ impl RunningEventFilter {
         };
 
         let (filter, next_block) = tx
+            .inner()
             .query_row(
                 r"
                 SELECT from_block, to_block, bitmap, next_block
@@ -666,13 +668,9 @@ impl RunningEventFilter {
         Ok(running_event_filter)
     }
 
-    /// Rebuild the [event filter](RunningEventFilter) for the range of blocks
-    /// between the last stored `to_block` in the event filter table and the
-    /// last overall block in the database. Under normal circumstances, this
-    /// won't be needed because the running event filter is stored during
-    /// graceful shutdown. Needed only when pathfinder shuts down unexpectedly,
-    /// skipping the shutdown procedure.
-    pub(crate) fn rebuild(
+    /// Rebuild from the SQLite `transactions` table. Used only by historical
+    /// migrations (revision_0068) that run before the table is dropped.
+    pub(crate) fn rebuild_from_sqlite(
         tx: &rusqlite::Transaction<'_>,
         latest: BlockNumber,
     ) -> anyhow::Result<Self> {
@@ -699,8 +697,6 @@ impl RunningEventFilter {
             .context("Querying last stored event filter to_block")?;
 
         let first_running_event_filter_block = match last_to_block {
-            // Last stored block was at the end of the running event filter range, no need
-            // to rebuild.
             Some(last_to_block) if last_to_block == latest.get() => {
                 let next_block = latest + 1;
 
@@ -710,9 +706,6 @@ impl RunningEventFilter {
                 });
             }
             Some(last_to_block) => BlockNumber::new_or_panic(last_to_block + 1),
-            // Event filter table is empty, either because we haven't covered an entire range
-            // yet or the old filters have been pruned. Either way, rebuild the running event
-            // filter in the range that includes the latest block.
             None => latest
                 .get()
                 .checked_sub(latest.get() % AGGREGATE_BLOOM_BLOCK_RANGE_LEN)
@@ -730,56 +723,61 @@ impl RunningEventFilter {
         );
         let rebuilt_filters: Vec<Option<(BlockNumber, BloomFilter)>> = load_events_stmt
             .query_and_then(
-            named_params![":first_running_event_filter_block": &first_running_event_filter_block],
-            |row| {
-                if last_progress_report.elapsed().as_secs() >= 3 {
-                    tracing::trace!(
-                        "Rebuilding running event filter: {:.2}% ({}/{}) blocks covered",
-                        covered_blocks as f64 / total_blocks_to_cover as f64 * 100.0,
-                        covered_blocks,
-                        total_blocks_to_cover
-                    );
-                    last_progress_report = Instant::now();
-                }
+                named_params![
+                    ":first_running_event_filter_block": &first_running_event_filter_block
+                ],
+                |row| {
+                    if last_progress_report.elapsed().as_secs() >= 3 {
+                        tracing::trace!(
+                            "Rebuilding running event filter: {:.2}% ({}/{}) blocks covered",
+                            covered_blocks as f64 / total_blocks_to_cover.max(1) as f64 * 100.0,
+                            covered_blocks,
+                            total_blocks_to_cover
+                        );
+                        last_progress_report = Instant::now();
+                    }
 
-                covered_blocks += 1;
+                    covered_blocks += 1;
 
-                let block_number = row.get_block_number(0)?;
-                let events = row
-                    .get_optional_blob(1)?
-                    .map(|events_blob| -> anyhow::Result<_> {
-                        let events = transaction::compression::decompress_events(events_blob)
-                            .context("Decompressing events")?;
-                        let events: transaction::dto::EventsForBlock =
-                            bincode::serde::decode_from_slice(&events, bincode::config::standard())
+                    let block_number = row.get_block_number(0)?;
+                    let events = row
+                        .get_optional_blob(1)?
+                        .map(|events_blob| -> anyhow::Result<_> {
+                            let events = transaction::compression::decompress_events(events_blob)
+                                .context("Decompressing events")?;
+                            let events: transaction::dto::EventsForBlock =
+                                bincode::serde::decode_from_slice(
+                                    &events,
+                                    bincode::config::standard(),
+                                )
                                 .context("Deserializing events")?
                                 .0;
 
-                        Ok(events)
-                    })
-                    .transpose()?
-                    .map(|efb| {
-                        efb.events()
-                            .into_iter()
-                            .flatten()
-                            .map(Event::from)
-                            .collect::<Vec<_>>()
-                    });
-                let Some(events) = events else {
-                    return Ok(None);
-                };
+                            Ok(events)
+                        })
+                        .transpose()?
+                        .map(|efb| {
+                            efb.events()
+                                .into_iter()
+                                .flatten()
+                                .map(Event::from)
+                                .collect::<Vec<_>>()
+                        });
+                    let Some(events) = events else {
+                        return Ok(None);
+                    };
 
-                let mut bloom = BloomFilter::new();
-                for event in events {
-                    bloom.set_keys(&event.keys);
-                    bloom.set_address(&event.from_address);
-                }
+                    let mut bloom = BloomFilter::new();
+                    for event in events {
+                        bloom.set_keys(&event.keys);
+                        bloom.set_address(&event.from_address);
+                    }
 
-                Ok(Some((block_number, bloom)))
-            },
-        )
-        .context("Querying events to rebuild")?
-        .collect::<anyhow::Result<_>>()?;
+                    Ok(Some((block_number, bloom)))
+                },
+            )
+            .context("Querying events to rebuild")?
+            .collect::<anyhow::Result<_>>()?;
         tracing::trace!(
             "Rebuilding running event filter: 100.00% ({total}/{total}) blocks covered",
             total = total_blocks_to_cover,
@@ -789,10 +787,128 @@ impl RunningEventFilter {
 
         for block_bloom_filter in rebuilt_filters {
             let Some((block_number, bloom)) = block_bloom_filter else {
-                // Reached the end of P2P (checkpoint) synced events.
                 break;
             };
 
+            filter.insert(bloom, block_number);
+        }
+
+        Ok(Self {
+            filter,
+            next_block: latest + 1,
+        })
+    }
+
+    /// Rebuild the [event filter](RunningEventFilter) from the RocksDB
+    /// EVENTS_COLUMN. This is the primary path after the SQLite `transactions`
+    /// table has been dropped.
+    pub(crate) fn rebuild(
+        tx: &super::Transaction<'_>,
+        latest: BlockNumber,
+    ) -> anyhow::Result<Self> {
+        let mut last_to_block_stmt = tx.inner().prepare(
+            r"
+            SELECT to_block
+            FROM event_filters
+            ORDER BY from_block DESC LIMIT 1
+            ",
+        )?;
+
+        let last_to_block = last_to_block_stmt
+            .query_row([], |row| row.get::<_, u64>(0))
+            .optional()
+            .context("Querying last stored event filter to_block")?;
+
+        let first_running_event_filter_block = match last_to_block {
+            Some(last_to_block) if last_to_block == latest.get() => {
+                let next_block = latest + 1;
+                return Ok(RunningEventFilter {
+                    filter: AggregateBloom::new(next_block),
+                    next_block,
+                });
+            }
+            Some(last_to_block) => BlockNumber::new_or_panic(last_to_block + 1),
+            None => latest
+                .get()
+                .checked_sub(latest.get() % AGGREGATE_BLOOM_BLOCK_RANGE_LEN)
+                .map(BlockNumber::new_or_panic)
+                .unwrap_or(BlockNumber::GENESIS),
+        };
+
+        let total_blocks_to_cover = latest.get() - first_running_event_filter_block.get();
+        let mut covered_blocks = 0u64;
+        let mut last_progress_report = Instant::now();
+
+        tracing::trace!(
+            "Rebuilding running event filter: 0.00% (0/{}) blocks covered",
+            total_blocks_to_cover
+        );
+
+        let events_cf = tx.rocksdb_get_column(&super::transaction::EVENTS_COLUMN);
+        let mut iter = tx.rocksdb().raw_iterator_cf(&events_cf);
+        iter.seek(first_running_event_filter_block.get().to_be_bytes());
+
+        let mut rebuilt_filters: Vec<(BlockNumber, BloomFilter)> = Vec::new();
+        let mut expected_block = first_running_event_filter_block;
+
+        while iter.valid() {
+            let key = iter.key().context("Reading events key")?;
+            if key.len() != 8 {
+                anyhow::bail!("Unexpected EVENTS_COLUMN key length: {}", key.len());
+            }
+            let block_number = BlockNumber::new_or_panic(u64::from_be_bytes(
+                key.try_into().expect("8-byte slice"),
+            ));
+            if block_number > latest {
+                break;
+            }
+
+            if block_number > expected_block {
+                tracing::warn!(
+                    from = %expected_block,
+                    to = %(block_number - 1),
+                    "Blocks missing from EVENTS_COLUMN during event filter rebuild; \
+                     Bloom filter may be incomplete for these blocks"
+                );
+            }
+
+            if last_progress_report.elapsed().as_secs() >= 3 {
+                tracing::trace!(
+                    "Rebuilding running event filter: {:.2}% ({}/{}) blocks covered",
+                    covered_blocks as f64 / total_blocks_to_cover.max(1) as f64 * 100.0,
+                    covered_blocks,
+                    total_blocks_to_cover
+                );
+                last_progress_report = Instant::now();
+            }
+            covered_blocks += 1;
+
+            let blob = iter.value().context("Reading events blob")?;
+            let decompressed = super::transaction::compression::decompress_events(blob)
+                .context("Decompressing events")?;
+            let (efb, _): (super::transaction::dto::EventsForBlock, _) =
+                bincode::serde::decode_from_slice(&decompressed, bincode::config::standard())
+                    .context("Deserializing events")?;
+            let mut bloom = BloomFilter::new();
+            for dto_event in efb.events().into_iter().flatten() {
+                let event = Event::from(dto_event);
+                bloom.set_keys(&event.keys);
+                bloom.set_address(&event.from_address);
+            }
+            rebuilt_filters.push((block_number, bloom));
+
+            expected_block = block_number + 1;
+            iter.next();
+        }
+
+        tracing::trace!(
+            "Rebuilding running event filter: 100.00% ({total}/{total}) blocks covered",
+            total = total_blocks_to_cover,
+        );
+
+        let mut filter = AggregateBloom::new(first_running_event_filter_block);
+
+        for (block_number, bloom) in rebuilt_filters {
             filter.insert(bloom, block_number);
         }
 

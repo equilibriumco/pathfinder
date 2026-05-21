@@ -281,7 +281,7 @@ pub trait RowExt {
     row_felt_wrapper!(get_state_commitment, StateCommitment);
     row_felt_wrapper!(get_state_diff_commitment, StateDiffCommitment);
     row_felt_wrapper!(get_sequencer_address, SequencerAddress);
-    row_felt_wrapper!(get_transaction_hash, TransactionHash);
+
     row_felt_wrapper!(get_class_commitment_leaf, ClassCommitmentLeafHash);
     row_felt_wrapper!(
         get_block_commitment_signature_elem,

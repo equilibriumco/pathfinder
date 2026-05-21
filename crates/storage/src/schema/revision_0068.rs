@@ -33,7 +33,7 @@ pub(crate) fn migrate(tx: &Transaction<'_>, _rocksdb: &crate::RocksDBInner) -> a
         .context("Fetching latest block number")?;
 
     let running_event_filter = if let Some(latest) = latest {
-        RunningEventFilter::rebuild(tx, latest)
+        RunningEventFilter::rebuild_from_sqlite(tx, latest)
             .context("Rebuilding initial running_event_filter")?
     } else {
         // No blocks in the database, create an event filter starting from the Genesis

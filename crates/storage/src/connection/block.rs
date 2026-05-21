@@ -425,27 +425,23 @@ impl Transaction<'_> {
     pub fn first_block_without_transactions(&self) -> anyhow::Result<Option<BlockNumber>> {
         let mut stmt = self
             .inner()
-            .prepare_cached(
-                r"
-                SELECT number
-                FROM block_headers
-                LEFT JOIN transactions ON transactions.block_number = block_headers.number
-                GROUP BY block_headers.number
-                HAVING COUNT(transactions.block_number) = 0
-                ORDER BY number ASC
-                LIMIT 1;
-                ",
-            )
-            .context("Preparing first_block_without_transactions query")?;
-
+            .prepare_cached("SELECT number FROM block_headers ORDER BY number ASC")?;
         let mut rows = stmt
-            .query(params![])
-            .context("Executing first_block_without_transactions")?;
-
-        match rows.next()? {
-            Some(row) => Ok(Some(row.get_block_number(0)?)),
-            None => Ok(None),
+            .query([])
+            .context("Iterating block_headers in ascending order")?;
+        let cf = self.rocksdb_get_column(&crate::connection::TRANSACTIONS_AND_RECEIPTS_COLUMN);
+        while let Some(row) = rows.next()? {
+            let block_number: BlockNumber = row.get_block_number(0)?;
+            let exists = self
+                .rocksdb()
+                .get_pinned_cf(&cf, block_number.get().to_be_bytes())
+                .context("Checking transactions blob presence")?
+                .is_some();
+            if !exists {
+                return Ok(Some(block_number));
+            }
         }
+        Ok(None)
     }
 
     pub fn first_block_with_missing_class_definitions(
