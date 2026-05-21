@@ -1,0 +1,16 @@
+[package]
+name = "pathfinder-pre-confirmed"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+
+[dependencies]
+anyhow = { workspace = true }
+pathfinder-common = { path = "../common" }
+starknet-gateway-types = { path = "../gateway-types" }
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
