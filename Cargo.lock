@@ -8804,6 +8804,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "pathfinder-pre-confirmed"
+version = "0.22.3"
+dependencies = [
+ "anyhow",
+ "pathfinder-common",
+ "starknet-gateway-types",
+ "tokio",
+]
+
+[[package]]
+name = "pathfinder-retry"
+version = "0.22.3"
+dependencies = [
+ "tokio",
+ "tokio-retry",
+]
+
+[[package]]
 name = "pathfinder-rpc"
 version = "0.22.3"
 dependencies = [
@@ -8834,6 +8852,7 @@ dependencies = [
  "pathfinder-ethereum",
  "pathfinder-executor",
  "pathfinder-merkle-tree",
+ "pathfinder-pre-confirmed",
  "pathfinder-serde",
  "pathfinder-storage",
  "pathfinder-version",
