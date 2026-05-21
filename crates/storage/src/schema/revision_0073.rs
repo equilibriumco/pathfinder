@@ -70,23 +70,6 @@ pub mod reorg_regression_checks {
         num_contract_updates_after_reorg_tail == 0
     }
 
-    /// Nonce updates for the purged blocks should be deleted.
-    pub fn nonce_updates_deleted(
-        tx: &mut Transaction<'_>,
-        reorg_tail: pathfinder_common::BlockNumber,
-    ) -> bool {
-        let num_nonce_updates_after_reorg_tail: u64 = tx
-            .inner()
-            .query_row(
-                "SELECT COUNT(*) FROM nonce_updates WHERE block_number >= :reorg_tail",
-                named_params! { ":reorg_tail": &reorg_tail },
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        num_nonce_updates_after_reorg_tail == 0
-    }
-
     /// Block numbers inside the `class_definitions` table should be set to NULL
     /// for all classes declared in the purged blocks.
     pub fn class_definition_removed(tx: &mut Transaction<'_>, class_hash: ClassHash) -> bool {

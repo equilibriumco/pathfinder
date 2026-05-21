@@ -145,7 +145,7 @@ async fn node_main(args: Box<config::NodeArgs>) -> anyhow::Result<Storage> {
 
     // Setup and verify database
 
-    let storage_manager =
+    let mut storage_manager =
         pathfinder_storage::StorageBuilder::file(pathfinder_context.database.clone())
             .journal_mode(config.sqlite_wal)
             .event_filter_cache_size(config.event_filter_cache_size.get())

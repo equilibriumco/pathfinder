@@ -138,6 +138,13 @@ impl RocksDBInner {
     }
 }
 
+/// Startup pruning deferred until after the connection pool is ready. Populated
+/// when the node restarts with a smaller `num_blocks_kept` than before.
+struct PendingPrune {
+    oldest: u64,
+    num_blocks_to_remove: u64,
+}
+
 pub struct StorageManager {
     database_path: PathBuf,
     journal_mode: JournalMode,
@@ -148,6 +155,7 @@ pub struct StorageManager {
     blockchain_history_mode: BlockchainHistoryMode,
     /// Keeps the RocksDB tempdir alive for in-memory databases.
     rocksdb_tempdir: Option<Arc<tempfile::TempDir>>,
+    pending_prune: Option<PendingPrune>,
 }
 
 pub struct ReadOnlyStorageManager(StorageManager);
@@ -163,11 +171,7 @@ impl std::fmt::Debug for StorageManager {
 }
 
 impl StorageManager {
-    fn create_pool_with_flags(
-        &self,
-        capacity: NonZeroU32,
-        open_flags: OpenFlags,
-    ) -> anyhow::Result<Storage> {
+    fn build_pool(&self, capacity: NonZeroU32, open_flags: OpenFlags) -> anyhow::Result<Storage> {
         let journal_mode = self.journal_mode;
         let pool_manager = SqliteConnectionManager::file(&self.database_path)
             .with_flags(open_flags)
@@ -188,15 +192,34 @@ impl StorageManager {
         }))
     }
 
-    pub fn create_pool(&self, capacity: NonZeroU32) -> anyhow::Result<Storage> {
-        self.create_pool_with_flags(capacity, OpenFlags::default())
+    fn apply_pending_prune(&mut self, storage: &Storage) -> anyhow::Result<()> {
+        let Some(pending) = self.pending_prune.take() else {
+            return Ok(());
+        };
+        let mut connection = storage.connection().context("Getting storage connection")?;
+        let tx = connection
+            .transaction()
+            .context("Creating storage transaction")?;
+        for block in pending.oldest..(pending.oldest + pending.num_blocks_to_remove) {
+            let block = BlockNumber::new_or_panic(block);
+            tx.prune_block(block)
+                .with_context(|| format!("Pruning block {block}"))?;
+        }
+        tx.commit().context("Committing prune transaction")?;
+        Ok(())
+    }
+
+    pub fn create_pool(&mut self, capacity: NonZeroU32) -> anyhow::Result<Storage> {
+        let storage = self.build_pool(capacity, OpenFlags::default())?;
+        self.apply_pending_prune(&storage)?;
+        Ok(storage)
     }
 
     pub fn create_read_only_pool(&self, capacity: NonZeroU32) -> anyhow::Result<Storage> {
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_URI;
-        self.create_pool_with_flags(capacity, flags)
+        self.build_pool(capacity, flags)
     }
 }
 
@@ -445,7 +468,7 @@ impl StorageBuilder {
         setup_journal_mode(&mut connection, self.journal_mode).context("Setting journal mode")?;
 
         // Validate that configuration matches database flags.
-        let blockchain_history_mode =
+        let (blockchain_history_mode, pending_prune) =
             self.determine_blockchain_history_mode(&mut connection, is_new_database)?;
         let trie_prune_mode = self.determine_trie_prune_mode(&mut connection, is_new_database)?;
 
@@ -479,6 +502,7 @@ impl StorageBuilder {
             trie_prune_mode,
             blockchain_history_mode,
             rocksdb_tempdir,
+            pending_prune,
         })
     }
 
@@ -561,6 +585,7 @@ impl StorageBuilder {
             trie_prune_mode,
             blockchain_history_mode,
             rocksdb_tempdir,
+            pending_prune: None,
         }))
     }
 
@@ -731,7 +756,7 @@ impl StorageBuilder {
         &self,
         connection: &mut rusqlite::Connection,
         is_new_database: bool,
-    ) -> anyhow::Result<BlockchainHistoryMode> {
+    ) -> anyhow::Result<(BlockchainHistoryMode, Option<PendingPrune>)> {
         let init_num_blocks_kept = connection
             .query_row(
                 "SELECT value FROM storage_options WHERE option = 'prune_blockchain'",
@@ -749,14 +774,14 @@ impl StorageBuilder {
             }
         });
 
-        let validated_blockchain_history_mode = validate_mode_and_update_db(
+        let (validated_blockchain_history_mode, pending_prune) = validate_mode_and_update_db(
             blockchain_history_mode,
             init_num_blocks_kept,
             is_new_database,
             connection,
         )?;
 
-        Ok(validated_blockchain_history_mode)
+        Ok((validated_blockchain_history_mode, pending_prune))
     }
 }
 
@@ -765,7 +790,7 @@ fn validate_mode_and_update_db(
     init_num_blocks_kept: Option<u64>,
     is_new_database: bool,
     connection: &mut rusqlite::Connection,
-) -> anyhow::Result<BlockchainHistoryMode> {
+) -> anyhow::Result<(BlockchainHistoryMode, Option<PendingPrune>)> {
     match blockchain_history_mode {
         BlockchainHistoryMode::Archive => {
             if init_num_blocks_kept.is_some() {
@@ -801,15 +826,15 @@ fn validate_mode_and_update_db(
 
             if is_new_database {
                 tracing::info!("Created new database with blockchain history pruning enabled.");
-                return Ok(blockchain_history_mode);
+                return Ok((blockchain_history_mode, None));
             }
 
-            // If the blockchain history size got reduced, here we use the opportunity to
-            // prune the now excess blocks. If the size got increased, we don't need to do
-            // anything here since the gap will be filled as new blocks are synced.
+            // If the blockchain history size got reduced, prune the now-excess blocks
+            // once we have a connection pool. If the size increased, we don't need to do
+            // anything since the gap will be filled as new blocks are synced.
             let num_blocks_to_remove = match init_num_blocks_kept.checked_sub(num_blocks_kept) {
                 Some(block_diff) if block_diff > 0 => block_diff,
-                _ => return Ok(blockchain_history_mode),
+                _ => return Ok((blockchain_history_mode, None)),
             };
 
             let oldest: Option<u64> = connection
@@ -821,22 +846,16 @@ fn validate_mode_and_update_db(
                 .optional()
                 .context("Fetching oldest block number")?;
 
-            let Some(oldest) = oldest else {
-                return Ok(blockchain_history_mode);
-            };
+            let pending_prune = oldest.map(|oldest| PendingPrune {
+                oldest,
+                num_blocks_to_remove,
+            });
 
-            let tx = connection
-                .transaction()
-                .context("Creating database transaction")?;
-            for block in oldest..(oldest + num_blocks_to_remove) {
-                let block = BlockNumber::new_or_panic(block);
-                pruning::prune_block(&tx, block).context(format!("Pruning block {block}"))?;
-            }
-            tx.commit().context("Committing database transaction")?;
+            return Ok((blockchain_history_mode, pending_prune));
         }
     }
 
-    Ok(blockchain_history_mode)
+    Ok((blockchain_history_mode, None))
 }
 
 impl Storage {

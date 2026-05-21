@@ -3374,10 +3374,6 @@ Blockchain history must include the reorg tail and its parent block to perform a
                 &mut tx,
                 reorg_regression_data.reorg_tail
             ));
-            assert!(reorg_regression_checks::nonce_updates_deleted(
-                &mut tx,
-                reorg_regression_data.reorg_tail
-            ));
             assert!(reorg_regression_checks::class_definition_removed(
                 &mut tx,
                 reorg_regression_data.removed_class_hash

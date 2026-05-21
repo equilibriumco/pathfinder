@@ -393,7 +393,7 @@ impl Transaction<'_> {
         Ok(())
     }
 
-    fn state_update_data(
+    pub(crate) fn state_update_data(
         &self,
         block_number: BlockNumber,
     ) -> anyhow::Result<Option<StateUpdateData>> {
@@ -589,54 +589,40 @@ impl Transaction<'_> {
         contract_address: ContractAddress,
         key: StorageAddress,
     ) -> anyhow::Result<Option<(StorageValue, BlockNumber)>> {
-        let handle_row = |row: &rusqlite::Row<'_>| {
-            Ok((StorageValue(row.get_felt(0)?), row.get_block_number(1)?))
+        let Some(block_number) = self.block_number(block).context("Querying block number")? else {
+            return Ok(None);
         };
-        match block {
-            BlockId::Latest => {
-                let mut stmt = self.inner().prepare_cached(
-                    r"
-                    SELECT storage_value, block_number
-                    FROM storage_updates
-                    JOIN contract_addresses ON contract_addresses.id = storage_updates.contract_address_id
-                    JOIN storage_addresses ON storage_addresses.id = storage_updates.storage_address_id
-                    WHERE contract_address = ? AND storage_address = ?
-                    ORDER BY block_number DESC LIMIT 1
-                    ",
-                )?;
-                stmt.query_row(params![&contract_address, &key], handle_row)
-            }
-            BlockId::Number(number) => {
-                let mut stmt = self.inner().prepare_cached(
-                    r"
-                    SELECT storage_value, block_number
-                    FROM storage_updates
-                    JOIN contract_addresses ON contract_addresses.id = storage_updates.contract_address_id
-                    JOIN storage_addresses ON storage_addresses.id = storage_updates.storage_address_id
-                    WHERE contract_address = ? AND storage_address = ? AND block_number <= ?
-                    ORDER BY block_number DESC LIMIT 1
-                    ",
-                )?;
-                stmt.query_row(params![&contract_address, &key, &number], handle_row)
-            }
-            BlockId::Hash(hash) => {
-                let mut stmt = self.inner().prepare_cached(
-                    r"
-                    SELECT storage_value, block_number
-                    FROM storage_updates
-                    JOIN contract_addresses ON contract_addresses.id = storage_updates.contract_address_id
-                    JOIN storage_addresses ON storage_addresses.id = storage_updates.storage_address_id
-                    WHERE contract_address = ? AND storage_address = ? AND block_number <= (
-                        SELECT number FROM block_headers WHERE hash = ?
-                    )
-                    ORDER BY block_number DESC LIMIT 1
-                    ",
-                )?;
-                stmt.query_row(params![&contract_address, &key, &hash], handle_row)
-            }
+
+        let lookup_key = storage_update_key(block_number, &contract_address, &key);
+        let storage_updates_column = self.rocksdb_get_column(&STORAGE_UPDATES_COLUMN);
+
+        let mut read_options = ReadOptions::default();
+        read_options.set_prefix_same_as_start(true);
+        let mut iter = self
+            .rocksdb()
+            .raw_iterator_cf_opt(&storage_updates_column, read_options);
+        iter.seek(lookup_key);
+        if !iter.valid() {
+            return Ok(None);
         }
-        .optional()
-        .context("Querying storage value with block")
+
+        let key_bytes = iter
+            .key()
+            .context("Reading storage update key from RocksDB")?;
+        if key_bytes.len() != STORAGE_UPDATE_KEY_LEN {
+            anyhow::bail!("Unexpected STORAGE_UPDATES key length: {}", key_bytes.len());
+        }
+        let inverted: [u8; 4] = key_bytes[STORAGE_UPDATE_KEY_LEN - 4..]
+            .try_into()
+            .expect("4-byte slice");
+        let inverted = u32::from_be_bytes(inverted);
+        let found_block = BlockNumber::new_or_panic(u64::from(u32::MAX - inverted));
+
+        let value = iter
+            .value()
+            .context("Reading storage update value from RocksDB")?;
+        let value = Felt::from_be_slice(value).context("Parsing storage update value")?;
+        Ok(Some((StorageValue(value), found_block)))
     }
 
     pub fn contract_exists(
@@ -692,7 +678,7 @@ impl Transaction<'_> {
                 .context("Querying block number")?,
         };
         let Some(block_number) = block_number else {
-            return Err(anyhow::anyhow!("Block not found"));
+            return Ok(None);
         };
 
         let key = nonce_update_key(block_number, &contract_address);
@@ -1988,5 +1974,86 @@ mod tests {
                 .unwrap();
             assert_eq!(by_number, None);
         }
+    }
+
+    #[test]
+    fn storage_value_with_block_returns_latest_le_block() {
+        let storage = crate::StorageBuilder::in_memory().unwrap();
+        let mut conn = storage.connection().unwrap();
+        let tx = conn.transaction().unwrap();
+
+        let contract = contract_address!("0xc");
+        let key = storage_address!("0x2");
+        let writes = [
+            (5u64, storage_value!("0x100")),
+            (10u64, storage_value!("0x200")),
+            (15u64, storage_value!("0x300")),
+        ];
+        for (n, v) in &writes {
+            let header = BlockHeader::builder()
+                .number(BlockNumber::new_or_panic(*n))
+                .finalize_with_hash(BlockHash(pathfinder_crypto::Felt::from(*n)));
+            tx.insert_block_header(&header).unwrap();
+            let state_update = StateUpdate::default().with_storage_update(contract, key, *v);
+            tx.insert_state_update(BlockNumber::new_or_panic(*n), &state_update)
+                .unwrap();
+        }
+
+        // Header for block 12 without any storage update, so the RocksDB
+        // prefix-seek path is exercised (block_number returns Some(12)).
+        let header12 = BlockHeader::builder()
+            .number(BlockNumber::new_or_panic(12))
+            .finalize_with_hash(BlockHash(pathfinder_crypto::Felt::from(12u64)));
+        tx.insert_block_header(&header12).unwrap();
+
+        tx.commit().unwrap();
+
+        let tx = conn.transaction().unwrap();
+
+        // At block 12: should return value from block 10 (latest write <= 12).
+        let (value, block) = tx
+            .storage_value_with_block(
+                BlockId::Number(BlockNumber::new_or_panic(12)),
+                contract,
+                key,
+            )
+            .unwrap()
+            .expect("storage value present");
+        assert_eq!(value, storage_value!("0x200"));
+        assert_eq!(block, BlockNumber::new_or_panic(10));
+
+        // At block 4: no value yet (no header for block 4, so block_number returns None
+        // → Ok(None)).
+        assert!(tx
+            .storage_value_with_block(BlockId::Number(BlockNumber::new_or_panic(4)), contract, key,)
+            .unwrap()
+            .is_none());
+
+        // Latest: block 15.
+        let (value, block) = tx
+            .storage_value_with_block(BlockId::Latest, contract, key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, storage_value!("0x300"));
+        assert_eq!(block, BlockNumber::new_or_panic(15));
+    }
+
+    #[test]
+    fn contract_nonce_missing_block_is_ok_none() {
+        let storage = crate::StorageBuilder::in_memory().unwrap();
+        let mut conn = storage.connection().unwrap();
+        let tx = conn.transaction().unwrap();
+
+        let result = tx
+            .contract_nonce(
+                contract_address!("0xa"),
+                BlockId::Hash(block_hash!("0xdead")),
+            )
+            .unwrap();
+        assert!(
+            result.is_none(),
+            "missing block should be Ok(None), got {:?}",
+            result
+        );
     }
 }
