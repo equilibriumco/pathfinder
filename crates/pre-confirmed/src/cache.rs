@@ -128,3 +128,228 @@ impl Default for PreConfirmedCache {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use pathfinder_common::{BlockHeader, BlockNumber};
+    use tokio::time::timeout;
+
+    use super::PreConfirmedCache;
+    use crate::data::PendingData;
+
+    fn sample_data(number: u64) -> PendingData {
+        PendingData::empty(&BlockHeader {
+            number: BlockNumber::new_or_panic(number),
+            ..Default::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn read_returns_default_when_unwritten() {
+        let cache = PreConfirmedCache::new();
+        let data = cache.read().await.unwrap();
+        assert_eq!(data, PendingData::default());
+    }
+
+    #[tokio::test]
+    async fn read_returns_stored_data() {
+        let cache = PreConfirmedCache::new();
+        let expected = sample_data(42);
+        cache.store(expected.clone());
+        assert_eq!(cache.read().await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn store_notifies_subscribers() {
+        let cache = PreConfirmedCache::new();
+        let mut rx = cache.subscribe();
+        let _ = rx.borrow_and_update();
+
+        cache.store(sample_data(7));
+
+        assert!(timeout(Duration::from_millis(50), rx.changed())
+            .await
+            .expect("subscriber should observe the change")
+            .is_ok());
+        assert_eq!(rx.borrow().pre_confirmed_block_number().get(), 8);
+    }
+
+    #[tokio::test]
+    async fn refresh_does_not_notify_subscribers() {
+        let cache = PreConfirmedCache::new();
+        let mut rx = cache.subscribe();
+        let _ = rx.borrow_and_update();
+
+        cache.refresh();
+
+        assert!(timeout(Duration::from_millis(50), rx.changed())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn wait_for_read_completes_when_read() {
+        let cache = Arc::new(PreConfirmedCache::new());
+
+        let waiter_cache = cache.clone();
+        let waiter = tokio::spawn(async move { waiter_cache.wait_for_read().await });
+
+        let _ = cache.read().await.unwrap();
+
+        timeout(Duration::from_millis(100), waiter)
+            .await
+            .expect("wait_for_read should complete")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn idle_cache_blocks_read_until_store() {
+        let cache = Arc::new(PreConfirmedCache::with_cold_start_timeout(
+            Duration::from_secs(5),
+        ));
+        cache.mark_idle();
+
+        let reader_cache = cache.clone();
+        let reader = tokio::spawn(async move { reader_cache.read().await });
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(!reader.is_finished(), "reader should still be blocked");
+
+        let expected = sample_data(11);
+        cache.store(expected.clone());
+
+        let got = timeout(Duration::from_millis(100), reader)
+            .await
+            .expect("reader should unblock")
+            .unwrap()
+            .unwrap();
+        assert_eq!(got, expected);
+    }
+
+    #[tokio::test]
+    async fn idle_cache_blocks_read_until_refresh() {
+        let cache = Arc::new(PreConfirmedCache::with_cold_start_timeout(
+            Duration::from_secs(5),
+        ));
+        let initial = sample_data(99);
+        cache.store(initial.clone());
+        cache.mark_idle();
+
+        let reader_cache = cache.clone();
+        let reader = tokio::spawn(async move { reader_cache.read().await });
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(!reader.is_finished());
+
+        cache.refresh();
+
+        let got = timeout(Duration::from_millis(100), reader)
+            .await
+            .expect("reader should unblock on refresh")
+            .unwrap()
+            .unwrap();
+        assert_eq!(got, initial);
+    }
+
+    #[tokio::test]
+    async fn concurrent_cold_reads_share_one_refresh() {
+        let cache = Arc::new(PreConfirmedCache::with_cold_start_timeout(
+            Duration::from_secs(5),
+        ));
+        cache.mark_idle();
+
+        let readers: Vec<_> = (0..10)
+            .map(|_| {
+                let c = cache.clone();
+                tokio::spawn(async move { c.read().await })
+            })
+            .collect();
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let expected = sample_data(123);
+        cache.store(expected.clone());
+
+        for r in readers {
+            let got = timeout(Duration::from_millis(200), r)
+                .await
+                .expect("reader should unblock")
+                .unwrap()
+                .unwrap();
+            assert_eq!(got, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn cold_read_times_out_when_no_refresh() {
+        let cache = PreConfirmedCache::with_cold_start_timeout(Duration::from_millis(40));
+        cache.mark_idle();
+
+        let result = cache.read().await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn store_after_idle_clears_stale() {
+        let cache = PreConfirmedCache::with_cold_start_timeout(Duration::from_millis(50));
+        cache.mark_idle();
+        cache.store(sample_data(1));
+
+        timeout(Duration::from_millis(20), cache.read())
+            .await
+            .expect("read should be immediate once fresh")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn refresh_after_idle_clears_stale() {
+        let cache = PreConfirmedCache::with_cold_start_timeout(Duration::from_millis(50));
+        cache.mark_idle();
+        cache.refresh();
+
+        timeout(Duration::from_millis(20), cache.read())
+            .await
+            .expect("read should be immediate once fresh")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn repeated_mark_idle_is_idempotent() {
+        let cache = Arc::new(PreConfirmedCache::with_cold_start_timeout(
+            Duration::from_secs(5),
+        ));
+        cache.mark_idle();
+        cache.mark_idle();
+        cache.mark_idle();
+
+        let reader_cache = cache.clone();
+        let reader = tokio::spawn(async move { reader_cache.read().await });
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(!reader.is_finished());
+
+        cache.refresh();
+        timeout(Duration::from_millis(100), reader)
+            .await
+            .expect("reader should unblock")
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn active_reads_return_immediately() {
+        let cache = PreConfirmedCache::new();
+        cache.store(sample_data(10));
+        let expected = sample_data(20);
+        cache.store(expected.clone());
+
+        let got = timeout(Duration::from_millis(10), cache.read())
+            .await
+            .expect("read should be immediate")
+            .unwrap();
+        assert_eq!(got, expected);
+    }
+}
