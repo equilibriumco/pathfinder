@@ -3,6 +3,7 @@
 mod cache;
 mod data;
 
+pub use cache::PreConfirmedCache;
 pub use data::{
     PendingBlocks,
     PendingData,
