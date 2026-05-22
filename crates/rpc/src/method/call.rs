@@ -255,6 +255,8 @@ mod tests {
     }
 
     mod in_memory {
+        use std::sync::Arc;
+
         use assert_matches::assert_matches;
         use pathfinder_common::class_definition::{
             SerializedCairoDefinition,
@@ -263,6 +265,7 @@ mod tests {
         };
         use pathfinder_common::felt;
         use pathfinder_common::prelude::*;
+        use pathfinder_pre_confirmed::PreConfirmedCache;
         use starknet_gateway_test_fixtures::class_definitions::{
             CONTRACT_DEFINITION,
             CONTRACT_DEFINITION_CLASS_HASH,
@@ -370,8 +373,9 @@ mod tests {
                 StateUpdate::default().with_storage_update(contract_address, test_key, new_value),
             );
 
-            let (_tx, rx) = tokio::sync::watch::channel(pending_data);
-            let context = context.with_pending_data(rx);
+            let pre_confirmed_cache = Arc::new(PreConfirmedCache::new());
+            pre_confirmed_cache.store(pending_data);
+            let context = context.with_pre_confirmed_cache(pre_confirmed_cache);
 
             // unchanged on latest block
             let input = Input {
@@ -411,8 +415,9 @@ mod tests {
                     .with_deployed_contract(new_contract_address, CONTRACT_DEFINITION_CLASS_HASH)
                     .with_storage_update(new_contract_address, test_key, new_value),
             );
-            let (_tx, rx) = tokio::sync::watch::channel(pending_data);
-            let context = context.with_pending_data(rx);
+            let pre_confirmed_cache = Arc::new(PreConfirmedCache::new());
+            pre_confirmed_cache.store(pending_data);
+            let context = context.with_pre_confirmed_cache(pre_confirmed_cache);
 
             let input = Input {
                 request: FunctionCall {
@@ -462,8 +467,9 @@ mod tests {
                     .with_deployed_contract(new_contract_address, ClassHash(sierra_hash.0))
                     .with_storage_update(new_contract_address, storage_key, storage_value),
             );
-            let (_tx, rx) = tokio::sync::watch::channel(pending_data);
-            let context = context.with_pending_data(rx);
+            let pre_confirmed_cache = Arc::new(PreConfirmedCache::new());
+            pre_confirmed_cache.store(pending_data);
+            let context = context.with_pre_confirmed_cache(pre_confirmed_cache);
 
             let input = Input {
                 request: FunctionCall {

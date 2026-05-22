@@ -103,7 +103,9 @@ pub async fn get_transaction_receipt(
             .get(&db_tx, rpc_version)
             .context("Querying pending data")?;
 
-        if let Some(finalized_tx_data) = pending.find_finalized_tx_data(input.transaction_hash) {
+        if let Some(finalized_tx_data) =
+            crate::pending::find_finalized_tx_data(&pending, input.transaction_hash)
+        {
             return Ok(Output::Pending {
                 receipt: finalized_tx_data.receipt,
                 block_number: finalized_tx_data.block_number,

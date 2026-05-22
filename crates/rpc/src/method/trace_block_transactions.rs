@@ -822,6 +822,8 @@ impl From<TransactionExecutionError> for TraceBlockTransactionsError {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::sync::Arc;
+
     use assert_matches::assert_matches;
     use pathfinder_common::class_definition::{
         SerializedCasmDefinition,
@@ -832,6 +834,7 @@ pub(crate) mod tests {
     use pathfinder_common::receipt::Receipt;
     use pathfinder_common::Chain;
     use pathfinder_crypto::Felt;
+    use pathfinder_pre_confirmed::PreConfirmedCache;
     use starknet_gateway_types::reply::{GasPrices, L1DataAvailabilityMode};
     use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
@@ -1295,10 +1298,10 @@ pub(crate) mod tests {
             .unwrap()
         };
 
-        let (tx, rx) = tokio::sync::watch::channel(Default::default());
-        tx.send(pending_data).unwrap();
+        let pre_confirmed_cache = Arc::new(PreConfirmedCache::new());
+        pre_confirmed_cache.store(pending_data);
 
-        let context = context.with_pending_data(rx);
+        let context = context.with_pre_confirmed_cache(pre_confirmed_cache);
 
         let traces = vec![
             Trace {
@@ -1421,10 +1424,10 @@ pub(crate) mod tests {
             .unwrap()
         };
 
-        let (tx, rx) = tokio::sync::watch::channel(Default::default());
-        tx.send(pending_data).unwrap();
+        let pre_confirmed_cache = Arc::new(PreConfirmedCache::new());
+        pre_confirmed_cache.store(pending_data);
 
-        let context = context.with_pending_data(rx);
+        let context = context.with_pre_confirmed_cache(pre_confirmed_cache);
 
         let traces = vec![
             Trace {
