@@ -207,32 +207,35 @@ impl PendingData {
             transaction_receipts,
         };
 
-        let pre_latest_data = pre_latest_data.map(|pre_latest| {
-            let (pre_latest_block_number, pre_latest_block, pre_latest_state_update) = *pre_latest;
-            assert_eq!(
-                pre_latest_block_number + 1,
-                pre_confirmed_block_number,
-                "Pre-confirmed block should be child of pre-latest"
-            );
-            let pre_latest_block = PreLatestBlock {
-                number: pre_latest_block_number,
-                parent_hash: pre_latest_block.parent_hash,
-                l1_gas_price: pre_latest_block.l1_gas_price,
-                l1_data_gas_price: pre_latest_block.l1_data_gas_price,
-                l2_gas_price: pre_latest_block.l2_gas_price,
-                sequencer_address: pre_latest_block.sequencer_address,
-                status: Status::Pending,
-                timestamp: pre_latest_block.timestamp,
-                starknet_version: pre_latest_block.starknet_version,
-                l1_da_mode: pre_latest_block.l1_da_mode.into(),
-                transactions: pre_latest_block.transactions,
-                transaction_receipts: pre_latest_block.transaction_receipts,
-            };
-            PreLatestData {
-                block: pre_latest_block,
-                state_update: pre_latest_state_update,
-            }
-        });
+        let pre_latest_data = pre_latest_data
+            .map(|pre_latest| {
+                let (pre_latest_block_number, pre_latest_block, pre_latest_state_update) =
+                    *pre_latest;
+                anyhow::ensure!(
+                    pre_latest_block_number + 1 == pre_confirmed_block_number,
+                    "Pre-confirmed block {pre_confirmed_block_number} is not the child of \
+                     pre-latest {pre_latest_block_number}",
+                );
+                let pre_latest_block = PreLatestBlock {
+                    number: pre_latest_block_number,
+                    parent_hash: pre_latest_block.parent_hash,
+                    l1_gas_price: pre_latest_block.l1_gas_price,
+                    l1_data_gas_price: pre_latest_block.l1_data_gas_price,
+                    l2_gas_price: pre_latest_block.l2_gas_price,
+                    sequencer_address: pre_latest_block.sequencer_address,
+                    status: Status::Pending,
+                    timestamp: pre_latest_block.timestamp,
+                    starknet_version: pre_latest_block.starknet_version,
+                    l1_da_mode: pre_latest_block.l1_da_mode.into(),
+                    transactions: pre_latest_block.transactions,
+                    transaction_receipts: pre_latest_block.transaction_receipts,
+                };
+                Ok(PreLatestData {
+                    block: pre_latest_block,
+                    state_update: pre_latest_state_update,
+                })
+            })
+            .transpose()?;
 
         let aggregated_state_update = Arc::new(
             pre_latest_data
