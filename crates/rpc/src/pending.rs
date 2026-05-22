@@ -1,29 +1,20 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Context;
-use pathfinder_common::{
-    BlockHash,
-    BlockHeader,
-    BlockNumber,
-    BlockTimestamp,
-    L1DataAvailabilityMode,
-    SequencerAddress,
-    StarknetVersion,
-    StateCommitment,
-    StateUpdate,
+use pathfinder_common::{BlockNumber, StateUpdate};
+use pathfinder_pre_confirmed::PreConfirmedCache;
+pub use pathfinder_pre_confirmed::{
+    PendingBlocks,
+    PendingData,
+    PreConfirmedBlock,
+    PreLatestBlock,
+    PreLatestData,
+    TxnReceiptAndEvents,
 };
 use pathfinder_storage::Transaction;
-use starknet_gateway_types::reply::{GasPrices, Status};
 use tokio::sync::watch::Receiver as WatchReceiver;
-use tokio::sync::Notify;
 
 use crate::RpcVersion;
-
-type TxnReceiptAndEvents = (
-    pathfinder_common::receipt::Receipt,
-    Vec<pathfinder_common::event::Event>,
-);
 
 /// A finalized transaction along with its receipt, events, status and the block
 /// number it was included in.
@@ -35,585 +26,21 @@ pub struct FinalizedTxData {
     pub finality_status: crate::dto::TxnFinalityStatus,
 }
 
-/// Provides the latest [PendingData] which is consistent with a given
-/// view of storage.
-///
-/// Reading data fires `on_read`, signalling the upstream polling loop
-/// that the cache is in use.
+/// Validates the cached pre-confirmed data against the latest block in
+/// storage and the JSON-RPC version before returning it.
 #[derive(Clone)]
 pub struct PendingWatcher {
-    receiver: WatchReceiver<PendingData>,
-    on_read: Arc<Notify>,
-}
-
-#[derive(Clone, Default, Debug, PartialEq)]
-pub struct PreConfirmedBlock {
-    pub number: BlockNumber,
-
-    pub l1_gas_price: GasPrices,
-    pub l1_data_gas_price: GasPrices,
-    pub l2_gas_price: GasPrices,
-
-    pub sequencer_address: SequencerAddress,
-    pub status: Status,
-    pub timestamp: BlockTimestamp,
-    pub starknet_version: StarknetVersion,
-    pub l1_da_mode: L1DataAvailabilityMode,
-
-    pub transactions: Vec<pathfinder_common::transaction::Transaction>,
-
-    pub transaction_receipts: Vec<TxnReceiptAndEvents>,
-}
-
-#[derive(Clone, Default, Debug, PartialEq)]
-pub struct PreLatestBlock {
-    pub number: BlockNumber,
-
-    pub parent_hash: BlockHash,
-
-    pub l1_gas_price: GasPrices,
-    pub l1_data_gas_price: GasPrices,
-    pub l2_gas_price: GasPrices,
-
-    pub sequencer_address: SequencerAddress,
-    pub status: Status,
-    pub timestamp: BlockTimestamp,
-    pub starknet_version: StarknetVersion,
-    pub l1_da_mode: L1DataAvailabilityMode,
-
-    pub transactions: Vec<pathfinder_common::transaction::Transaction>,
-
-    pub transaction_receipts: Vec<TxnReceiptAndEvents>,
-}
-
-#[derive(Clone, Default, Debug, PartialEq)]
-pub struct PreLatestData {
-    pub block: PreLatestBlock,
-    pub state_update: StateUpdate,
-}
-
-/// Currently known chain data that is yet to be confirmed on L2
-#[derive(Clone, Default, Debug, PartialEq)]
-pub struct PendingBlocks {
-    /// Pre confirmed block, sequencer's nightly state
-    pub pre_confirmed: PreConfirmedBlock,
-    /// Pre-latest parent of pre-confirmed block, exists if not yet confirmed
-    pub pre_latest: Option<PreLatestData>,
-    /// Txs submitted but not yet executed
-    pub candidate_transactions: Vec<pathfinder_common::transaction::Transaction>,
-}
-
-impl PendingBlocks {
-    pub fn transactions(&self) -> &[pathfinder_common::transaction::Transaction] {
-        &self.pre_confirmed.transactions
-    }
-
-    pub fn pre_latest_transactions(
-        &self,
-    ) -> Option<&[pathfinder_common::transaction::Transaction]> {
-        self.pre_latest
-            .as_ref()
-            .map(|data| data.block.transactions.as_slice())
-    }
-
-    pub fn tx_receipts_and_events(&self) -> &[TxnReceiptAndEvents] {
-        &self.pre_confirmed.transaction_receipts
-    }
-
-    pub fn pre_latest_tx_receipts_and_events(&self) -> Option<&[TxnReceiptAndEvents]> {
-        self.pre_latest
-            .as_ref()
-            .map(|data| data.block.transaction_receipts.as_slice())
-    }
-
-    pub fn finality_status(&self) -> crate::dto::TxnFinalityStatus {
-        // For more info:
-        //  - on why `AcceptedOnL2` is wrong: https://github.com/equilibriumco/pathfinder/issues/3259
-        //  - on why `PendingBlockVariant::Pending` case was dead code:
-        //  https://github.com/equilibriumco/pathfinder/issues/3272
-        crate::dto::TxnFinalityStatus::PreConfirmed
-    }
-}
-
-#[derive(Clone, Default, Debug, PartialEq)]
-pub struct PendingData {
-    /// The blocks container, holding pre-confirmed, pre-latest, and candidate
-    /// data.
-    blocks: Arc<PendingBlocks>,
-    /// The state update of the pre-confirmed block.
-    ///
-    /// Does not include the [pre-latest](PreLatestData) state update.
-    state_update: Arc<StateUpdate>,
-    /// The aggregated state update. Contains the merged state update from
-    /// the pre-latest block (if exists) and the pre-confirmed block.
-    aggregated_state_update: Arc<StateUpdate>,
-    /// The block number of the pre-confirmed block.
-    number: BlockNumber,
-}
-
-impl PendingData {
-    #[cfg(test)]
-    pub fn from_parts(
-        blocks: PendingBlocks,
-        state_update: StateUpdate,
-        aggregated_state_update: StateUpdate,
-        number: BlockNumber,
-    ) -> Self {
-        Self {
-            blocks: Arc::new(blocks),
-            state_update: Arc::new(state_update),
-            aggregated_state_update: Arc::new(aggregated_state_update),
-            number,
-        }
-    }
-
-    /// Converts a pre-confirmed block fetched from the gateway into pending
-    /// data.
-    ///
-    /// Candidate transactions are filtered out and handled separately. State
-    /// update is constructed from the per-transaction updates.
-    pub fn try_from_pre_confirmed_block(
-        block: Box<starknet_gateway_types::reply::PreConfirmedBlock>,
-        number: BlockNumber,
-    ) -> anyhow::Result<Self> {
-        Self::try_from_pre_confirmed_and_pre_latest(block, number, None)
-    }
-
-    /// Converts a pre-confirmed block and optional pre-latest block fetched
-    /// from the gateway into pending data.
-    ///
-    /// Candidate transactions are filtered out and handled separately. State
-    /// update is constructed from the per-transaction updates.
-    ///
-    /// If the pre-latest block exists, the pre-confirmed block is expected to
-    /// be its child.
-    pub fn try_from_pre_confirmed_and_pre_latest(
-        pre_confirmed_block: Box<starknet_gateway_types::reply::PreConfirmedBlock>,
-        pre_confirmed_block_number: BlockNumber,
-        pre_latest_data: Option<
-            Box<(
-                BlockNumber,
-                starknet_gateway_types::reply::PreLatestBlock,
-                StateUpdate,
-            )>,
-        >,
-    ) -> anyhow::Result<Self> {
-        // Get rid of Nones in transaction receipt
-        let transaction_receipts: Vec<_> = pre_confirmed_block
-            .transaction_receipts
-            .into_iter()
-            .flatten()
-            .collect();
-
-        let pre_confirmed_transaction_hashes: HashSet<_> = transaction_receipts
-            .iter()
-            .map(|(receipt, _)| receipt.transaction_hash)
-            .collect();
-        let (pre_confirmed_transactions, candidate_transactions): (Vec<_>, Vec<_>) =
-            pre_confirmed_block
-                .transactions
-                .into_iter()
-                .partition(|tx| pre_confirmed_transaction_hashes.contains(&tx.hash));
-
-        if transaction_receipts.len() != pre_confirmed_transactions.len() {
-            anyhow::bail!("Mismatched transaction and receipt count in pre-confirmed block");
-        }
-
-        // Compute aggregated state diff for the pre-confirmed block.
-        let mut pre_confirmed_state_diff =
-            starknet_gateway_types::reply::state_update::StateDiff::default();
-        for transaction_diff in pre_confirmed_block
-            .transaction_state_diffs
-            .into_iter()
-            .flatten()
-        {
-            pre_confirmed_state_diff.extend(transaction_diff);
-        }
-        pre_confirmed_state_diff.deduplicate();
-
-        let pre_confirmed_state_update = {
-            let state_update = starknet_gateway_types::reply::StateUpdate {
-                state_diff: pre_confirmed_state_diff.clone(),
-                block_hash: Default::default(),
-                new_root: StateCommitment::default(),
-                old_root: StateCommitment::default(),
-            };
-            Arc::new(StateUpdate::from(state_update))
-        };
-
-        let pre_confirmed_block = PreConfirmedBlock {
-            number: pre_confirmed_block_number,
-            l1_gas_price: pre_confirmed_block.l1_gas_price,
-            l1_data_gas_price: pre_confirmed_block.l1_data_gas_price,
-            l2_gas_price: pre_confirmed_block.l2_gas_price,
-            sequencer_address: pre_confirmed_block.sequencer_address,
-            status: Status::PreConfirmed,
-            timestamp: pre_confirmed_block.timestamp,
-            starknet_version: pre_confirmed_block.starknet_version,
-            l1_da_mode: pre_confirmed_block.l1_da_mode.into(),
-            transactions: pre_confirmed_transactions,
-            transaction_receipts,
-        };
-
-        let pre_latest_data = pre_latest_data.map(|pre_latest| {
-            let (pre_latest_block_number, pre_latest_block, pre_latest_state_update) = *pre_latest;
-            assert_eq!(
-                pre_latest_block_number + 1,
-                pre_confirmed_block_number,
-                "Pre-confirmed block should be child of pre-latest"
-            );
-            let pre_latest_block = PreLatestBlock {
-                number: pre_latest_block_number,
-                parent_hash: pre_latest_block.parent_hash,
-                l1_gas_price: pre_latest_block.l1_gas_price,
-                l1_data_gas_price: pre_latest_block.l1_data_gas_price,
-                l2_gas_price: pre_latest_block.l2_gas_price,
-                sequencer_address: pre_latest_block.sequencer_address,
-                status: Status::Pending,
-                timestamp: pre_latest_block.timestamp,
-                starknet_version: pre_latest_block.starknet_version,
-                l1_da_mode: pre_latest_block.l1_da_mode.into(),
-                transactions: pre_latest_block.transactions,
-                transaction_receipts: pre_latest_block.transaction_receipts,
-            };
-            PreLatestData {
-                block: pre_latest_block,
-                state_update: pre_latest_state_update,
-            }
-        });
-
-        let aggregated_state_update = Arc::new(
-            pre_latest_data
-                .clone()
-                .map(|data| data.state_update)
-                .unwrap_or_default()
-                .apply(pre_confirmed_state_update.as_ref()),
-        );
-
-        Ok(Self {
-            blocks: Arc::new(PendingBlocks {
-                pre_confirmed: pre_confirmed_block,
-                pre_latest: pre_latest_data,
-                candidate_transactions,
-            }),
-            state_update: pre_confirmed_state_update,
-            aggregated_state_update,
-            number: pre_confirmed_block_number,
-        })
-    }
-
-    fn empty(latest: &BlockHeader) -> Self {
-        let block = PreConfirmedBlock {
-            number: latest.number + 1,
-            l1_gas_price: GasPrices {
-                price_in_wei: latest.eth_l1_gas_price,
-                price_in_fri: latest.strk_l1_gas_price,
-            },
-            l1_data_gas_price: GasPrices {
-                price_in_wei: latest.eth_l1_data_gas_price,
-                price_in_fri: latest.strk_l1_data_gas_price,
-            },
-            l2_gas_price: GasPrices {
-                price_in_wei: latest.eth_l2_gas_price,
-                price_in_fri: latest.strk_l2_gas_price,
-            },
-            sequencer_address: latest.sequencer_address,
-            status: Status::PreConfirmed,
-            timestamp: latest.timestamp,
-            starknet_version: latest.starknet_version,
-            l1_da_mode: latest.l1_da_mode,
-            transactions: vec![],
-            transaction_receipts: vec![],
-        };
-        let state_update =
-            Arc::new(StateUpdate::default().with_parent_state_commitment(latest.state_commitment));
-        Self {
-            blocks: Arc::new(PendingBlocks {
-                pre_confirmed: block,
-                candidate_transactions: vec![],
-                pre_latest: None,
-            }),
-            state_update: Arc::clone(&state_update),
-            aggregated_state_update: state_update,
-            number: latest.number + 1,
-        }
-    }
-
-    pub fn pre_confirmed_block_number(&self) -> BlockNumber {
-        self.number
-    }
-
-    pub fn pre_latest_block_number(&self) -> Option<BlockNumber> {
-        self.blocks
-            .pre_latest
-            .as_ref()
-            .map(|data| data.block.number)
-    }
-
-    /// Returns a mutable reference to the block number.
-    #[cfg(test)]
-    pub fn pre_confirmed_block_number_mut(&mut self) -> &mut BlockNumber {
-        &mut self.number
-    }
-
-    /// Get the header of the pre-confirmed block.
-    pub fn pre_confirmed_header(&self) -> BlockHeader {
-        let block = &self.blocks.pre_confirmed;
-        BlockHeader {
-            // Pre-confirmed blocks do not have a parent hash.
-            parent_hash: pathfinder_common::BlockHash::ZERO,
-            number: self.number,
-            timestamp: block.timestamp,
-            eth_l1_gas_price: block.l1_gas_price.price_in_wei,
-            strk_l1_gas_price: block.l1_gas_price.price_in_fri,
-            eth_l1_data_gas_price: block.l1_data_gas_price.price_in_wei,
-            strk_l1_data_gas_price: block.l1_data_gas_price.price_in_fri,
-            eth_l2_gas_price: block.l2_gas_price.price_in_wei,
-            strk_l2_gas_price: block.l2_gas_price.price_in_fri,
-            sequencer_address: block.sequencer_address,
-            starknet_version: block.starknet_version,
-            // Pre-confirmed block does not know what these are yet.
-            hash: Default::default(),
-            event_commitment: Default::default(),
-            state_commitment: Default::default(),
-            transaction_commitment: Default::default(),
-            transaction_count: Default::default(),
-            event_count: Default::default(),
-            l1_da_mode: block.l1_da_mode,
-            receipt_commitment: Default::default(),
-            state_diff_commitment: Default::default(),
-            state_diff_length: Default::default(),
-        }
-    }
-
-    /// Get the header of the pre-latest block, if it exists.
-    pub fn pre_latest_header(&self) -> Option<BlockHeader> {
-        self.blocks.pre_latest.as_ref().map(|data| {
-            let pre_latest_block = &data.block;
-            BlockHeader {
-                parent_hash: pre_latest_block.parent_hash,
-                number: pre_latest_block.number,
-                timestamp: pre_latest_block.timestamp,
-                eth_l1_gas_price: pre_latest_block.l1_gas_price.price_in_wei,
-                strk_l1_gas_price: pre_latest_block.l1_gas_price.price_in_fri,
-                eth_l1_data_gas_price: pre_latest_block.l1_data_gas_price.price_in_wei,
-                strk_l1_data_gas_price: pre_latest_block.l1_data_gas_price.price_in_fri,
-                eth_l2_gas_price: pre_latest_block.l2_gas_price.price_in_wei,
-                strk_l2_gas_price: pre_latest_block.l2_gas_price.price_in_fri,
-                sequencer_address: pre_latest_block.sequencer_address,
-                starknet_version: pre_latest_block.starknet_version,
-                // Pre-latest block does not know what these are yet.
-                hash: Default::default(),
-                event_commitment: Default::default(),
-                state_commitment: Default::default(),
-                transaction_commitment: Default::default(),
-                transaction_count: Default::default(),
-                event_count: Default::default(),
-                l1_da_mode: pre_latest_block.l1_da_mode,
-                receipt_commitment: Default::default(),
-                state_diff_commitment: Default::default(),
-                state_diff_length: Default::default(),
-            }
-        })
-    }
-
-    /// Get the pending blocks container.
-    pub fn pending_block(&self) -> Arc<PendingBlocks> {
-        Arc::clone(&self.blocks)
-    }
-
-    /// Get the pre-latest block, if it exists.
-    pub fn pre_latest_block(&self) -> Option<Arc<PreLatestBlock>> {
-        self.blocks
-            .pre_latest
-            .as_ref()
-            .map(|data| Arc::new(data.block.clone()))
-    }
-
-    /// Get the state update of the pre-confirmed block.
-    pub fn pre_confirmed_state_update(&self) -> Arc<StateUpdate> {
-        Arc::clone(&self.state_update)
-    }
-
-    /// Get the aggregated state update from the pre-latest (if exists) and the
-    /// pre-confirmed block.
-    pub fn aggregated_state_update(&self) -> Arc<StateUpdate> {
-        Arc::clone(&self.aggregated_state_update)
-    }
-
-    /// Get the transactions in the pre-confirmed block.
-    pub fn pre_confirmed_transactions(&self) -> &[pathfinder_common::transaction::Transaction] {
-        self.blocks.transactions()
-    }
-
-    /// Get the transactions in the pre-latest block, if it exists.
-    pub fn pre_latest_transactions(
-        &self,
-    ) -> Option<&[pathfinder_common::transaction::Transaction]> {
-        self.blocks.pre_latest_transactions()
-    }
-
-    /// Get the transaction receipts and events in the pre-confirmed block.
-    pub fn pre_confirmed_tx_receipts_and_events(&self) -> &[TxnReceiptAndEvents] {
-        self.blocks.tx_receipts_and_events()
-    }
-
-    /// Get the transaction receipts and events in the pre-latest block, if it
-    /// exists.
-    pub fn pre_latest_tx_receipts_and_events(&self) -> Option<&[TxnReceiptAndEvents]> {
-        self.blocks.pre_latest_tx_receipts_and_events()
-    }
-
-    /// Get the candidate transactions in the pre-confirmed block.
-    pub fn candidate_transactions(&self) -> &[pathfinder_common::transaction::Transaction] {
-        &self.blocks.candidate_transactions
-    }
-
-    pub fn finality_status(&self) -> crate::dto::TxnFinalityStatus {
-        self.blocks.finality_status()
-    }
-
-    /// Find a contract nonce by its contract address in the
-    /// pre-confirmed or pre-latest block (in that order).
-    pub fn find_nonce(
-        &self,
-        contract_address: pathfinder_common::ContractAddress,
-    ) -> Option<pathfinder_common::ContractNonce> {
-        self.aggregated_state_update()
-            .contract_nonce(contract_address)
-    }
-
-    /// Find a storage value by its contract and storage address in
-    /// the pre-confirmed or pre-latest block (in that order).
-    pub fn find_storage_value(
-        &self,
-        contract_address: pathfinder_common::ContractAddress,
-        storage_address: pathfinder_common::StorageAddress,
-    ) -> Option<pathfinder_common::FoundStorageValue> {
-        self.aggregated_state_update()
-            .storage_value_with_provenance(contract_address, storage_address)
-    }
-
-    /// Find a transaction by its hash in the pre-confirmed block,
-    /// candidate transactions, or pre-latest block (in that order).
-    pub fn find_transaction(
-        &self,
-        tx_hash: pathfinder_common::TransactionHash,
-    ) -> Option<pathfinder_common::transaction::Transaction> {
-        self.pre_confirmed_transactions()
-            .iter()
-            .find(|tx| tx.hash == tx_hash)
-            .cloned()
-            .or_else(|| {
-                self.candidate_transactions()
-                    .iter()
-                    .find(|tx| tx.hash == tx_hash)
-                    .cloned()
-            })
-            .or_else(|| {
-                self.pre_latest_transactions()
-                    .and_then(|pre_latest| pre_latest.iter().find(|tx| tx.hash == tx_hash).cloned())
-            })
-    }
-
-    /// Find a [FinalizedTxData] by the transaction hash in the
-    /// pre-confirmed or pre-latest block (in that order).
-    ///
-    /// This function does not check candidate transactions, as they are not
-    /// finalized.
-    pub fn find_finalized_tx_data(
-        &self,
-        tx_hash: pathfinder_common::TransactionHash,
-    ) -> Option<FinalizedTxData> {
-        let pending_tx = self
-            .pre_confirmed_transactions()
-            .iter()
-            .find(|tx| tx.hash == tx_hash);
-        if let Some(pending_tx) = pending_tx {
-            let (receipt, events) = self
-                .pre_confirmed_tx_receipts_and_events()
-                .iter()
-                .find(|(receipt, _)| receipt.transaction_hash == tx_hash)
-                .cloned()
-                .expect("Should exist if transaction exists");
-
-            return Some(FinalizedTxData {
-                block_number: self.pre_confirmed_block_number(),
-                transaction: pending_tx.clone(),
-                receipt,
-                events,
-                finality_status: self.finality_status(),
-            });
-        }
-
-        if let Some(pre_latest_block) = self.pre_latest_block() {
-            let pre_latest_tx = pre_latest_block
-                .transactions
-                .iter()
-                .find(|tx| tx.hash == tx_hash);
-            if let Some(pre_latest_tx) = pre_latest_tx {
-                let (receipt, events) = self
-                    .pre_latest_tx_receipts_and_events()
-                    .and_then(|receipts| {
-                        receipts
-                            .iter()
-                            .find(|(receipt, _)| receipt.transaction_hash == tx_hash)
-                            .cloned()
-                    })
-                    .expect("Should exist if transaction exists");
-
-                return Some(FinalizedTxData {
-                    block_number: pre_latest_block.number,
-                    transaction: pre_latest_tx.clone(),
-                    receipt,
-                    events,
-                    finality_status: crate::dto::TxnFinalityStatus::PreConfirmed,
-                });
-            }
-        }
-
-        None
-    }
-
-    /// Find a contract class hash by its contract address in the
-    /// pre-confirmed or pre-latest block (in that order).
-    pub fn find_contract_class(
-        &self,
-        contract_address: pathfinder_common::ContractAddress,
-    ) -> Option<pathfinder_common::ClassHash> {
-        self.aggregated_state_update()
-            .contract_class(contract_address)
-    }
-
-    /// Check if a class hash has been declared in the pre-confirmed
-    /// or pre-latest block.
-    pub fn class_is_declared(&self, class_hash: pathfinder_common::ClassHash) -> bool {
-        self.aggregated_state_update().class_is_declared(class_hash)
-    }
-
-    pub fn is_pre_latest_or_pre_confirmed(&self, block: BlockNumber) -> bool {
-        self.pre_latest_block_number()
-            .is_some_and(|pre_latest| pre_latest == block)
-            || self.pre_confirmed_block_number() == block
-    }
+    cache: Arc<PreConfirmedCache>,
 }
 
 impl PendingWatcher {
-    pub fn new(receiver: WatchReceiver<PendingData>) -> Self {
-        Self {
-            receiver,
-            on_read: Arc::new(Notify::new()),
-        }
-    }
-
-    /// Handle for awaiting cache-read events fired by [`Self::get`].
-    pub fn on_read(&self) -> Arc<Notify> {
-        self.on_read.clone()
+    pub fn new(cache: Arc<PreConfirmedCache>) -> Self {
+        Self { cache }
     }
 
     /// A fresh receiver for awaiting changes directly.
     pub fn subscribe(&self) -> WatchReceiver<PendingData> {
-        self.receiver.clone()
+        self.cache.subscribe()
     }
 
     /// Returns [PendingData] which has been validated against the latest block
@@ -627,14 +54,18 @@ impl PendingWatcher {
         tx: &Transaction<'_>,
         rpc_version: RpcVersion,
     ) -> anyhow::Result<PendingData> {
-        self.on_read.notify_one();
+        let watched_pending_data = match self.cache.try_read() {
+            Some(data) => data,
+            None => tokio::runtime::Handle::current()
+                .block_on(self.cache.read())
+                .context("Reading pre-confirmed cache")?,
+        };
 
         let latest = tx
             .block_header(pathfinder_common::BlockId::Latest)
             .context("Querying latest block header")?
             .unwrap_or_default();
 
-        let watched_pending_data = self.receiver.borrow();
         let watched_pending_blocks = watched_pending_data.pending_block();
         let PendingBlocks {
             pre_confirmed,
@@ -741,15 +172,75 @@ impl PendingWatcher {
 
     #[cfg(test)]
     pub fn get_unchecked(&self) -> PendingData {
-        self.receiver.borrow().clone()
+        self.cache.subscribe().borrow().clone()
     }
+}
+
+/// Find a transaction-with-receipt in the pre-confirmed or pre-latest block,
+/// in that order. Candidate transactions are not finalized and are skipped.
+pub fn find_finalized_tx_data(
+    pending: &PendingData,
+    tx_hash: pathfinder_common::TransactionHash,
+) -> Option<FinalizedTxData> {
+    if let Some(tx) = pending
+        .pre_confirmed_transactions()
+        .iter()
+        .find(|t| t.hash == tx_hash)
+    {
+        let (receipt, events) = pending
+            .pre_confirmed_tx_receipts_and_events()
+            .iter()
+            .find(|(r, _)| r.transaction_hash == tx_hash)
+            .cloned()
+            .expect("Receipt should exist if the transaction exists");
+        return Some(FinalizedTxData {
+            block_number: pending.pre_confirmed_block_number(),
+            transaction: tx.clone(),
+            receipt,
+            events,
+            finality_status: crate::dto::TxnFinalityStatus::PreConfirmed,
+        });
+    }
+
+    if let Some(pre_latest_block) = pending.pre_latest_block() {
+        if let Some(tx) = pre_latest_block
+            .transactions
+            .iter()
+            .find(|t| t.hash == tx_hash)
+        {
+            let (receipt, events) = pending
+                .pre_latest_tx_receipts_and_events()
+                .and_then(|rs| {
+                    rs.iter()
+                        .find(|(r, _)| r.transaction_hash == tx_hash)
+                        .cloned()
+                })
+                .expect("Receipt should exist if the transaction exists");
+            return Some(FinalizedTxData {
+                block_number: pre_latest_block.number,
+                transaction: tx.clone(),
+                receipt,
+                events,
+                finality_status: crate::dto::TxnFinalityStatus::PreConfirmed,
+            });
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
 mod tests {
 
     use pathfinder_common::macro_prelude::*;
-    use pathfinder_common::{BlockHeader, BlockTimestamp, GasPrice, L1DataAvailabilityMode};
+    use pathfinder_common::{
+        BlockHeader,
+        BlockTimestamp,
+        GasPrice,
+        L1DataAvailabilityMode,
+        StarknetVersion,
+    };
+    use starknet_gateway_types::reply::{GasPrices, Status};
 
     use super::*;
 
@@ -883,8 +374,8 @@ mod tests {
 
     #[test]
     fn valid_pre_confirmed() {
-        let (sender, receiver) = tokio::sync::watch::channel(Default::default());
-        let uut = PendingWatcher::new(receiver);
+        let cache = Arc::new(PreConfirmedCache::new());
+        let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
             .unwrap()
@@ -897,7 +388,7 @@ mod tests {
         tx.insert_block_header(&latest).unwrap();
 
         let pending = valid_pre_confirmed_block(&latest);
-        sender.send(pending.clone()).unwrap();
+        cache.store(pending.clone());
 
         let result = uut.get(&tx, RpcVersion::V09).unwrap();
         pretty_assertions_sorted::assert_eq_sorted!(result, pending);
@@ -910,8 +401,8 @@ mod tests {
         // the new L2 block. This test makes sure that we still provide pending data
         // from the pre-confirmed block in this case and *we do not provide* the
         // pre-latest block because it is not pending anymore.
-        let (sender, receiver) = tokio::sync::watch::channel(Default::default());
-        let uut = PendingWatcher::new(receiver);
+        let cache = Arc::new(PreConfirmedCache::new());
+        let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
             .unwrap()
@@ -940,7 +431,7 @@ mod tests {
 
         // Pre-latest block will be `latest + 1` which is valid.
         let pending = valid_pre_confirmed_block_with_pre_latest(&latest);
-        sender.send(pending.clone()).unwrap();
+        cache.store(pending.clone());
 
         let result = uut.get(&tx, RpcVersion::V09).unwrap();
         pretty_assertions_sorted::assert_eq_sorted!(result, pending);
@@ -948,7 +439,7 @@ mod tests {
         // Pre-latest block will be same as `latest` which is also valid, but in this
         // case the pre-latest block should be ignored.
         let pending = valid_pre_confirmed_block_with_pre_latest(&parent);
-        sender.send_replace(pending);
+        cache.store(pending);
 
         let result = uut.get(&tx, RpcVersion::V09).unwrap();
         // We got a non-empty pre-confirmed block..
@@ -959,8 +450,8 @@ mod tests {
 
     #[test]
     fn valid_pre_confirmed_is_not_used_for_old_rpc_versions() {
-        let (sender, receiver) = tokio::sync::watch::channel(Default::default());
-        let uut = PendingWatcher::new(receiver);
+        let cache = Arc::new(PreConfirmedCache::new());
+        let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
             .unwrap()
@@ -973,7 +464,7 @@ mod tests {
         tx.insert_block_header(&latest).unwrap();
 
         let pending = valid_pre_confirmed_block(&latest);
-        sender.send(pending.clone()).unwrap();
+        cache.store(pending.clone());
 
         let expected_empty_pending_data = PendingData::empty(&latest);
 
@@ -987,8 +478,8 @@ mod tests {
 
     #[test]
     fn valid_pre_confirmed_with_pre_latest_is_not_used_for_old_rpc_versions() {
-        let (sender, receiver) = tokio::sync::watch::channel(Default::default());
-        let uut = PendingWatcher::new(receiver);
+        let cache = Arc::new(PreConfirmedCache::new());
+        let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
             .unwrap()
@@ -1001,7 +492,7 @@ mod tests {
         tx.insert_block_header(&latest).unwrap();
 
         let pending = valid_pre_confirmed_block_with_pre_latest(&latest);
-        sender.send(pending.clone()).unwrap();
+        cache.store(pending.clone());
 
         let expected_empty_pending_data = PendingData::empty(&latest);
 
@@ -1019,8 +510,8 @@ mod tests {
         // then the result should be an empty block with the gas price, timestamp
         // and hash as parent hash of the latest block in storage.
 
-        let (_sender, receiver) = tokio::sync::watch::channel(Default::default());
-        let uut = PendingWatcher::new(receiver);
+        let cache = Arc::new(PreConfirmedCache::new());
+        let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
             .unwrap()
@@ -1060,8 +551,8 @@ mod tests {
         // then the result should be an empty block with the gas price, timestamp
         // and hash as parent hash of the latest block in storage.
 
-        let (sender, receiver) = tokio::sync::watch::channel(Default::default());
-        let uut = PendingWatcher::new(receiver);
+        let cache = Arc::new(PreConfirmedCache::new());
+        let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
             .unwrap()
@@ -1089,7 +580,7 @@ mod tests {
         tx.insert_block_header(&latest).unwrap();
 
         let pending = valid_pre_confirmed_block(&parent);
-        sender.send(pending.clone()).unwrap();
+        cache.store(pending.clone());
 
         let result = uut.get(&tx, RpcVersion::V09).unwrap();
 
@@ -1104,8 +595,8 @@ mod tests {
         // then the result should be an empty block with the gas price, timestamp
         // and hash as parent hash of the latest block in storage.
 
-        let (sender, receiver) = tokio::sync::watch::channel(Default::default());
-        let uut = PendingWatcher::new(receiver);
+        let cache = Arc::new(PreConfirmedCache::new());
+        let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
             .unwrap()
@@ -1147,7 +638,7 @@ mod tests {
         // Pre-latest block exists but is behind `== latest - 1` (because `== latest`
         // is still considered valid).
         let pending = valid_pre_confirmed_block_with_pre_latest(&parent1);
-        sender.send(pending.clone()).unwrap();
+        cache.store(pending.clone());
 
         let result = uut.get(&tx, RpcVersion::V09).unwrap();
 
@@ -1159,8 +650,8 @@ mod tests {
     #[test]
     #[should_panic]
     fn pre_confirmed_is_not_child_of_pre_latest_panics() {
-        let (sender, receiver) = tokio::sync::watch::channel(Default::default());
-        let uut = PendingWatcher::new(receiver);
+        let cache = Arc::new(PreConfirmedCache::new());
+        let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
             .unwrap()
@@ -1187,7 +678,7 @@ mod tests {
         tx.insert_block_header(&latest).unwrap();
 
         let pending = invalid_pre_confirmed_block_with_pre_latest(&latest);
-        sender.send(pending.clone()).unwrap();
+        cache.store(pending.clone());
         let _ = uut.get(&tx, RpcVersion::V09).unwrap();
     }
 
