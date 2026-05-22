@@ -824,9 +824,7 @@ impl ValidatorCache {
     fn remove(&self, hnr: &HeightAndRound) -> Result<ValidatorStage, ProposalHandlingError> {
         let mut cache = self.0.lock().unwrap();
         cache.remove(hnr).ok_or_else(|| {
-            ProposalHandlingError::Recoverable(ProposalError::ValidatorStageNotFound {
-                height_and_round: hnr.to_string(),
-            })
+            ProposalHandlingError::Recoverable(ProposalError::ValidatorStageNotFound(*hnr))
         })
     }
 }

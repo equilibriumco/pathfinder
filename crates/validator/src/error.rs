@@ -1,5 +1,6 @@
 //! Error types for proposal handling.
 
+use p2p::consensus::HeightAndRound;
 use pathfinder_storage::StorageError;
 
 use crate::WrongValidatorStageError;
@@ -129,9 +130,8 @@ pub enum ProposalError {
     UnexpectedProposalPart { message: String },
 
     /// Validator stage not found in cache.
-    #[error("No ValidatorStage for height and round {height_and_round}")]
-    // TODO why is height_and_round a String?
-    ValidatorStageNotFound { height_and_round: String },
+    #[error("No ValidatorStage for height and round {0}")]
+    ValidatorStageNotFound(HeightAndRound),
 
     /// Wrong validator stage type (e.g., expected BlockInfo but got
     /// TransactionBatch).
