@@ -8536,7 +8536,6 @@ dependencies = [
  "pathfinder-gas-price",
  "pathfinder-merkle-tree",
  "pathfinder-pre-confirmed",
- "pathfinder-retry",
  "pathfinder-rpc",
  "pathfinder-serde",
  "pathfinder-storage",
@@ -8813,14 +8812,6 @@ dependencies = [
  "pathfinder-common",
  "starknet-gateway-types",
  "tokio",
-]
-
-[[package]]
-name = "pathfinder-retry"
-version = "0.22.3"
-dependencies = [
- "tokio",
- "tokio-retry",
 ]
 
 [[package]]
