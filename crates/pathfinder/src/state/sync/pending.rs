@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use pathfinder_common::{BlockHash, BlockNumber};
-use pathfinder_pre_confirmed::PendingDataCache;
+use pathfinder_pending_data::PendingDataCache;
 use starknet_gateway_client::{BlockId, GatewayApi};
 use starknet_gateway_types::reply::{PreConfirmedBlock, PreConfirmedPollResponse};
 use tokio::sync::watch;
@@ -350,7 +350,7 @@ mod tests {
         Transaction,
         TransactionVariant,
     };
-    use pathfinder_pre_confirmed::PendingDataCache;
+    use pathfinder_pending_data::PendingDataCache;
     use starknet_gateway_client::MockGatewayApi;
     use starknet_gateway_types::reply::state_update::{
         DeclaredSierraClass,

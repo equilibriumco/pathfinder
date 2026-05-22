@@ -492,7 +492,7 @@ mod tests {
     use pathfinder_common::transaction::{Transaction, TransactionVariant};
     use pathfinder_common::L2Block;
     use pathfinder_crypto::Felt;
-    use pathfinder_pre_confirmed::PendingDataCache;
+    use pathfinder_pending_data::PendingDataCache;
     use pathfinder_storage::StorageBuilder;
     use pretty_assertions_sorted::assert_eq;
     use starknet_gateway_types::reply::PreConfirmedBlock;

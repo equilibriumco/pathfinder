@@ -25,7 +25,7 @@ use pathfinder_lib::ConsensusChannels;
 use pathfinder_lib::{config, consensus, monitoring, p2p_network, preconfirmed, state};
 #[cfg(not(feature = "p2p"))]
 use pathfinder_lib::{config, monitoring, p2p_network, state};
-use pathfinder_pre_confirmed::PendingDataCache;
+use pathfinder_pending_data::PendingDataCache;
 use pathfinder_rpc::context::{EthContractAddresses, WebsocketContext};
 use pathfinder_rpc::{Notifications, SyncState};
 use pathfinder_storage::Storage;

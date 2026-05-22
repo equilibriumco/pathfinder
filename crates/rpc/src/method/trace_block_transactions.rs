@@ -834,7 +834,7 @@ pub(crate) mod tests {
     use pathfinder_common::receipt::Receipt;
     use pathfinder_common::Chain;
     use pathfinder_crypto::Felt;
-    use pathfinder_pre_confirmed::PendingDataCache;
+    use pathfinder_pending_data::PendingDataCache;
     use starknet_gateway_types::reply::{GasPrices, L1DataAvailabilityMode};
     use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 

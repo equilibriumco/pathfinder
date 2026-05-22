@@ -29,7 +29,7 @@ use pathfinder_common::{
 use pathfinder_crypto::Felt;
 use pathfinder_ethereum::{EthereumClient, EthereumStateUpdate};
 use pathfinder_merkle_tree::starknet_state::update_starknet_state;
-use pathfinder_pre_confirmed::PendingDataCache;
+use pathfinder_pending_data::PendingDataCache;
 use pathfinder_rpc::types::syncing::{self, NumberedBlock, Syncing};
 use pathfinder_rpc::{Notifications, PendingData, Reorg, SyncState};
 use pathfinder_storage::pruning::BlockchainHistoryMode;
@@ -1659,7 +1659,7 @@ mod tests {
         TransactionVariant,
     };
     use pathfinder_crypto::Felt;
-    use pathfinder_pre_confirmed::PendingDataCache;
+    use pathfinder_pending_data::PendingDataCache;
     use pathfinder_rpc::SyncState;
     use pathfinder_storage::StorageBuilder;
     use starknet_gateway_types::reply::{self, Block, GasPrices};

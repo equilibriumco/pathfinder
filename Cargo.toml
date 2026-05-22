@@ -22,7 +22,7 @@ members = [
     "crates/p2p_proto_derive",
     "crates/p2p_stream",
     "crates/pathfinder",
-    "crates/pre-confirmed",
+    "crates/pending-data",
     "crates/rpc",
     "crates/serde",
     "crates/storage",

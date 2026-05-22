@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use pathfinder_common::{BlockNumber, StateUpdate};
-use pathfinder_pre_confirmed::PendingDataCache;
-pub use pathfinder_pre_confirmed::{
+use pathfinder_pending_data::PendingDataCache;
+pub use pathfinder_pending_data::{
     PendingBlocks,
     PendingData,
     PreConfirmedBlock,
