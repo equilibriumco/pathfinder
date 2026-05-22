@@ -193,7 +193,7 @@ impl StorageManager {
     }
 
     fn apply_pending_prune(&mut self, storage: &Storage) -> anyhow::Result<()> {
-        let Some(pending) = self.pending_prune.take() else {
+        let Some(pending) = self.pending_prune.as_ref() else {
             return Ok(());
         };
         let mut connection = storage.connection().context("Getting storage connection")?;
@@ -206,6 +206,7 @@ impl StorageManager {
                 .with_context(|| format!("Pruning block {block}"))?;
         }
         tx.commit().context("Committing prune transaction")?;
+        self.pending_prune.take();
         Ok(())
     }
 
@@ -369,15 +370,15 @@ impl StorageBuilder {
     /// connections and shared cache causes locking errors if the connection
     /// pool is larger than 1 and timeouts otherwise.
     pub fn in_tempdir() -> anyhow::Result<Storage> {
-        // Note: it is ok to drop the tempdir object and hence delete the tempdir right
-        // after opening the storage, because the connection pool keeps the inode alive
-        // for the lifetime of the storage anyway.
-        let tempdir = tempfile::tempdir()?;
+        let tempdir = Arc::new(tempfile::tempdir()?);
         tracing::trace!("Creating storage in: {}", tempdir.path().display());
-        crate::StorageBuilder::file(tempdir.path().join("db.sqlite"))
+        let mut manager = crate::StorageBuilder::file(tempdir.path().join("db.sqlite"))
             .migrate()
-            .unwrap()
-            .create_pool(NonZeroU32::new(32).unwrap())
+            .unwrap();
+        // Keep the tempdir alive for the lifetime of Storage so that the
+        // RocksDB directory (which lives inside it) is not deleted.
+        manager.rocksdb_tempdir = Some(tempdir);
+        manager.create_pool(NonZeroU32::new(32).unwrap())
     }
 
     /// Convenience function for tests to create an in-tempdir database with a
@@ -386,16 +387,16 @@ impl StorageBuilder {
         trie_prune_mode: TriePruneMode,
         pool_size: NonZeroU32,
     ) -> anyhow::Result<Storage> {
-        // Note: it is ok to drop the tempdir object and hence delete the tempdir right
-        // after opening the storage, because the connection pool keeps the inode alive
-        // for the lifetime of the storage anyway.
-        let tempdir = tempfile::tempdir()?;
+        let tempdir = Arc::new(tempfile::tempdir()?);
         tracing::trace!("Creating storage in: {}", tempdir.path().display());
-        crate::StorageBuilder::file(tempdir.path().join("db.sqlite"))
+        let mut manager = crate::StorageBuilder::file(tempdir.path().join("db.sqlite"))
             .trie_prune_mode(Some(trie_prune_mode))
             .migrate()
-            .unwrap()
-            .create_pool(pool_size)
+            .unwrap();
+        // Keep the tempdir alive for the lifetime of Storage so that the
+        // RocksDB directory (which lives inside it) is not deleted.
+        manager.rocksdb_tempdir = Some(tempdir);
+        manager.create_pool(pool_size)
     }
 
     /// Convenience function for tests to create a persisted in-tempdir database
@@ -588,6 +589,47 @@ impl StorageBuilder {
         };
         let rocksdb = Arc::new(Self::open_rocksdb(&rocksdb_path)?);
 
+        // Lightweight consistency check: warn if RocksDB is ahead of SQLite.
+        // In readonly mode we cannot fix the inconsistency, but we should alert
+        // the operator so they can run in normal mode first.
+        {
+            use crate::connection::STATE_UPDATES_COLUMN;
+            let sqlite_highest: Option<u64> = connection
+                .query_row("SELECT MAX(number) FROM block_headers", [], |row| {
+                    row.get::<_, Option<u64>>(0)
+                })
+                .unwrap_or(None);
+            let state_updates_cf = rocksdb.get_column(&STATE_UPDATES_COLUMN);
+            let mut read_opts = rust_rocksdb::ReadOptions::default();
+            read_opts.set_total_order_seek(true);
+            let mut iter = rocksdb
+                .rocksdb
+                .raw_iterator_cf_opt(&state_updates_cf, read_opts);
+            iter.seek_to_last();
+            let rocksdb_highest = if iter.valid() {
+                iter.key()
+                    .and_then(|k| k.try_into().ok())
+                    .map(u64::from_be_bytes)
+            } else {
+                iter.status().ok();
+                None
+            };
+            if let Some(rocks_top) = rocksdb_highest {
+                let is_ahead = match sqlite_highest {
+                    Some(sqlite_top) => rocks_top > sqlite_top,
+                    None => true,
+                };
+                if is_ahead {
+                    tracing::warn!(
+                        ?sqlite_highest,
+                        rocks_top,
+                        "RocksDB is ahead of SQLite in readonly mode; data may be inconsistent. \
+                         Run the node in normal mode first to reconcile."
+                    );
+                }
+            }
+        }
+
         let running_event_filter = {
             let dummy_ref = Arc::new(Mutex::new(event::RunningEventFilter {
                 filter: crate::bloom::AggregateBloom::new(BlockNumber::GENESIS),
@@ -623,7 +665,7 @@ impl StorageBuilder {
 
     pub(crate) fn open_rocksdb(path: &Path) -> anyhow::Result<RocksDBInner> {
         let available_parallelism = std::thread::available_parallelism()
-            .map(|e| e.get() as i32 / 2)
+            .map(|e| (e.get() as i32 / 2).max(1))
             .unwrap_or(1);
 
         let mut options = rust_rocksdb::Options::default();
@@ -704,13 +746,16 @@ impl StorageBuilder {
             .context("Getting RocksDB column for fetching next trie storage index")?;
         let next_index = db
             .get_cf(&column_handle, column.name.as_bytes())?
-            .map(|value| {
-                u64::from_be_bytes(
-                    value
-                        .try_into()
-                        .expect("RocksDB trie storage index value has invalid length"),
-                )
-            });
+            .map(|value| -> anyhow::Result<u64> {
+                let bytes: [u8; 8] = value.as_slice().try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "RocksDB trie storage index value has invalid length: {}",
+                        value.len()
+                    )
+                })?;
+                Ok(u64::from_be_bytes(bytes))
+            })
+            .transpose()?;
         Ok(next_index.unwrap_or(0))
     }
 
@@ -908,6 +953,14 @@ impl Storage {
         &self.0.database_path
     }
 
+    #[cfg(test)]
+    pub(crate) fn rocksdb_tempdir_path(&self) -> Option<std::path::PathBuf> {
+        self.0
+            ._rocksdb_tempdir
+            .as_ref()
+            .map(|d| d.path().to_path_buf())
+    }
+
     pub fn is_migrated(&self) -> Result<bool, StorageError> {
         let mut connection = self.connection()?;
         let tx = connection.transaction()?;
@@ -1094,6 +1147,8 @@ pub(crate) fn reconcile_rocksdb_with_sqlite(
                 .map_err(|_| anyhow::anyhow!("Invalid STATE_UPDATES_COLUMN key length"))?;
             Some(u64::from_be_bytes(bytes))
         } else {
+            iter.status()
+                .context("RocksDB iterator error in reconcile")?;
             None
         }
     };
@@ -1153,8 +1208,9 @@ pub(crate) fn reconcile_rocksdb_with_sqlite(
                 tracing::warn!(
                     block_number,
                     error = %e,
-                    "Failed to decode orphaned transactions blob for targeted hash cleanup; \
-                     falling back to block-keyed CF deletion only"
+                    "Failed to decode orphaned transactions blob; transaction hash entries \
+                     for this block will remain as orphans in TRANSACTION_HASHES_COLUMN. \
+                     These are harmless as read paths validate against SQLite."
                 );
             }
         }
@@ -1391,12 +1447,18 @@ mod tests {
             .unwrap();
         };
 
-        // First run starts here...
-        let db = crate::StorageBuilder::in_memory().unwrap();
-        let db_path = Arc::clone(&db.0.database_path).to_path_buf();
+        // Use a file-based temp directory so that RocksDB data survives
+        // the drop-and-reopen cycle that simulates a restart.
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("test.sqlite");
 
-        // Keep this around so that the in-memory database doesn't get dropped.
-        let mut rsqlite_conn = rusqlite::Connection::open(&db_path).unwrap();
+        // First run starts here...
+        let db = crate::StorageBuilder::file(db_path.clone())
+            .journal_mode(JournalMode::Rollback)
+            .migrate()
+            .unwrap()
+            .create_pool(NonZeroU32::new(5).unwrap())
+            .unwrap();
 
         let mut conn = db.connection().unwrap();
         let tx = conn.transaction().unwrap();
@@ -1405,6 +1467,7 @@ mod tests {
         for i in 0..2 {
             insert_block_data(&tx, i);
         }
+        tx.flush_rocksdb_batch().unwrap();
 
         let constraints = EventConstraints {
             keys: vec![
@@ -1427,7 +1490,7 @@ mod tests {
         drop(db);
 
         // Second run starts here (same database)...
-        let db = crate::StorageBuilder::file(db_path)
+        let db = crate::StorageBuilder::file(db_path.clone())
             .journal_mode(JournalMode::Rollback)
             .migrate()
             .unwrap()
@@ -1441,15 +1504,15 @@ mod tests {
         for i in 2..headers.len() {
             insert_block_data(&tx, i);
         }
+        tx.flush_rocksdb_batch().unwrap();
 
         let events_after = tx
             .events(&constraints, *EVENT_FILTERS_BLOCK_RANGE_LIMIT)
             .unwrap()
             .events;
 
-        let inserted_event_filter_count = rsqlite_conn
-            .transaction()
-            .unwrap()
+        let raw_conn = rusqlite::Connection::open(&db_path).unwrap();
+        let inserted_event_filter_count = raw_conn
             .prepare("SELECT COUNT(*) FROM event_filters")
             .unwrap()
             .query_row([], |row| row.get::<_, u64>(0))
@@ -1586,24 +1649,12 @@ mod tests {
 
     #[test]
     fn in_memory_storage_cleans_up_rocksdb_tempdir() {
-        let dirs_before = rocksdb_tempdirs_in_tmp();
         let rocksdb_dir;
         {
-            let _storage = crate::StorageBuilder::in_memory().unwrap();
-            let _conn = _storage.connection().unwrap();
-            // Find the new tmpdir that appeared after creating the storage.
-            let dirs_during = rocksdb_tempdirs_in_tmp();
-            let new_dirs: Vec<_> = dirs_during
-                .iter()
-                .filter(|d| !dirs_before.contains(*d))
-                .filter(|d| d.join("IDENTITY").exists())
-                .cloned()
-                .collect();
-            assert!(
-                !new_dirs.is_empty(),
-                "expected at least one new RocksDB tempdir"
-            );
-            rocksdb_dir = new_dirs.into_iter().next().unwrap();
+            let storage = crate::StorageBuilder::in_memory().unwrap();
+            rocksdb_dir = storage
+                .rocksdb_tempdir_path()
+                .expect("in-memory storage should have a RocksDB tempdir");
             assert!(
                 rocksdb_dir.exists(),
                 "RocksDB tempdir should exist while storage is alive"
@@ -1614,22 +1665,6 @@ mod tests {
             "in-memory storage leaked RocksDB tempdir: {}",
             rocksdb_dir.display()
         );
-    }
-
-    fn rocksdb_tempdirs_in_tmp() -> Vec<std::path::PathBuf> {
-        let tmp = std::env::temp_dir();
-        let Ok(entries) = std::fs::read_dir(&tmp) else {
-            return vec![];
-        };
-        entries
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                let name = e.file_name();
-                let name = name.to_string_lossy();
-                name.starts_with(".tmp") && e.file_type().map(|t| t.is_dir()).unwrap_or(false)
-            })
-            .map(|e| e.path())
-            .collect()
     }
 
     #[rstest]
@@ -1673,11 +1708,17 @@ mod tests {
             .unwrap();
         };
 
-        let db = crate::StorageBuilder::in_memory().unwrap();
-        let db_path = Arc::clone(&db.0.database_path).to_path_buf();
+        // Use a file-based temp directory so that RocksDB data survives
+        // the drop-and-reopen cycle that simulates a restart.
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("test.sqlite");
 
-        // Keep this around so that the in-memory database doesn't get dropped.
-        let mut rsqlite_conn = rusqlite::Connection::open(&db_path).unwrap();
+        let db = crate::StorageBuilder::file(db_path.clone())
+            .journal_mode(JournalMode::Rollback)
+            .migrate()
+            .unwrap()
+            .create_pool(NonZeroU32::new(5).unwrap())
+            .unwrap();
 
         let mut conn = db.connection().unwrap();
         let tx = conn.transaction().unwrap();
@@ -1691,7 +1732,7 @@ mod tests {
         drop(conn);
         drop(db);
 
-        let db = crate::StorageBuilder::file(db_path)
+        let db = crate::StorageBuilder::file(db_path.clone())
             .journal_mode(JournalMode::Rollback)
             .migrate()
             .unwrap()
@@ -1717,9 +1758,8 @@ mod tests {
             .unwrap()
             .events;
 
-        let inserted_event_filter_count = rsqlite_conn
-            .transaction()
-            .unwrap()
+        let raw_conn = rusqlite::Connection::open(&db_path).unwrap();
+        let inserted_event_filter_count = raw_conn
             .prepare("SELECT COUNT(*) FROM event_filters")
             .unwrap()
             .query_row([], |row| row.get::<_, u64>(0))

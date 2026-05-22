@@ -558,13 +558,17 @@ impl AggregateBloom {
     }
 
     fn check_keys(&self, keys: &[Vec<EventKey>]) -> BlockRange {
-        if keys.is_empty() || keys.iter().any(Vec::is_empty) {
+        if keys.is_empty() {
             return BlockRange::FULL;
         }
 
         let mut result = BlockRange::FULL;
 
         for (idx, key_group) in keys.iter().enumerate() {
+            if key_group.is_empty() {
+                continue; // "any key at this position" — no filtering possible
+            }
+
             let indexed_keys: Vec<_> = key_group
                 .iter()
                 .map(|key| {
@@ -1239,6 +1243,7 @@ mod tests {
             Some(&[expected_events[..3].to_vec(), expected_events[3..].to_vec()]),
         )
         .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
 
         let addresses = tx
             .events(

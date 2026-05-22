@@ -131,6 +131,17 @@ impl<'inner> Transaction<'inner> {
     pub(crate) fn rocksdb_for_test(&self) -> Arc<crate::RocksDBInner> {
         Arc::clone(&self.rocksdb)
     }
+
+    /// Flush pending RocksDB writes to disk so that subsequent reads within
+    /// this transaction can see them. RocksDB's WriteBatch is write-only;
+    /// get_pinned_cf only sees committed data. This bridges the gap in tests
+    /// that write-then-read within a single transaction.
+    pub(crate) fn flush_rocksdb_batch(&self) -> anyhow::Result<()> {
+        let mut batch = self.batch.lock().expect("Batch lock poisoned");
+        let old = std::mem::replace(&mut *batch, crate::RocksDBBatch::default());
+        self.rocksdb.rocksdb.write(&old)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

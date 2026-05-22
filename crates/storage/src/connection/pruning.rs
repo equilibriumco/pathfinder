@@ -221,9 +221,8 @@ fn delete_prior_block_entries<C: rust_rocksdb::AsColumnFamilyRef>(
     prefix: &[u8],
     last_kept_block: BlockNumber,
 ) -> anyhow::Result<()> {
-    let last_kept_inverted =
-        u32::MAX - u32::try_from(last_kept_block.get()).expect("block fits into u32");
-    let mut seek_key = Vec::with_capacity(prefix.len() + 4);
+    let last_kept_inverted = u64::MAX - last_kept_block.get();
+    let mut seek_key = Vec::with_capacity(prefix.len() + 8);
     seek_key.extend_from_slice(prefix);
     seek_key.extend_from_slice(&last_kept_inverted.wrapping_add(1).to_be_bytes());
 

@@ -42,7 +42,7 @@ fn contract_trie_key(
 
 const CONTRACT_STATE_HASHES_PREFIX_LENGTH: usize = size_of::<Felt>();
 const CONTRACT_STATE_HASHES_KEY_LENGTH: usize =
-    CONTRACT_STATE_HASHES_PREFIX_LENGTH + size_of::<u32>();
+    CONTRACT_STATE_HASHES_PREFIX_LENGTH + size_of::<u64>();
 
 pub const CONTRACT_STATE_HASHES_COLUMN: Column =
     Column::new("contract_state_hashes").with_prefix_length(CONTRACT_STATE_HASHES_PREFIX_LENGTH);
@@ -50,7 +50,7 @@ pub const CONTRACT_STATE_HASHES_COLUMN: Column =
 /// Constructs the key for a contract state hash entry.
 ///
 /// Format is the following:
-/// [contract_address (32 bytes)][inverted block number (4 bytes)]
+/// [contract_address (32 bytes)][inverted block number (8 bytes)]
 ///
 /// We're using an inverted block number to allow for efficient retrieval of the
 /// latest state hash for a given contract address using forward iteration.
@@ -59,11 +59,7 @@ fn contract_state_hashes_key(
     contract_address: &ContractAddress,
 ) -> [u8; CONTRACT_STATE_HASHES_KEY_LENGTH] {
     let mut key = [0u8; CONTRACT_STATE_HASHES_KEY_LENGTH];
-    let block_number: u32 = block_number
-        .get()
-        .try_into()
-        .expect("block number fits into u32");
-    let block_number: u32 = u32::MAX - block_number;
+    let block_number = u64::MAX - block_number.get();
 
     key[..CONTRACT_STATE_HASHES_PREFIX_LENGTH].copy_from_slice(contract_address.0.as_be_bytes());
     key[CONTRACT_STATE_HASHES_PREFIX_LENGTH..].copy_from_slice(&block_number.to_be_bytes());
@@ -94,17 +90,14 @@ impl Transaction<'_> {
     }
 
     pub fn class_root(&self, block_number: BlockNumber) -> anyhow::Result<Option<ClassCommitment>> {
-        self.inner()
-        .query_row(
-            r"SELECT hash FROM trie_class WHERE idx = (
-                SELECT root_index FROM class_roots WHERE block_number <= ? ORDER BY block_number DESC LIMIT 1
-            )",
-            params![&block_number],
-            |row| row.get_optional_class_commitment(0),
-        )
-        .optional()
-        .map(|x| x.flatten())
-        .map_err(Into::into)
+        let root_index = self.class_root_index(block_number)?;
+
+        if let Some(root_index) = root_index {
+            let root = self.class_trie_node_hash(root_index)?.map(ClassCommitment);
+            Ok(root)
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn class_root_exists(&self, block_number: BlockNumber) -> anyhow::Result<bool> {
@@ -250,7 +243,7 @@ impl Transaction<'_> {
 
         if let TriePruneMode::Prune { num_blocks_kept } = self.trie_prune_mode {
             if let Some(block_number) = block_number.checked_sub(num_blocks_kept) {
-                self.delete_contract_state_hashes(contract, block_number)?;
+                self.delete_contract_state_hashes(contract, block_number, num_blocks_kept > 0)?;
             }
         }
 
@@ -261,6 +254,7 @@ impl Transaction<'_> {
         &self,
         contract: ContractAddress,
         before_block: BlockNumber,
+        keep_latest: bool,
     ) -> anyhow::Result<()> {
         let column = self.rocksdb_get_column(&CONTRACT_STATE_HASHES_COLUMN);
         let key = contract_state_hashes_key(before_block, &contract);
@@ -270,12 +264,12 @@ impl Transaction<'_> {
         let mut iter = self.rocksdb().raw_iterator_cf_opt(&column, read_options);
         iter.seek(key);
         if !iter.valid() {
-            // No entries for this contract, nothing to delete.
             return Ok(());
         }
 
-        // Skip _last_ entry and remove the rest.
-        iter.next();
+        if keep_latest {
+            iter.next();
+        }
         let mut batch = self.batch.lock().expect("Batch lock poisoned");
         while iter.valid() {
             let key = iter.key().expect("Iterator is valid");
@@ -1228,6 +1222,7 @@ mod tests {
         let idx0_update = tx
             .insert_contract_trie(&update, BlockNumber::GENESIS, &c1)
             .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
         let RootIndexUpdate::Updated(idx0) = idx0_update else {
             panic!("Expected the root index to be updated");
         };
@@ -1253,14 +1248,20 @@ mod tests {
             ..Default::default()
         };
 
-        let idx1_update = tx
+        // Insert trie data for c1 at block 1 (contract trie keys are
+        // contract-prefixed in RocksDB, so each contract needs its own data).
+        let idx1_c1_update = tx
+            .insert_contract_trie(&update, BlockNumber::GENESIS + 1, &c1)
+            .unwrap();
+        let _idx1_c2_update = tx
             .insert_contract_trie(&update, BlockNumber::GENESIS + 1, &c2)
             .unwrap();
-        let RootIndexUpdate::Updated(idx1) = idx1_update else {
+        tx.flush_rocksdb_batch().unwrap();
+        let RootIndexUpdate::Updated(idx1) = idx1_c1_update else {
             panic!("Expected the root index to be updated");
         };
 
-        tx.insert_contract_root(BlockNumber::GENESIS + 1, c1, idx1_update)
+        tx.insert_contract_root(BlockNumber::GENESIS + 1, c1, idx1_c1_update)
             .unwrap();
         tx.insert_contract_root(
             BlockNumber::GENESIS + 1,
@@ -1304,6 +1305,7 @@ mod tests {
         let idx2_update = tx
             .insert_contract_trie(&update, BlockNumber::GENESIS + 10, &c1)
             .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
         let RootIndexUpdate::Updated(idx2) = idx2_update else {
             panic!("Expected the root index to be updated");
         };
@@ -1400,6 +1402,7 @@ mod tests {
 
         tx.insert_contract_state_hash(BlockNumber::GENESIS + 2, contract, state_hash)
             .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
 
         let result = tx
             .contract_state_hash(BlockNumber::GENESIS, contract)
@@ -1511,6 +1514,7 @@ mod tests {
             BlockNumber::GENESIS + 3,
         )
         .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
 
         // At this point, index 1 should still be in the table.
         assert!(tx.class_trie_node(TrieStorageIndex(1)).unwrap().is_some());
@@ -1534,6 +1538,7 @@ mod tests {
             BlockNumber::GENESIS + 4,
         )
         .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
 
         // At this point, index 1 should no longer be in the table.
         assert!(tx.class_trie_node(TrieStorageIndex(1)).unwrap().is_none());
@@ -1645,6 +1650,7 @@ mod tests {
             BlockNumber::GENESIS + 4,
         )
         .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
 
         // Nothing was pruned.
         assert!(tx.class_trie_node(TrieStorageIndex(1)).unwrap().is_some());
@@ -1657,6 +1663,7 @@ mod tests {
         })
         .unwrap();
         tx.prune_tries().unwrap();
+        tx.flush_rocksdb_batch().unwrap();
 
         // The class trie was pruned.
         assert!(tx.class_trie_node(TrieStorageIndex(1)).unwrap().is_none());
@@ -1729,11 +1736,15 @@ mod tests {
             BlockNumber::GENESIS,
         )
         .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
 
-        // At this point, indices 1, 2, 3 should be in the table.
+        // Each insert_class_trie only stores tree-reachable nodes. With
+        // (Binary, LeafBinary, LeafBinary), the traversal starts from the
+        // last node (a leaf), so only 1 node is stored per insert.
+        // 3 inserts → storage indices 0, 1, 2.
+        assert!(tx.class_trie_node(TrieStorageIndex(0)).unwrap().is_some());
         assert!(tx.class_trie_node(TrieStorageIndex(1)).unwrap().is_some());
         assert!(tx.class_trie_node(TrieStorageIndex(2)).unwrap().is_some());
-        assert!(tx.class_trie_node(TrieStorageIndex(3)).unwrap().is_some());
 
         tx.insert_class_trie(
             &TrieUpdate {
@@ -1748,7 +1759,7 @@ mod tests {
                     (felt!("0x4"), Node::LeafBinary),
                     (felt!("0x5"), Node::LeafBinary),
                 ],
-                nodes_removed: vec![1, 2, 3].into_iter().map(TrieStorageIndex).collect(),
+                nodes_removed: vec![0, 1, 2].into_iter().map(TrieStorageIndex).collect(),
                 root_commitment: Felt::ZERO,
             },
             BlockNumber::GENESIS + 1,
@@ -1773,11 +1784,11 @@ mod tests {
             BlockNumber::GENESIS + 2,
         )
         .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
 
-        // At this point, 1, 2, 3 should no longer be in the table.
+        assert!(tx.class_trie_node(TrieStorageIndex(0)).unwrap().is_none());
         assert!(tx.class_trie_node(TrieStorageIndex(1)).unwrap().is_none());
         assert!(tx.class_trie_node(TrieStorageIndex(2)).unwrap().is_none());
-        assert!(tx.class_trie_node(TrieStorageIndex(3)).unwrap().is_none());
     }
 
     #[test]
@@ -1879,12 +1890,14 @@ mod tests {
         let contract = contract_address!("0xdeadbeef");
         tx.insert_contract_state_hash(BlockNumber::GENESIS, contract, contract_state_hash!("0x01"))
             .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
         tx.insert_contract_state_hash(
             BlockNumber::new_or_panic(1),
             contract,
             contract_state_hash!("0x02"),
         )
         .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
         // no new state hash for block 2
         tx.insert_contract_state_hash(
             BlockNumber::new_or_panic(3),
@@ -1892,6 +1905,7 @@ mod tests {
             contract_state_hash!("0x03"),
         )
         .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
 
         assert_eq!(
             tx.contract_state_hash(BlockNumber::GENESIS, contract)
@@ -1923,12 +1937,14 @@ mod tests {
         let contract = contract_address!("0xdeadbeef");
         tx.insert_contract_state_hash(BlockNumber::GENESIS, contract, contract_state_hash!("0x01"))
             .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
         tx.insert_contract_state_hash(
             BlockNumber::new_or_panic(1),
             contract,
             contract_state_hash!("0x02"),
         )
         .unwrap();
+        tx.flush_rocksdb_batch().unwrap();
 
         assert_eq!(
             tx.contract_state_hash(BlockNumber::GENESIS, contract)

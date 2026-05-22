@@ -27,12 +27,12 @@ pub const STORAGE_UPDATES_COLUMN: Column =
 type StorageUpdates = Vec<(StorageAddress, StorageValue)>;
 
 const NONCE_UPDATE_PREFIX_LEN: usize = size_of::<Felt>();
-const NONCE_UPDATE_KEY_LEN: usize = NONCE_UPDATE_PREFIX_LEN + size_of::<u32>();
+const NONCE_UPDATE_KEY_LEN: usize = NONCE_UPDATE_PREFIX_LEN + size_of::<u64>();
 
 /// Constructs a key used in our RocksDB column family for nonce updates.
 ///
 /// Format is the following:
-/// [contract_address (32 bytes)] [inverted block number (4 bytes)]
+/// [contract_address (32 bytes)] [inverted block number (8 bytes)]
 ///
 /// We're using an inverted block number to allow for efficient retrieval of the
 /// latest nonce for a given contract address using forward iteration.
@@ -40,11 +40,7 @@ pub(crate) fn nonce_update_key(
     block_number: BlockNumber,
     contract_address: &ContractAddress,
 ) -> [u8; NONCE_UPDATE_KEY_LEN] {
-    let block_number: u32 = block_number
-        .get()
-        .try_into()
-        .expect("block number fits into u32");
-    let block_number = u32::MAX - block_number;
+    let block_number = u64::MAX - block_number.get();
 
     let mut key = [0; NONCE_UPDATE_KEY_LEN];
     key[..32].copy_from_slice(contract_address.0.as_be_bytes());
@@ -57,13 +53,13 @@ pub const NONCE_UPDATES_COLUMN: Column =
 
 const STORAGE_UPDATE_PREFIX_LEN: usize = size_of::<Felt>();
 const STORAGE_UPDATE_KEY_LEN: usize =
-    STORAGE_UPDATE_PREFIX_LEN + size_of::<Felt>() + size_of::<u32>();
+    STORAGE_UPDATE_PREFIX_LEN + size_of::<Felt>() + size_of::<u64>();
 
 /// Constructs a key used in our RocksDB column family for storage updates.
 ///
 /// Format is the following:
 /// [contract_address (32 bytes)] [storage_address (32 bytes)] [inverted block
-/// number (4 bytes)]
+/// number (8 bytes)]
 ///
 /// We're using an inverted block number to allow for efficient retrieval of the
 /// latest storage value for a given contract address and storage address using
@@ -73,11 +69,7 @@ pub(crate) fn storage_update_key(
     contract_address: &ContractAddress,
     storage_address: &StorageAddress,
 ) -> [u8; STORAGE_UPDATE_KEY_LEN] {
-    let block_number: u32 = block_number
-        .get()
-        .try_into()
-        .expect("block number fits into u32");
-    let block_number = u32::MAX - block_number;
+    let block_number = u64::MAX - block_number.get();
 
     let mut key = [0; STORAGE_UPDATE_KEY_LEN];
     key[..32].copy_from_slice(contract_address.0.as_be_bytes());
@@ -86,8 +78,7 @@ pub(crate) fn storage_update_key(
     key
 }
 
-pub const STATE_UPDATES_COLUMN: Column =
-    Column::new("state_updates").with_prefix_length(STORAGE_UPDATE_PREFIX_LEN);
+pub const STATE_UPDATES_COLUMN: Column = Column::new("state_updates");
 
 fn encode_compressed_felt(value: &Felt) -> &[u8] {
     let bytes = value.as_be_bytes();
@@ -612,11 +603,11 @@ impl Transaction<'_> {
         if key_bytes.len() != STORAGE_UPDATE_KEY_LEN {
             anyhow::bail!("Unexpected STORAGE_UPDATES key length: {}", key_bytes.len());
         }
-        let inverted: [u8; 4] = key_bytes[STORAGE_UPDATE_KEY_LEN - 4..]
+        let inverted: [u8; 8] = key_bytes[STORAGE_UPDATE_KEY_LEN - 8..]
             .try_into()
-            .expect("4-byte slice");
-        let inverted = u32::from_be_bytes(inverted);
-        let found_block = BlockNumber::new_or_panic(u64::from(u32::MAX - inverted));
+            .expect("8-byte slice");
+        let inverted = u64::from_be_bytes(inverted);
+        let found_block = BlockNumber::new_or_panic(u64::MAX - inverted);
 
         let value = iter
             .value()

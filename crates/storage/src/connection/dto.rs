@@ -36,15 +36,29 @@ impl<'de> serde::Deserialize<'de> for MinimalFelt {
             where
                 B: serde::de::SeqAccess<'de>,
             {
-                let len = seq.size_hint().unwrap();
+                let len = seq
+                    .size_hint()
+                    .ok_or_else(|| serde::de::Error::custom("MinimalFelt: size hint required"))?;
+                if len > 32 {
+                    return Err(serde::de::Error::custom(
+                        "MinimalFelt: length exceeds 32 bytes",
+                    ));
+                }
                 let mut bytes = [0; 32];
-                let num_zeros = bytes.len() - len;
+                let num_zeros = 32 - len;
                 let mut i = num_zeros;
                 while let Some(value) = seq.next_element()? {
+                    if i >= 32 {
+                        return Err(serde::de::Error::custom(
+                            "MinimalFelt: more elements than size hint",
+                        ));
+                    }
                     bytes[i] = value;
                     i += 1;
                 }
-                Ok(MinimalFelt(Felt::from_be_bytes(bytes).unwrap()))
+                Felt::from_be_bytes(bytes)
+                    .map(MinimalFelt)
+                    .map_err(|_| serde::de::Error::custom("MinimalFelt: invalid Felt value"))
             }
         }
 

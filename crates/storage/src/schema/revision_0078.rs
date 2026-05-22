@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 
 use anyhow::Context;
@@ -24,7 +25,7 @@ pub(crate) fn migrate(
     migrate_trie(tx, "trie_storage", rocksdb, &TRIE_STORAGE_COLUMN)?;
 
     tracing::info!("Migrating contract trie to RocksDB");
-    migrate_contract_trie(tx, rocksdb)?;
+    let idx_to_contract = migrate_contract_trie(tx, rocksdb)?;
 
     tracing::info!("Migrating contract state hashes to RocksDB");
     migrate_contract_state_hashes(tx, rocksdb)?;
@@ -33,14 +34,8 @@ pub(crate) fn migrate(
     create_next_index(tx, rocksdb, "trie_contracts", &TRIE_CONTRACT_COLUMN)?;
     create_next_index(tx, rocksdb, "trie_storage", &TRIE_STORAGE_COLUMN)?;
 
-    // HACK: drop removal markers because they are not compatible with the new
-    // serialization format: we'd need to migrate these too.
-    tx.execute_batch(
-        "
-        DELETE FROM trie_class_removals;
-        DELETE FROM trie_contracts_removals;
-        DELETE FROM trie_storage_removals;",
-    )?;
+    tracing::info!("Migrating trie removal markers");
+    migrate_removal_markers(tx, &idx_to_contract)?;
 
     // tx.execute_batch(
     //     "
@@ -106,7 +101,7 @@ fn migrate_trie(
 fn migrate_contract_trie(
     tx: &rusqlite::Transaction<'_>,
     rocksdb: &crate::RocksDBInner,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<HashMap<u64, [u8; 32]>> {
     let number_of_contract_roots =
         tx.query_one("SELECT COUNT(*) FROM contract_roots", [], |row| {
             let count: usize = row.get(0)?;
@@ -149,18 +144,23 @@ fn migrate_contract_trie(
         rocksdb.get_column(&TRIE_CONTRACT_COLUMN);
 
     let mut batch = crate::RocksDBBatch::default();
+    let mut idx_to_contract: HashMap<u64, [u8; 32]> = HashMap::new();
 
     for (i, root_result) in roots_iter.enumerate() {
         let (contract_address, root_index) = root_result?;
 
         if let Some(root_index) = root_index {
+            let root_index: u64 = root_index
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("root index overflow"))?;
             walk_tree(
                 &packed_arrays,
                 &contract_address,
-                root_index.try_into().expect("root index fits into u64"),
+                root_index,
                 rocksdb,
                 &mut batch,
                 &column,
+                &mut idx_to_contract,
             )?;
         }
 
@@ -175,7 +175,7 @@ fn migrate_contract_trie(
 
     rocksdb.rocksdb.write_without_wal(&batch)?;
 
-    Ok(())
+    Ok(idx_to_contract)
 }
 
 fn walk_tree(
@@ -185,6 +185,7 @@ fn walk_tree(
     rocksdb: &crate::RocksDBInner,
     batch: &mut RocksDBBatch,
     column: &std::sync::Arc<rust_rocksdb::BoundColumnFamily<'_>>,
+    idx_to_contract: &mut HashMap<u64, [u8; 32]>,
 ) -> anyhow::Result<()> {
     const CODEC_CFG: bincode::config::Configuration = bincode::config::standard();
 
@@ -205,7 +206,7 @@ fn walk_tree(
     // and recursively walk child nodes if necessary
     let (node, _): (StoredSerde, usize) =
         bincode::borrow_decode_from_slice(&node_data[32..], CODEC_CFG)
-            .expect("decoding node data should succeed");
+            .context("decoding node data")?;
 
     match node {
         StoredSerde::Binary { left, right } => {
@@ -216,6 +217,7 @@ fn walk_tree(
                 rocksdb,
                 batch,
                 column,
+                idx_to_contract,
             )?;
             walk_tree(
                 packed_arrays,
@@ -224,6 +226,7 @@ fn walk_tree(
                 rocksdb,
                 batch,
                 column,
+                idx_to_contract,
             )?;
         }
         StoredSerde::Edge { child, .. } => {
@@ -234,6 +237,7 @@ fn walk_tree(
                 rocksdb,
                 batch,
                 column,
+                idx_to_contract,
             )?;
         }
         StoredSerde::LeafBinary | StoredSerde::LeafEdge { .. } => {
@@ -249,6 +253,9 @@ fn walk_tree(
         rocksdb.rocksdb.write_without_wal(&batch)?;
         batch.clear();
     }
+
+    // Record which contract address this node was stored under in RocksDB.
+    idx_to_contract.insert(node_idx, *contract_address);
 
     // mark as migrated in memory to avoid re-walking this node if it's shared
     packed_arrays.set_migrated(array_idx);
@@ -268,6 +275,173 @@ fn contract_trie_key(prefix: &[u8; 32], storage_idx: u64, buf: &mut [u8; 40]) {
     buf[..32].copy_from_slice(prefix);
     let storage_idx_be_bytes = storage_idx.to_be_bytes();
     buf[32..].copy_from_slice(&storage_idx_be_bytes);
+}
+
+/// Bincode-compatible representation of `TrieRemovalMarker` for the new format.
+///
+/// `Felt` encodes as `[u8; 32]` (big-endian bytes) and `TrieStorageIndex`
+/// encodes as `u64`, so this struct produces identical wire format to the
+/// `TrieRemovalMarker` in `crate::connection::trie`.
+#[derive(bincode::Encode)]
+struct NewTrieRemovalMarker {
+    key_prefix: Option<[u8; 32]>,
+    indices: Vec<u64>,
+}
+
+/// Migrate trie removal markers from old format (`Vec<u64>`) to the new
+/// `TrieRemovalMarker` format which includes a `key_prefix` field.
+fn migrate_removal_markers(
+    tx: &rusqlite::Transaction<'_>,
+    idx_to_contract: &HashMap<u64, [u8; 32]>,
+) -> anyhow::Result<()> {
+    const CODEC_CFG: bincode::config::Configuration = bincode::config::standard();
+
+    // Class removals: key_prefix is None.
+    migrate_simple_removal_table(tx, "trie_class_removals", CODEC_CFG)?;
+
+    // Storage removals: key_prefix is None.
+    migrate_simple_removal_table(tx, "trie_storage_removals", CODEC_CFG)?;
+
+    // Contract removals: key_prefix is Some(contract_address), looked up from
+    // the idx_to_contract mapping built during contract trie migration.
+    migrate_contract_removal_table(tx, idx_to_contract, CODEC_CFG)?;
+
+    Ok(())
+}
+
+/// Migrate class or storage removal markers (key_prefix = None).
+fn migrate_simple_removal_table(
+    tx: &rusqlite::Transaction<'_>,
+    table: &str,
+    codec_cfg: bincode::config::Configuration,
+) -> anyhow::Result<()> {
+    let mut select_stmt = tx
+        .prepare(&format!(
+            "SELECT rowid, indices FROM {} ORDER BY rowid",
+            table
+        ))
+        .with_context(|| format!("preparing select for {table}"))?;
+
+    let rows: Vec<(i64, Vec<u8>)> = select_stmt
+        .query_map([], |row| {
+            let rowid: i64 = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((rowid, blob))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| format!("reading rows from {table}"))?;
+
+    let mut update_stmt = tx
+        .prepare(&format!("UPDATE {} SET indices = ? WHERE rowid = ?", table))
+        .with_context(|| format!("preparing update for {table}"))?;
+
+    for (rowid, blob) in &rows {
+        let (old_indices, _) = bincode::decode_from_slice::<Vec<u64>, _>(blob, codec_cfg)
+            .with_context(|| format!("decoding old removal marker in {table} rowid {rowid}"))?;
+
+        let new_marker = NewTrieRemovalMarker {
+            key_prefix: None,
+            indices: old_indices,
+        };
+        let encoded = bincode::encode_to_vec(&new_marker, codec_cfg)
+            .with_context(|| format!("encoding new removal marker for {table}"))?;
+
+        update_stmt
+            .execute(rusqlite::params![encoded, rowid])
+            .with_context(|| format!("updating {table} rowid {rowid}"))?;
+    }
+
+    tracing::info!(%table, rows = rows.len(), "Migrated removal markers");
+    Ok(())
+}
+
+/// Migrate contract removal markers. Each old row contains indices that may
+/// belong to different contracts. We group them by contract address, delete the
+/// old row, and insert new rows with the proper `key_prefix`.
+fn migrate_contract_removal_table(
+    tx: &rusqlite::Transaction<'_>,
+    idx_to_contract: &HashMap<u64, [u8; 32]>,
+    codec_cfg: bincode::config::Configuration,
+) -> anyhow::Result<()> {
+    let table = "trie_contracts_removals";
+
+    let mut select_stmt = tx
+        .prepare(&format!(
+            "SELECT rowid, block_number, indices FROM {} ORDER BY rowid",
+            table
+        ))
+        .with_context(|| format!("preparing select for {table}"))?;
+
+    let rows: Vec<(i64, i64, Vec<u8>)> = select_stmt
+        .query_map([], |row| {
+            let rowid: i64 = row.get(0)?;
+            let block_number: i64 = row.get(1)?;
+            let blob: Vec<u8> = row.get(2)?;
+            Ok((rowid, block_number, blob))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| format!("reading rows from {table}"))?;
+
+    let mut delete_stmt = tx
+        .prepare(&format!("DELETE FROM {} WHERE rowid = ?", table))
+        .with_context(|| format!("preparing delete for {table}"))?;
+
+    let mut insert_stmt = tx
+        .prepare(&format!(
+            "INSERT INTO {} (block_number, indices) VALUES (?, ?)",
+            table
+        ))
+        .with_context(|| format!("preparing insert for {table}"))?;
+
+    let mut total_migrated = 0usize;
+    let mut total_skipped = 0usize;
+
+    for (rowid, block_number, blob) in &rows {
+        let (old_indices, _) = bincode::decode_from_slice::<Vec<u64>, _>(blob, codec_cfg)
+            .with_context(|| format!("decoding old removal marker in {table} rowid {rowid}"))?;
+
+        // Group indices by contract address.
+        let mut grouped: HashMap<[u8; 32], Vec<u64>> = HashMap::new();
+        for idx in old_indices {
+            if let Some(contract_address) = idx_to_contract.get(&idx) {
+                grouped.entry(*contract_address).or_default().push(idx);
+            } else {
+                // Node not found in RocksDB mapping -- it was never migrated,
+                // so there's nothing to delete later. Skip it.
+                total_skipped += 1;
+            }
+        }
+
+        // Delete the old row.
+        delete_stmt
+            .execute(rusqlite::params![rowid])
+            .with_context(|| format!("deleting {table} rowid {rowid}"))?;
+
+        // Insert new rows grouped by contract address.
+        for (contract_address, indices) in &grouped {
+            let new_marker = NewTrieRemovalMarker {
+                key_prefix: Some(*contract_address),
+                indices: indices.clone(),
+            };
+            let encoded = bincode::encode_to_vec(&new_marker, codec_cfg)
+                .context("encoding new contract removal marker")?;
+
+            insert_stmt
+                .execute(rusqlite::params![block_number, encoded])
+                .context("inserting new contract removal marker")?;
+
+            total_migrated += indices.len();
+        }
+    }
+
+    tracing::info!(
+        %table,
+        rows = rows.len(),
+        migrated_indices = total_migrated,
+        skipped_indices = total_skipped,
+        "Migrated contract removal markers"
+    );
+    Ok(())
 }
 
 pub struct SparsePackedArrays {
@@ -338,10 +512,9 @@ impl SparsePackedArrays {
     }
 }
 
-fn contract_state_hashes_key(block_number: u64, contract_address: &[u8; 32]) -> [u8; 36] {
-    let mut key = [0u8; 36];
-    let block_number: u32 = block_number.try_into().expect("block number fits into u32");
-    let block_number: u32 = u32::MAX - block_number;
+fn contract_state_hashes_key(block_number: u64, contract_address: &[u8; 32]) -> [u8; 40] {
+    let mut key = [0u8; 40];
+    let block_number = u64::MAX - block_number;
 
     key[..32].copy_from_slice(contract_address);
     key[32..].copy_from_slice(&block_number.to_be_bytes());
