@@ -525,7 +525,7 @@ impl GatewayApi for Client {
             .feeder_gateway_request()
             .get_preconfirmed_block()
             .block(block)
-            .param("knownBlockIdentifier", id)
+            .param("blockIdentifier", id)
             .param(
                 "knownTransactionCount",
                 &known_transaction_count.to_string(),
