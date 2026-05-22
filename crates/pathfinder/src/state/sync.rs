@@ -29,6 +29,7 @@ use pathfinder_common::{
 use pathfinder_crypto::Felt;
 use pathfinder_ethereum::{EthereumClient, EthereumStateUpdate};
 use pathfinder_merkle_tree::starknet_state::update_starknet_state;
+use pathfinder_pre_confirmed::PreConfirmedCache;
 use pathfinder_rpc::types::syncing::{self, NumberedBlock, Syncing};
 use pathfinder_rpc::{Notifications, PendingData, Reorg, SyncState};
 use pathfinder_storage::pruning::BlockchainHistoryMode;
@@ -38,8 +39,7 @@ use starknet_gateway_client::GatewayApi;
 use starknet_gateway_types::error::{KnownStarknetErrorCode, SequencerError};
 use starknet_gateway_types::reply::{Block, GasPrices, PreConfirmedBlock, PreLatestBlock};
 use tokio::sync::mpsc::{self, Receiver};
-use tokio::sync::watch::{self, Sender as WatchSender};
-use tokio::sync::Notify;
+use tokio::sync::watch;
 
 use crate::state::l1::L1SyncContext;
 use crate::state::l2::{BlockChain, L2SyncContext};
@@ -113,8 +113,7 @@ pub struct SyncContext<G, E> {
     pub state: Arc<SyncState>,
     pub head_poll_interval: Duration,
     pub l1_poll_interval: Duration,
-    pub pending_data: WatchSender<PendingData>,
-    pub pre_confirmed_on_read: Arc<Notify>,
+    pub pre_confirmed_cache: Arc<PreConfirmedCache>,
     pub submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker,
     pub block_validation_mode: l2::BlockValidationMode,
     pub notifications: Notifications,
@@ -195,8 +194,7 @@ where
         state,
         head_poll_interval,
         l1_poll_interval: _,
-        pending_data,
-        pre_confirmed_on_read,
+        pre_confirmed_cache,
         submitted_tx_tracker,
         block_validation_mode: _,
         notifications,
@@ -282,7 +280,7 @@ where
         storage: storage.clone(),
         state,
         submitted_tx_tracker,
-        pending_data,
+        pre_confirmed_cache: pre_confirmed_cache.clone(),
         verify_tree_hashes: context.verify_tree_hashes,
         notifications,
         sync_to_consensus_tx: None,
@@ -290,11 +288,15 @@ where
     let mut consumer_handle =
         util::task::spawn(consumer(event_receiver, consumer_context, tx_current));
 
+    // TODO: This should be a cli flag
+    const PRE_CONFIRMED_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
+
     let mut pending_handle = util::task::spawn(pending::poll_pre_confirmed(
         event_sender.clone(),
         sequencer.clone(),
         head_poll_interval,
-        pending::InactivityTimer::new(Duration::from_secs(60), pre_confirmed_on_read.clone()),
+        pre_confirmed_cache.clone(),
+        PRE_CONFIRMED_INACTIVITY_TIMEOUT,
         rx_latest.clone(),
         rx_current.clone(),
     ));
@@ -308,10 +310,8 @@ where
                     event_sender.clone(),
                     sequencer.clone(),
                     Duration::from_secs(2),
-                    pending::InactivityTimer::new(
-                        Duration::from_secs(60),
-                        pre_confirmed_on_read.clone(),
-                    ),
+                    pre_confirmed_cache.clone(),
+                    PRE_CONFIRMED_INACTIVITY_TIMEOUT,
                     rx_latest.clone(),
                     rx_current.clone(),
                 ));
@@ -489,8 +489,7 @@ where
         state,
         head_poll_interval,
         l1_poll_interval: _,
-        pending_data,
-        pre_confirmed_on_read: _,
+        pre_confirmed_cache,
         submitted_tx_tracker,
         block_validation_mode: _,
         notifications,
@@ -581,7 +580,7 @@ where
         storage: storage.clone(),
         state,
         submitted_tx_tracker,
-        pending_data,
+        pre_confirmed_cache,
         verify_tree_hashes: context.verify_tree_hashes,
         notifications,
         sync_to_consensus_tx: Some(sync_to_consensus_tx.clone()),
@@ -732,7 +731,7 @@ struct ConsumerContext {
     pub storage: Storage,
     pub state: Arc<SyncState>,
     pub submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker,
-    pub pending_data: WatchSender<PendingData>,
+    pub pre_confirmed_cache: Arc<PreConfirmedCache>,
     pub verify_tree_hashes: bool,
     pub notifications: Notifications,
     pub sync_to_consensus_tx: Option<mpsc::Sender<SyncMessageToConsensus>>,
@@ -747,7 +746,7 @@ async fn consumer(
         storage,
         state,
         submitted_tx_tracker,
-        pending_data,
+        pre_confirmed_cache,
         verify_tree_hashes,
         mut notifications,
         sync_to_consensus_tx,
@@ -1030,7 +1029,7 @@ async fn consumer(
                                     pending.pre_latest_transactions().map(|txs| txs.len());
                                 let pre_confirmed_tx_count =
                                     pending.pre_confirmed_transactions().len();
-                                pending_data.send_replace(pending);
+                                pre_confirmed_cache.store(pending);
                                 tracing::debug!(block_number = %number, %pre_confirmed_tx_count, ?pre_latest_tx_count, "Updated pre-confirmed data");
                             }
                             Err(e) => {
@@ -1660,6 +1659,7 @@ mod tests {
         TransactionVariant,
     };
     use pathfinder_crypto::Felt;
+    use pathfinder_pre_confirmed::PreConfirmedCache;
     use pathfinder_rpc::SyncState;
     use pathfinder_storage::StorageBuilder;
     use starknet_gateway_types::reply::{self, Block, GasPrices};
@@ -2108,12 +2108,11 @@ mod tests {
         // Close the event channel which allows the consumer task to exit.
         drop(event_tx);
 
-        let (tx, _rx) = tokio::sync::watch::channel(Default::default());
         let context = ConsumerContext {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data: tx,
+            pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2163,12 +2162,11 @@ mod tests {
         // Close the event channel which allows the consumer task to exit.
         drop(event_tx);
 
-        let (tx, _rx) = tokio::sync::watch::channel(Default::default());
         let context = ConsumerContext {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data: tx,
+            pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2232,12 +2230,11 @@ mod tests {
         // Close the event channel which allows the consumer task to exit.
         drop(event_tx);
 
-        let (tx, _rx) = tokio::sync::watch::channel(Default::default());
         let context = ConsumerContext {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data: tx,
+            pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2286,12 +2283,11 @@ mod tests {
         // Close the event channel which allows the consumer task to exit.
         drop(event_tx);
 
-        let (tx, _rx) = tokio::sync::watch::channel(Default::default());
         let context = ConsumerContext {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data: tx,
+            pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2329,12 +2325,11 @@ mod tests {
         // This closes the event channel which ends the consumer task.
         drop(event_tx);
         // UUT
-        let (tx, _rx) = tokio::sync::watch::channel(Default::default());
         let context = ConsumerContext {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data: tx,
+            pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2380,12 +2375,11 @@ mod tests {
         // This closes the event channel which ends the consumer task.
         drop(event_tx);
 
-        let (tx, _rx) = tokio::sync::watch::channel(Default::default());
         let context = ConsumerContext {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data: tx,
+            pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2435,12 +2429,11 @@ mod tests {
             .unwrap();
         drop(event_tx);
 
-        let (tx, _rx) = tokio::sync::watch::channel(Default::default());
         let context = ConsumerContext {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data: tx,
+            pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2646,14 +2639,13 @@ mod tests {
 
             let notifications = pathfinder_rpc::Notifications::default();
 
-            let (tx, _rx) = tokio::sync::watch::channel(Default::default());
             let context = ConsumerContext {
                 storage: storage.clone(),
                 state: Arc::new(SyncState::default()),
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data: tx,
+                pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
                 verify_tree_hashes: false,
                 notifications,
                 sync_to_consensus_tx: None,
@@ -2706,14 +2698,13 @@ mod tests {
             // Close the event channel which allows the consumer task to exit.
             drop(event_tx);
 
-            let (tx, _rx) = tokio::sync::watch::channel(Default::default());
             let context = ConsumerContext {
                 storage: storage.clone(),
                 state: Arc::new(SyncState::default()),
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data: tx,
+                pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
                 verify_tree_hashes: false,
                 notifications: Default::default(),
                 sync_to_consensus_tx: None,
@@ -2808,14 +2799,13 @@ mod tests {
 
             let notifications = pathfinder_rpc::Notifications::default();
 
-            let (tx, _rx) = tokio::sync::watch::channel(Default::default());
             let context = ConsumerContext {
                 storage: storage.clone(),
                 state: Arc::new(SyncState::default()),
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data: tx,
+                pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
                 verify_tree_hashes: false,
                 notifications,
                 sync_to_consensus_tx: None,
@@ -2835,14 +2825,13 @@ mod tests {
 
             let notifications = pathfinder_rpc::Notifications::default();
 
-            let (tx, _rx) = tokio::sync::watch::channel(Default::default());
             let context = ConsumerContext {
                 storage: storage.clone(),
                 state: Arc::new(SyncState::default()),
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data: tx,
+                pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
                 verify_tree_hashes: false,
                 notifications,
                 sync_to_consensus_tx: None,
@@ -2867,14 +2856,13 @@ Blockchain history must include the reorg tail and its parent block to perform a
 
             let notifications = pathfinder_rpc::Notifications::default();
 
-            let (tx, _rx) = tokio::sync::watch::channel(Default::default());
             let context = ConsumerContext {
                 storage,
                 state: Arc::new(SyncState::default()),
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data: tx,
+                pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
                 verify_tree_hashes: false,
                 notifications,
                 sync_to_consensus_tx: None,
@@ -2915,14 +2903,13 @@ Blockchain history must include the reorg tail and its parent block to perform a
 
             let notifications = pathfinder_rpc::Notifications::default();
 
-            let (tx, _rx) = tokio::sync::watch::channel(Default::default());
             let context = ConsumerContext {
                 storage: storage.clone(),
                 state: Arc::new(SyncState::default()),
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data: tx,
+                pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
                 verify_tree_hashes: false,
                 notifications,
                 sync_to_consensus_tx: None,
@@ -2945,14 +2932,13 @@ Blockchain history must include the reorg tail and its parent block to perform a
 
             let notifications = pathfinder_rpc::Notifications::default();
 
-            let (tx, _rx) = tokio::sync::watch::channel(Default::default());
             let context = ConsumerContext {
                 storage,
                 state: Arc::new(SyncState::default()),
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data: tx,
+                pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
                 verify_tree_hashes: false,
                 notifications,
                 sync_to_consensus_tx: None,
@@ -3003,14 +2989,13 @@ Blockchain history must include the reorg tail and its parent block to perform a
             // Close the event channel which allows the consumer task to exit.
             drop(event_tx);
 
-            let (tx, _rx) = tokio::sync::watch::channel(Default::default());
             let context = ConsumerContext {
                 storage: storage.clone(),
                 state: Arc::new(SyncState::default()),
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data: tx,
+                pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
                 verify_tree_hashes: false,
                 notifications: Default::default(),
                 sync_to_consensus_tx: None,
@@ -3124,14 +3109,13 @@ Blockchain history must include the reorg tail and its parent block to perform a
             // Close the event channel which allows the consumer task to exit.
             drop(event_tx);
 
-            let (tx, _rx) = tokio::sync::watch::channel(Default::default());
             let context = ConsumerContext {
                 storage: storage.clone(),
                 state: Arc::new(SyncState::default()),
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data: tx,
+                pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
                 verify_tree_hashes: false,
                 notifications: Default::default(),
                 sync_to_consensus_tx: None,
@@ -3220,14 +3204,13 @@ Blockchain history must include the reorg tail and its parent block to perform a
             // Close the event channel which allows the consumer task to exit.
             drop(event_tx);
 
-            let (pending_tx, _) = tokio::sync::watch::channel(Default::default());
             let context = ConsumerContext {
                 storage: storage.clone(),
                 state: Arc::new(SyncState::default()),
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data: pending_tx,
+                pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
                 verify_tree_hashes: false,
                 notifications: Default::default(),
                 sync_to_consensus_tx: None,
@@ -3258,14 +3241,13 @@ Blockchain history must include the reorg tail and its parent block to perform a
             // Close the event channel which allows the consumer task to exit.
             drop(event_tx);
 
-            let (pending_tx, _) = tokio::sync::watch::channel(Default::default());
             let context = ConsumerContext {
                 storage: storage.clone(),
                 state: Arc::new(SyncState::default()),
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data: pending_tx,
+                pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
                 verify_tree_hashes: false,
                 notifications: Default::default(),
                 sync_to_consensus_tx: None,
@@ -3358,14 +3340,13 @@ Blockchain history must include the reorg tail and its parent block to perform a
             // Close the event channel which allows the consumer task to exit.
             drop(event_tx);
 
-            let (tx, _rx) = tokio::sync::watch::channel(Default::default());
             let context = ConsumerContext {
                 storage,
                 state: Arc::new(SyncState::default()),
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data: tx,
+                pre_confirmed_cache: Arc::new(PreConfirmedCache::new()),
                 verify_tree_hashes: false,
                 notifications: Default::default(),
                 sync_to_consensus_tx: None,

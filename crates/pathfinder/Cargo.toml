@@ -52,6 +52,7 @@ pathfinder-ethereum = { path = "../ethereum" }
 pathfinder-executor = { path = "../executor" }
 pathfinder-gas-price = { path = "../gas-price" }
 pathfinder-merkle-tree = { path = "../merkle-tree" }
+pathfinder-pre-confirmed = { path = "../pre-confirmed" }
 pathfinder-rpc = { path = "../rpc" }
 pathfinder-serde = { path = "../serde" }
 pathfinder-storage = { path = "../storage" }
@@ -90,6 +91,7 @@ mockall = { workspace = true }
 pathfinder-common = { path = "../common", features = ["full-serde"] }
 pathfinder-compiler = { path = "../compiler" }
 pathfinder-executor = { path = "../executor" }
+pathfinder-pre-confirmed = { path = "../pre-confirmed" }
 pathfinder-rpc = { path = "../rpc" }
 pathfinder-storage = { path = "../storage", features = ["small_aggregate_filters"] }
 pathfinder-validator = { path = "../validator", features = ["skip-commitment-validation"] }
