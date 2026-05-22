@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use pathfinder_common::{BlockHash, BlockNumber};
+use pathfinder_pre_confirmed::PreConfirmedCache;
 use starknet_gateway_client::{BlockId, GatewayApi};
 use starknet_gateway_types::reply::{PreConfirmedBlock, PreConfirmedPollResponse};
-use tokio::sync::{watch, Notify};
+use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::state::sync::SyncEvent;
@@ -115,33 +116,17 @@ impl State {
     }
 }
 
-/// The polling loop's idle/wake policy.
-///
-/// `on_read` must be notified each time the cached pre-confirmed data is
-/// read. As long as notifications keep arriving within `timeout`, the loop
-/// polls continuously. If `timeout` elapses with no notification, the loop
-/// suspends itself; the next notification wakes it back up.
-pub(super) struct InactivityTimer {
-    pub timeout: std::time::Duration,
-    on_read: Arc<Notify>,
-}
-
-impl InactivityTimer {
-    pub(super) fn new(timeout: std::time::Duration, on_read: Arc<Notify>) -> Self {
-        Self { timeout, on_read }
-    }
-}
-
 /// Emits new pending data events while the current block is close to the latest
 /// block.
 ///
-/// The loop suspends polling after `timer.timeout` elapses without a
-/// cache-read signal, and resumes when the next signal fires.
+/// Suspends polling after `inactivity_timeout` elapses without the cache
+/// being read, and resumes on the next read.
 pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
     tx_event: tokio::sync::mpsc::Sender<SyncEvent>,
     sequencer: S,
     poll_interval: std::time::Duration,
-    timer: InactivityTimer,
+    cache: Arc<PreConfirmedCache>,
+    inactivity_timeout: std::time::Duration,
     latest: watch::Receiver<(BlockNumber, BlockHash)>,
     current: watch::Receiver<(BlockNumber, BlockHash)>,
 ) {
@@ -149,16 +134,17 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
     let mut last_active = Instant::now();
 
     loop {
-        // Idle transition: if the configured window has elapsed with no
-        // cache-read signal, suspend polling until the next signal.
-        if last_active.elapsed() >= timer.timeout {
+        // Suspend if idle.
+        if last_active.elapsed() >= inactivity_timeout {
             tracing::debug!("Pre-confirmed polling idle; waiting for cache reads");
-            timer.on_read.notified().await;
+            cache.mark_idle();
+            cache.wait_for_read().await;
             last_active = Instant::now();
         }
 
         let t_fetch = Instant::now();
 
+        // Skip while catching up to head.
         let (latest_number, latest_hash) = *latest.borrow();
         let current_number = current.borrow().0.get();
 
@@ -167,18 +153,18 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                 latest = %latest_number.get(), current = %current_number,
                 "Not in sync yet; skipping pre-confirmed block download"
             );
-            if wait_for_next_poll(t_fetch + poll_interval, &timer.on_read).await {
+            if wait_for_next_poll(t_fetch + poll_interval, &cache).await {
                 last_active = Instant::now();
             }
             continue;
         }
 
-        // Fetch the pre-latest block.
+        // Fetch pre-latest and pre-confirmed.
         let pre_latest_data = match fetch_pre_latest(&sequencer, latest_number, latest_hash).await {
             Ok(r) => r.map(Box::new),
             Err(e) => {
                 tracing::debug!(%e, "Failed to fetch pre-latest block");
-                if wait_for_next_poll(t_fetch + poll_interval, &timer.on_read).await {
+                if wait_for_next_poll(t_fetch + poll_interval, &cache).await {
                     last_active = Instant::now();
                 }
                 continue;
@@ -196,15 +182,15 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             Ok(r) => r,
             Err(err) => {
                 tracing::debug!(%err, "Failed to fetch pre-confirmed block");
-                if wait_for_next_poll(t_fetch + poll_interval, &timer.on_read).await {
+                if wait_for_next_poll(t_fetch + poll_interval, &cache).await {
                     last_active = Instant::now();
                 }
                 continue;
             }
         };
 
-        // Extract the block number from `Full` responses (`None` for
-        // `Unchanged`/`Delta`)
+        // Reconcile state with the resolved height. Only `Full` carries a
+        // height; `Unchanged`/`Delta` leave state at its tracked block.
         let resolved = match response {
             PreConfirmedPollResponse::Full { block_number, .. } => Some(block_number),
             _ => None,
@@ -218,7 +204,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                     current = %state.block_number,
                     "Pre-confirmed resolved to a lower height than tracked; skipping poll"
                 );
-                if wait_for_next_poll(t_fetch + poll_interval, &timer.on_read).await {
+                if wait_for_next_poll(t_fetch + poll_interval, &cache).await {
                     last_active = Instant::now();
                 }
                 continue;
@@ -236,6 +222,11 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             }
         }
 
+        // Publish. Each branch is responsible for signalling cache freshness:
+        //   - changed: the emitted event leads to a `cache.store(...)` call, which
+        //     bumps freshness as a side effect.
+        //   - unchanged: nothing is emitted, so we call `cache.refresh()` here to
+        //     unblock cold-start readers with the existing cache contents.
         if state.apply(response, pre_latest_data.is_some()) {
             let accumulated = state
                 .accumulated
@@ -255,21 +246,22 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             }
         } else {
             tracing::trace!("No change in pre-confirmed block data");
+            cache.refresh();
         }
 
-        if wait_for_next_poll(t_fetch + poll_interval, &timer.on_read).await {
+        // Wait for the next tick.
+        if wait_for_next_poll(t_fetch + poll_interval, &cache).await {
             last_active = Instant::now();
         }
     }
 }
 
-/// Sleeps until `deadline`, returning early if `on_read` is notified.
-/// Returns `true` when woken by a notification, `false` when the deadline
-/// elapsed.
-async fn wait_for_next_poll(deadline: Instant, on_read: &Notify) -> bool {
+/// Sleeps until `deadline`, returning early if the cache is read. Returns
+/// `true` when woken by a read, `false` when the deadline elapsed.
+async fn wait_for_next_poll(deadline: Instant, cache: &PreConfirmedCache) -> bool {
     tokio::select! {
         _ = tokio::time::sleep_until(deadline) => false,
-        _ = on_read.notified() => true,
+        _ = cache.wait_for_read() => true,
     }
 }
 
