@@ -350,6 +350,7 @@ mod tests {
         Transaction,
         TransactionVariant,
     };
+    use pathfinder_pre_confirmed::PreConfirmedCache;
     use starknet_gateway_client::MockGatewayApi;
     use starknet_gateway_types::reply::state_update::{
         DeclaredSierraClass,
@@ -368,9 +369,9 @@ mod tests {
         PreLatestBlock,
         Status,
     };
-    use tokio::sync::{watch, Notify};
+    use tokio::sync::watch;
 
-    use super::{poll_pre_confirmed, InactivityTimer};
+    use super::poll_pre_confirmed;
     use crate::state::sync::SyncEvent;
 
     const PARENT_HASH: BlockHash = block_hash!("0x1234");
@@ -560,7 +561,8 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                InactivityTimer::new(std::time::Duration::from_secs(60), Arc::new(Notify::new())),
+                Arc::new(PreConfirmedCache::new()),
+                std::time::Duration::from_secs(60),
                 latest,
                 current,
             )
@@ -658,7 +660,8 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                InactivityTimer::new(std::time::Duration::from_secs(60), Arc::new(Notify::new())),
+                Arc::new(PreConfirmedCache::new()),
+                std::time::Duration::from_secs(60),
                 rx_latest,
                 rx_current,
             )
@@ -814,7 +817,8 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                InactivityTimer::new(std::time::Duration::from_secs(60), Arc::new(Notify::new())),
+                Arc::new(PreConfirmedCache::new()),
+                std::time::Duration::from_secs(60),
                 rx_latest,
                 rx_current,
             )
@@ -1109,7 +1113,8 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                InactivityTimer::new(std::time::Duration::from_secs(60), Arc::new(Notify::new())),
+                Arc::new(PreConfirmedCache::new()),
+                std::time::Duration::from_secs(60),
                 rx_latest,
                 rx_current,
             )
@@ -1230,7 +1235,8 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                InactivityTimer::new(std::time::Duration::from_secs(60), Arc::new(Notify::new())),
+                Arc::new(PreConfirmedCache::new()),
+                std::time::Duration::from_secs(60),
                 latest,
                 current,
             )
@@ -1282,9 +1288,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn idle_timeout_pauses_polling_until_cache_read() {
-        // The polling loop runs Active while `on_read` keeps firing. Once
-        // `IDLE_TIMEOUT` elapses with no firings, it suspends.
-        // Notifying `on_read` wakes it back up.
+        // Polling runs while the cache keeps being read; once `IDLE_TIMEOUT`
+        // elapses with no reads the loop suspends. A subsequent cache read
+        // wakes it back up.
 
         const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
         const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
@@ -1312,17 +1318,28 @@ mod tests {
         let (_, latest) = watch::channel((latest_block_number, latest_hash));
         let (_, current) = watch::channel((latest_block_number, latest_hash));
 
-        let on_read = Arc::new(Notify::new());
-        let timer = super::InactivityTimer::new(IDLE_TIMEOUT, on_read.clone());
+        let cache = Arc::new(PreConfirmedCache::new());
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
         let sequencer = Arc::new(sequencer);
-        let _jh = tokio::spawn(async move {
-            super::poll_pre_confirmed(tx, sequencer, POLL_INTERVAL, timer, latest, current).await
+        let _jh = tokio::spawn({
+            let cache = cache.clone();
+            async move {
+                super::poll_pre_confirmed(
+                    tx,
+                    sequencer,
+                    POLL_INTERVAL,
+                    cache,
+                    IDLE_TIMEOUT,
+                    latest,
+                    current,
+                )
+                .await
+            }
         });
 
-        // Each `recv` either returns the next emission, or, once the loop has
-        // suspended on `on_read`, times out, ending the loop.
+        // Each `recv` either returns the next emission, or times out (which
+        // means the loop has suspended waiting for a cache read).
         let mut emissions_before_idle = 0;
         loop {
             match tokio::time::timeout(IDLE_TIMEOUT * 2, rx.recv()).await {
@@ -1336,11 +1353,11 @@ mod tests {
             "expected at least one emission while Active"
         );
 
-        // Notifying `on_read` wakes the loop within one poll
-        on_read.notify_one();
+        // A cache read wakes the loop within one poll interval.
+        let _ = cache.read().await;
         tokio::time::timeout(POLL_INTERVAL * 2, rx.recv())
             .await
-            .expect("loop should resume promptly after on_read notify")
+            .expect("loop should resume promptly after cache read")
             .expect("event channel closed");
     }
 }
