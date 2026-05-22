@@ -233,6 +233,15 @@ Examples:
     l1_poll_interval: std::num::NonZeroU64,
 
     #[arg(
+        long = "sync.pre-confirmed-idle-timeout",
+        long_help = "Suspend pre-confirmed block polling after this many seconds without an RPC \
+                     reading pending data. The loop resumes on the next read.",
+        default_value = "60",
+        env = "PATHFINDER_PRE_CONFIRMED_IDLE_TIMEOUT_SECONDS"
+    )]
+    pre_confirmed_idle_timeout: std::num::NonZeroU64,
+
+    #[arg(
         long = "color",
         long_help = "This flag controls when to use colors in the output logs.",
         default_value = "auto",
@@ -1091,6 +1100,7 @@ pub struct Config {
     pub max_rpc_connections: std::num::NonZeroUsize,
     pub poll_interval: Duration,
     pub l1_poll_interval: Duration,
+    pub pre_confirmed_idle_timeout: Duration,
     pub color: Color,
     pub log_output_json: bool,
     pub disable_version_update_check: bool,
@@ -1391,6 +1401,7 @@ impl Config {
             max_rpc_connections: args.max_rpc_connections,
             poll_interval: args.poll_interval,
             l1_poll_interval: Duration::from_secs(args.l1_poll_interval.get()),
+            pre_confirmed_idle_timeout: Duration::from_secs(args.pre_confirmed_idle_timeout.get()),
             color: args.color,
             log_output_json: args.log_output_json,
             disable_version_update_check: args.disable_version_update_check,
