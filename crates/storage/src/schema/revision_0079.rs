@@ -107,9 +107,9 @@ fn migrate_state_updates(
     let mut contract_update_stmt = tx
         .prepare(
             "SELECT cu1.contract_address AS contract_address, cu1.class_hash AS class_hash, \
-             cu2.block_number IS NOT NULL AS is_replaced FROM contract_updates cu1 LEFT OUTER \
-             JOIN contract_updates cu2 ON cu1.contract_address = cu2.contract_address AND \
-             cu2.block_number < cu1.block_number WHERE cu1.block_number = ?",
+             EXISTS(SELECT 1 FROM contract_updates cu2 WHERE cu2.contract_address = \
+             cu1.contract_address AND cu2.block_number < cu1.block_number) AS is_replaced FROM \
+             contract_updates cu1 WHERE cu1.block_number = ?",
         )
         .context("Preparing contract updates query")?;
 
@@ -512,7 +512,7 @@ fn migrate_transaction_hashes(
         buffer[..8].copy_from_slice(&block_number.to_be_bytes());
         buffer[8..].copy_from_slice(&idx.to_be_bytes());
 
-        batch.put_cf(&column, hash.as_slice(), &buffer);
+        batch.put_cf(&column, hash.as_slice(), buffer);
 
         if i % BATCH_SIZE == BATCH_SIZE - 1 {
             rocksdb
@@ -600,7 +600,9 @@ mod tests {
         let tx = conn.transaction().unwrap();
         crate::schema::base_schema(&tx).unwrap();
         tx.commit().unwrap();
-        let prior = &crate::schema::migrations()[..crate::schema::migrations().len() - 1];
+        // Run migrations through revision_0078 only (index 37). Later revisions
+        // drop SQLite tables that this test's INSERT relies on.
+        let prior = &crate::schema::migrations()[..38];
         for migration in prior {
             let tx = conn.transaction().unwrap();
             migration(&tx, &rocksdb).unwrap();

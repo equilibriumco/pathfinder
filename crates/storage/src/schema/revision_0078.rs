@@ -37,14 +37,6 @@ pub(crate) fn migrate(
     tracing::info!("Migrating trie removal markers");
     migrate_removal_markers(tx, &idx_to_contract)?;
 
-    // tx.execute_batch(
-    //     "
-    //     DROP TABLE trie_class;
-    //     DROP TABLE trie_contracts;
-    //     DROP TABLE trie_storage;
-    //     DROP TABLE contract_state_hashes;
-    //     ",
-    // )?;
     Ok(())
 }
 
@@ -250,7 +242,7 @@ fn walk_tree(
     batch.put_cf(column, key_buf, node_data);
 
     if batch.len() >= BATCH_SIZE {
-        rocksdb.rocksdb.write_without_wal(&batch)?;
+        rocksdb.rocksdb.write_without_wal(batch)?;
         batch.clear();
     }
 
@@ -474,8 +466,8 @@ impl SparsePackedArrays {
 
     pub fn get(&self, key: u64) -> Option<(&[u8], usize)> {
         let idx = self.keys.binary_search(&key).ok()?;
-        let start = self.offsets[idx] as usize;
-        let end = self.offsets[idx + 1] as usize;
+        let start = self.offsets[idx];
+        let end = self.offsets[idx + 1];
         Some((&self.data[start..end], idx))
     }
 
@@ -485,8 +477,7 @@ impl SparsePackedArrays {
 
     pub fn clear_migrated(&mut self) {
         let number_of_entries = self.keys.len();
-        let number_of_atomics =
-            (number_of_entries + usize::BITS as usize - 1) / usize::BITS as usize;
+        let number_of_atomics = number_of_entries.div_ceil(usize::BITS as usize);
         self.migrated
             .resize_with(number_of_atomics, Default::default);
     }
@@ -546,7 +537,7 @@ fn migrate_contract_state_hashes(
             row.context("Reading contract state hash row")?;
 
         let key = contract_state_hashes_key(block_number, &contract_address);
-        batch.put_cf(&column, key, &state_hash);
+        batch.put_cf(&column, key, state_hash);
 
         if i % BATCH_SIZE == BATCH_SIZE - 1 {
             rocksdb
@@ -576,14 +567,14 @@ fn create_next_index(
     let mut stmt = tx.prepare(&format!("SELECT MAX(idx) FROM {}", sqlite_table_name))?;
     let next_index: u64 = stmt.query_row([], |row| {
         let max_idx: Option<u64> = row.get(0)?;
-        Ok(max_idx.unwrap_or(0) + 1)
+        Ok(max_idx.map(|v| v + 1).unwrap_or(0))
     })?;
 
     let next_index_column = rocksdb.get_column(&TRIE_NEXT_INDEX_COLUMN);
     rocksdb.rocksdb.put_cf(
         &next_index_column,
         column.name.as_bytes(),
-        &next_index.to_be_bytes(),
+        next_index.to_be_bytes(),
     )?;
 
     Ok(())

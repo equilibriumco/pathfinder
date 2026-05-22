@@ -22,7 +22,7 @@ impl Column {
         let mut options = rust_rocksdb::Options::default();
 
         let mut block_based_options = rust_rocksdb::BlockBasedOptions::default();
-        block_based_options.set_block_cache(&cache);
+        block_based_options.set_block_cache(cache);
         block_based_options.set_cache_index_and_filter_blocks(true);
         block_based_options.set_pin_l0_filter_and_index_blocks_in_cache(true);
         block_based_options.set_ribbon_filter(10.0);

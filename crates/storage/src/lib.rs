@@ -611,7 +611,9 @@ impl StorageBuilder {
                     .and_then(|k| k.try_into().ok())
                     .map(u64::from_be_bytes)
             } else {
-                iter.status().ok();
+                if let Err(e) = iter.status() {
+                    tracing::warn!(error = %e, "RocksDB iterator error during readonly consistency check");
+                }
                 None
             };
             if let Some(rocks_top) = rocksdb_highest {
@@ -692,13 +694,6 @@ impl StorageBuilder {
 
         // TODO: make this configurable
         let cache = rust_rocksdb::Cache::new_hyper_clock_cache(16 * 1024 * 1024 * 1024, 0);
-        let mut block_opts = rust_rocksdb::BlockBasedOptions::default();
-        block_opts.set_block_cache(&cache);
-        block_opts.set_cache_index_and_filter_blocks(true);
-        block_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
-        block_opts.set_ribbon_filter(15.0);
-
-        options.set_block_based_table_factory(&block_opts);
 
         let cfs = columns::COLUMNS
             .iter()
@@ -1116,6 +1111,8 @@ pub(crate) fn reconcile_rocksdb_with_sqlite(
 ) -> anyhow::Result<()> {
     use crate::connection::state_update::{nonce_update_key, storage_update_key};
     use crate::connection::{
+        contract_state_hashes_key,
+        CONTRACT_STATE_HASHES_COLUMN,
         EVENTS_COLUMN,
         NONCE_UPDATES_COLUMN,
         STATE_UPDATES_COLUMN,
@@ -1176,6 +1173,7 @@ pub(crate) fn reconcile_rocksdb_with_sqlite(
     let hashes_cf = rocksdb.get_column(&TRANSACTION_HASHES_COLUMN);
     let nonce_cf = rocksdb.get_column(&NONCE_UPDATES_COLUMN);
     let storage_cf = rocksdb.get_column(&STORAGE_UPDATES_COLUMN);
+    let csh_cf = rocksdb.get_column(&CONTRACT_STATE_HASHES_COLUMN);
 
     for block_number in purge_from..=rocks_top {
         let key = block_number.to_be_bytes();
@@ -1231,7 +1229,7 @@ pub(crate) fn reconcile_rocksdb_with_sqlite(
                     if update.nonce.is_some() {
                         batch.delete_cf(&nonce_cf, nonce_update_key(block_number, address));
                     }
-                    for (storage_key, _) in &update.storage {
+                    for storage_key in update.storage.keys() {
                         batch.delete_cf(
                             &storage_cf,
                             storage_update_key(block_number, address, storage_key),
@@ -1239,12 +1237,18 @@ pub(crate) fn reconcile_rocksdb_with_sqlite(
                     }
                 }
                 for (address, update) in &data.system_contract_updates {
-                    for (storage_key, _) in &update.storage {
+                    for storage_key in update.storage.keys() {
                         batch.delete_cf(
                             &storage_cf,
                             storage_update_key(block_number, address, storage_key),
                         );
                     }
+                }
+                for address in data.contract_updates.keys() {
+                    batch.delete_cf(&csh_cf, contract_state_hashes_key(block_number, address));
+                }
+                for address in data.system_contract_updates.keys() {
+                    batch.delete_cf(&csh_cf, contract_state_hashes_key(block_number, address));
                 }
                 Ok(())
             })() {

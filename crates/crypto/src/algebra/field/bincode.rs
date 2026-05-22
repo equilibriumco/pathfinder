@@ -17,8 +17,8 @@ impl<Context> Decode<Context> for Felt {
         decoder: &mut D,
     ) -> core::result::Result<Self, bincode::error::DecodeError> {
         let bytes = <[u8; 32]>::decode(decoder)?;
-        Ok(Self::from_be_bytes(bytes)
-            .map_err(|_| bincode::error::DecodeError::Other("Overflow when decoding felt value"))?)
+        Self::from_be_bytes(bytes)
+            .map_err(|_| bincode::error::DecodeError::Other("Overflow when decoding felt value"))
     }
 }
 

@@ -904,6 +904,8 @@ impl RunningEventFilter {
             expected_block = block_number + 1;
             iter.next();
         }
+        iter.status()
+            .context("RocksDB iterator error during event filter rebuild")?;
 
         tracing::trace!(
             "Rebuilding running event filter: 100.00% ({total}/{total}) blocks covered",

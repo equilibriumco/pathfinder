@@ -54,7 +54,7 @@ pub const CONTRACT_STATE_HASHES_COLUMN: Column =
 ///
 /// We're using an inverted block number to allow for efficient retrieval of the
 /// latest state hash for a given contract address using forward iteration.
-fn contract_state_hashes_key(
+pub(crate) fn contract_state_hashes_key(
     block_number: BlockNumber,
     contract_address: &ContractAddress,
 ) -> [u8; CONTRACT_STATE_HASHES_KEY_LENGTH] {
@@ -172,7 +172,7 @@ impl Transaction<'_> {
         if let Some(root_index) = root_index {
             let root_index = TrieStorageIndex(root_index.try_into()?);
             let root = self
-                .contract_trie_node_hash(root_index, &contract)?
+                .contract_trie_node_hash(root_index, contract)?
                 .map(ContractRoot);
             Ok(root)
         } else {
@@ -729,7 +729,7 @@ impl Transaction<'_> {
         batch.put_cf(
             &next_index_column,
             rocksdb_hash_column.name.as_bytes(),
-            &storage_idx_base.0.to_be_bytes(),
+            storage_idx_base.0.to_be_bytes(),
         );
 
         if table == "trie_storage" && block_number.get() % 10000 == 9999 {

@@ -151,13 +151,13 @@ impl Transaction<'_> {
             self.rocksdb_get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
         batch.put_cf(
             &transactions_and_receipts_column,
-            &block_number_key,
+            block_number_key,
             &transactions_with_receipts,
         );
 
         let events_column = self.rocksdb_get_column(&EVENTS_COLUMN);
         if let Some(encoded_events) = encoded_events {
-            batch.put_cf(&events_column, &block_number_key, &encoded_events);
+            batch.put_cf(&events_column, block_number_key, &encoded_events);
         }
 
         let transaction_hashes_column = self.rocksdb_get_column(&TRANSACTION_HASHES_COLUMN);
@@ -170,7 +170,7 @@ impl Transaction<'_> {
             batch.put_cf(
                 &transaction_hashes_column,
                 transaction.hash.0.as_be_bytes(),
-                &buffer,
+                buffer,
             );
         }
 
@@ -586,11 +586,13 @@ impl Transaction<'_> {
         let idx = u16::from_be_bytes(value[8..].try_into().expect("2-byte slice")) as usize;
 
         let txs_cf = self.rocksdb_get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
-        let blob = self
+        let Some(blob) = self
             .rocksdb()
             .get_pinned_cf(&txs_cf, block_number.get().to_be_bytes())
             .context("Reading transactions blob")?
-            .context("Transactions blob missing for hashed block")?;
+        else {
+            return Ok(None);
+        };
         let decompressed =
             compression::decompress_transactions(&blob).context("Decompressing transactions")?;
         let (txs, _): (dto::TransactionsWithReceiptsForBlock, _) =
@@ -632,11 +634,13 @@ impl Transaction<'_> {
         let key = block_number.get().to_be_bytes();
 
         let txs_cf = self.rocksdb_get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
-        let blob = self
+        let Some(blob) = self
             .rocksdb()
             .get_pinned_cf(&txs_cf, key)
             .context("Reading transactions blob")?
-            .context("Transactions blob missing for hashed block")?;
+        else {
+            return Ok(None);
+        };
         let decompressed =
             compression::decompress_transactions(&blob).context("Decompressing transactions")?;
         let (txs, _): (dto::TransactionsWithReceiptsForBlock, _) =

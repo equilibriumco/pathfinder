@@ -146,7 +146,7 @@ pub(crate) fn prune_block(tx: &super::Transaction<'_>, block: BlockNumber) -> an
                     last_kept_block,
                 )?;
             }
-            for (storage_key, _) in &update.storage {
+            for storage_key in update.storage.keys() {
                 delete_prior_block_entries(
                     &mut batch,
                     tx.rocksdb(),
@@ -157,7 +157,7 @@ pub(crate) fn prune_block(tx: &super::Transaction<'_>, block: BlockNumber) -> an
             }
         }
         for (address, update) in &state_update.system_contract_updates {
-            for (storage_key, _) in &update.storage {
+            for storage_key in update.storage.keys() {
                 delete_prior_block_entries(
                     &mut batch,
                     tx.rocksdb(),
@@ -169,11 +169,13 @@ pub(crate) fn prune_block(tx: &super::Transaction<'_>, block: BlockNumber) -> an
         }
     }
 
-    // Prune RocksDB transaction/receipt/event/hash data for the pruned block.
+    // Prune RocksDB transaction/receipt/event/hash/state-update data for the pruned
+    // block.
     {
         let txs_cf = tx.rocksdb_get_column(&crate::connection::TRANSACTIONS_AND_RECEIPTS_COLUMN);
         let events_cf = tx.rocksdb_get_column(&crate::connection::EVENTS_COLUMN);
         let hashes_cf = tx.rocksdb_get_column(&crate::connection::TRANSACTION_HASHES_COLUMN);
+        let state_updates_cf = tx.rocksdb_get_column(&crate::connection::STATE_UPDATES_COLUMN);
         let key = block.get().to_be_bytes();
 
         // Before deleting the transactions blob, read it to learn which tx hashes
@@ -202,6 +204,7 @@ pub(crate) fn prune_block(tx: &super::Transaction<'_>, block: BlockNumber) -> an
         let mut batch = tx.batch.lock().expect("Batch lock poisoned");
         batch.delete_cf(&txs_cf, key);
         batch.delete_cf(&events_cf, key);
+        batch.delete_cf(&state_updates_cf, key);
     }
 
     Ok(())
@@ -292,7 +295,9 @@ mod tests {
             cf: &impl rust_rocksdb::AsColumnFamilyRef,
             prefix: &[u8],
         ) -> usize {
-            let mut iter = db.raw_iterator_cf(cf);
+            let mut read_opts = rust_rocksdb::ReadOptions::default();
+            read_opts.set_total_order_seek(true);
+            let mut iter = db.raw_iterator_cf_opt(cf, read_opts);
             iter.seek(prefix);
             let mut n = 0;
             while iter.valid() {

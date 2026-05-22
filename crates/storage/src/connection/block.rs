@@ -137,13 +137,6 @@ impl Transaction<'_> {
 
         self.inner()
             .execute(
-                "DELETE FROM contract_state_hashes WHERE block_number = ?",
-                params![&block],
-            )
-            .context("Deleting block from contract_state_hashes table")?;
-
-        self.inner()
-            .execute(
                 "DELETE FROM class_roots WHERE block_number = ?",
                 params![&block],
             )

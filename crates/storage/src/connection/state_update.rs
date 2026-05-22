@@ -362,7 +362,7 @@ impl Transaction<'_> {
                     nonce_update_key(block_number, address),
                 );
             }
-            for (key, _) in &update.storage {
+            for key in update.storage.keys() {
                 batch.delete_cf(
                     &storage_updates_column,
                     storage_update_key(block_number, address, key),
@@ -371,7 +371,7 @@ impl Transaction<'_> {
         }
 
         for (address, update) in &data.system_contract_updates {
-            for (key, _) in &update.storage {
+            for key in update.storage.keys() {
                 batch.delete_cf(
                     &storage_updates_column,
                     storage_update_key(block_number, address, key),
