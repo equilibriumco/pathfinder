@@ -40,7 +40,7 @@ pub(crate) fn migrate(
     Ok(())
 }
 
-const BATCH_SIZE: usize = 1000000;
+const BATCH_SIZE: usize = 1_000_000;
 
 fn migrate_trie(
     sqlite_txn: &rusqlite::Transaction,
@@ -436,7 +436,7 @@ fn migrate_contract_removal_table(
     Ok(())
 }
 
-pub struct SparsePackedArrays {
+struct SparsePackedArrays {
     cursor: usize,
     keys: Vec<u64>,      // sorted
     offsets: Vec<usize>, // parallel to keys, + 1 sentinel
@@ -445,7 +445,7 @@ pub struct SparsePackedArrays {
 }
 
 impl SparsePackedArrays {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             cursor: 0,
             keys: Vec::new(),
@@ -455,7 +455,7 @@ impl SparsePackedArrays {
         }
     }
 
-    pub fn push(&mut self, key: u64, hash: &[u8], blob: &[u8]) {
+    fn push(&mut self, key: u64, hash: &[u8], blob: &[u8]) {
         self.keys.push(key);
         *self.offsets.last_mut().unwrap() = self.cursor;
         self.data.extend_from_slice(hash);
@@ -464,25 +464,25 @@ impl SparsePackedArrays {
         self.offsets.push(self.cursor); // sentinel
     }
 
-    pub fn get(&self, key: u64) -> Option<(&[u8], usize)> {
+    fn get(&self, key: u64) -> Option<(&[u8], usize)> {
         let idx = self.keys.binary_search(&key).ok()?;
         let start = self.offsets[idx];
         let end = self.offsets[idx + 1];
         Some((&self.data[start..end], idx))
     }
 
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.keys.len()
     }
 
-    pub fn clear_migrated(&mut self) {
+    fn clear_migrated(&mut self) {
         let number_of_entries = self.keys.len();
         let number_of_atomics = number_of_entries.div_ceil(usize::BITS as usize);
         self.migrated
             .resize_with(number_of_atomics, Default::default);
     }
 
-    pub fn is_migrated(&self, idx: usize) -> bool {
+    fn is_migrated(&self, idx: usize) -> bool {
         let bit_idx = idx % usize::BITS as usize;
         let atomic_idx = idx / usize::BITS as usize;
         if atomic_idx >= self.migrated.len() {
@@ -492,7 +492,7 @@ impl SparsePackedArrays {
         (self.migrated[atomic_idx].load(std::sync::atomic::Ordering::Acquire) & mask) != 0
     }
 
-    pub fn set_migrated(&self, idx: usize) {
+    fn set_migrated(&self, idx: usize) {
         let bit_idx = idx % usize::BITS as usize;
         let atomic_idx = idx / usize::BITS as usize;
         if atomic_idx >= self.migrated.len() {

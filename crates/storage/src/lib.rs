@@ -1,6 +1,6 @@
 //! Local storage.
 //!
-//! Currently this consists of a Sqlite backend implementation.
+//! SQLite for relational data and RocksDB for key-value data.
 
 // This is intended for internal use only -- do not make public.
 mod prelude;
@@ -15,7 +15,6 @@ mod error;
 pub mod fake;
 mod params;
 mod schema;
-use rust_rocksdb::ColumnFamilyDescriptor;
 pub use schema::revision_0073::reorg_regression_checks;
 pub mod test_utils;
 
@@ -33,6 +32,7 @@ use pathfinder_common::BlockNumber;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{OpenFlags, OptionalExtension};
+use rust_rocksdb::ColumnFamilyDescriptor;
 pub use transaction::dto::{
     DataAvailabilityMode,
     DeclareTransactionV4,
@@ -133,7 +133,7 @@ impl RocksDBInner {
     fn log_stats(&self) {
         let stats = self.options.get_statistics();
         if let Some(stats) = stats {
-            tracing::debug!(stats = stats, "RocksDB statistics");
+            tracing::debug!(%stats, "RocksDB statistics");
         }
     }
 }
@@ -705,11 +705,6 @@ impl StorageBuilder {
 
         let (trie_class_next_index, trie_contract_next_index, trie_storage_next_index) =
             Self::rocksdb_fetch_next_trie_storage_indices(&db)?;
-
-        // tracing::info!("Compacting trie columns after opening RocksDB");
-        // Self::compact_trie_column(&db, &crate::connection::TRIE_CLASS_COLUMN)?;
-        // Self::compact_trie_column(&db, &crate::connection::TRIE_STORAGE_COLUMN)?;
-        // Self::compact_trie_column(&db, &crate::connection::TRIE_CONTRACT_COLUMN)?;
 
         let db_inner = RocksDBInner {
             rocksdb: db,

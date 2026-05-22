@@ -808,14 +808,15 @@ impl ProcessStage for StoreBlock {
         db.insert_state_update_data(block_number, &state_diff)
             .context("Inserting state update data")?;
 
-        let (storage_commitment, class_commitment) = update_starknet_state::<PedersenHash, PoseidonHash>(
-            &db,
-            (&state_diff).into(),
-            self.verify_tree_hashes,
-            block_number,
-            self.storage.clone(),
-        )
-        .with_context(|| format!("Updating Starknet state, block_number {block_number}"))?;
+        let (storage_commitment, class_commitment) =
+            update_starknet_state::<PedersenHash, PoseidonHash>(
+                &db,
+                (&state_diff).into(),
+                self.verify_tree_hashes,
+                block_number,
+                self.storage.clone(),
+            )
+            .with_context(|| format!("Updating Starknet state, block_number {block_number}"))?;
 
         // Ensure that roots match.
         let state_commitment = StateCommitment::calculate(

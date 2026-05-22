@@ -238,6 +238,7 @@ fn delete_prior_block_entries<C: rust_rocksdb::AsColumnFamilyRef>(
         batch.delete_cf(cf, key);
         iter.next();
     }
+    iter.status().context("Iterating entries for pruning")?;
     Ok(())
 }
 

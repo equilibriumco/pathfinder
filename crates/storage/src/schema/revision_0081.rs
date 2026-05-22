@@ -7,8 +7,8 @@ pub(crate) fn migrate(
     tracing::info!("Dropping SQLite transactions and transaction_hashes tables (now in RocksDB)");
     tx.execute_batch(
         "
-        DROP TABLE IF EXISTS transactions;
-        DROP TABLE IF EXISTS transaction_hashes;
+        DROP TABLE transactions;
+        DROP TABLE transaction_hashes;
         ",
     )
     .context("Dropping transactions and transaction_hashes")?;

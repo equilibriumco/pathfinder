@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 mod block;
 mod class;
-pub mod dto;
+pub(crate) mod dto;
 mod ethereum;
 pub mod event;
 pub mod pruning;
@@ -117,7 +117,7 @@ impl Connection {
 
 pub struct Transaction<'inner> {
     transaction: rusqlite::Transaction<'inner>,
-    rocksdb: Arc<super::RocksDBInner>,
+    rocksdb: Arc<RocksDBInner>,
     batch: Mutex<crate::RocksDBBatch>,
     event_filter_cache: Arc<AggregateBloomCache>,
     running_event_filter: Arc<Mutex<RunningEventFilter>>,
@@ -129,7 +129,7 @@ pub struct Transaction<'inner> {
 impl<'inner> Transaction<'inner> {
     /// Test-only: clone the shared RocksDB handle so a test can read state
     /// outside the pending batch.
-    pub(crate) fn rocksdb_for_test(&self) -> Arc<crate::RocksDBInner> {
+    pub(crate) fn rocksdb_for_test(&self) -> Arc<RocksDBInner> {
         Arc::clone(&self.rocksdb)
     }
 
@@ -168,7 +168,7 @@ impl<'inner> Transaction<'inner> {
         transaction: rusqlite::Transaction<'inner>,
         event_filter_cache: Arc<AggregateBloomCache>,
         running_event_filter: Arc<Mutex<RunningEventFilter>>,
-        rocksdb: Arc<crate::RocksDBInner>,
+        rocksdb: Arc<RocksDBInner>,
     ) -> Transaction<'inner> {
         Transaction {
             transaction,

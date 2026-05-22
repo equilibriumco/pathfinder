@@ -396,6 +396,8 @@ impl Transaction<'_> {
             batch.delete_cf(&events_cf, key);
             iter.next();
         }
+        iter.status()
+            .context("Iterating transactions for deletion")?;
         Ok(())
     }
 
@@ -424,6 +426,8 @@ impl Transaction<'_> {
             }
             iter.next();
         }
+        iter.status()
+            .context("Iterating transaction hashes for deletion")?;
         Ok(())
     }
 

@@ -6,7 +6,7 @@ use pathfinder_common::{BlockNumber, ContractAddress, StorageAddress, StorageVal
 use pathfinder_crypto::Felt;
 use pathfinder_merkle_tree::ContractsStorageTree;
 
-pub fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)

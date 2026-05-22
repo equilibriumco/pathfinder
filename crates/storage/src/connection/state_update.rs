@@ -138,7 +138,8 @@ impl Transaction<'_> {
             migrated_compiled_classes: migrated_compiled_classes.clone(),
         };
         let state_update_data = dto::StateUpdateData::from(state_update_data);
-        let data = bincode::serde::encode_to_vec(state_update_data, bincode::config::standard())?;
+        let data = bincode::serde::encode_to_vec(state_update_data, bincode::config::standard())
+            .context("Encoding state update data")?;
         self.batch
             .lock()
             .expect("Batch lock poisoned")

@@ -40,12 +40,11 @@ fn contract_trie_key(
     buf[TRIE_CONTRACT_PREFIX_LEN..].copy_from_slice(&storage_idx_be_bytes);
 }
 
-const CONTRACT_STATE_HASHES_PREFIX_LENGTH: usize = size_of::<Felt>();
-const CONTRACT_STATE_HASHES_KEY_LENGTH: usize =
-    CONTRACT_STATE_HASHES_PREFIX_LENGTH + size_of::<u64>();
+const CONTRACT_STATE_HASHES_PREFIX_LEN: usize = size_of::<Felt>();
+const CONTRACT_STATE_HASHES_KEY_LEN: usize = CONTRACT_STATE_HASHES_PREFIX_LEN + size_of::<u64>();
 
 pub const CONTRACT_STATE_HASHES_COLUMN: Column =
-    Column::new("contract_state_hashes").with_prefix_length(CONTRACT_STATE_HASHES_PREFIX_LENGTH);
+    Column::new("contract_state_hashes").with_prefix_length(CONTRACT_STATE_HASHES_PREFIX_LEN);
 
 /// Constructs the key for a contract state hash entry.
 ///
@@ -57,12 +56,12 @@ pub const CONTRACT_STATE_HASHES_COLUMN: Column =
 pub(crate) fn contract_state_hashes_key(
     block_number: BlockNumber,
     contract_address: &ContractAddress,
-) -> [u8; CONTRACT_STATE_HASHES_KEY_LENGTH] {
-    let mut key = [0u8; CONTRACT_STATE_HASHES_KEY_LENGTH];
+) -> [u8; CONTRACT_STATE_HASHES_KEY_LEN] {
+    let mut key = [0u8; CONTRACT_STATE_HASHES_KEY_LEN];
     let block_number = u64::MAX - block_number.get();
 
-    key[..CONTRACT_STATE_HASHES_PREFIX_LENGTH].copy_from_slice(contract_address.0.as_be_bytes());
-    key[CONTRACT_STATE_HASHES_PREFIX_LENGTH..].copy_from_slice(&block_number.to_be_bytes());
+    key[..CONTRACT_STATE_HASHES_PREFIX_LEN].copy_from_slice(contract_address.0.as_be_bytes());
+    key[CONTRACT_STATE_HASHES_PREFIX_LEN..].copy_from_slice(&block_number.to_be_bytes());
     key
 }
 
@@ -158,16 +157,16 @@ impl Transaction<'_> {
         block_number: BlockNumber,
         contract: &ContractAddress,
     ) -> anyhow::Result<Option<ContractRoot>> {
-        let root_index = self.inner()
-        .query_row(
-            r"
-                SELECT root_index FROM contract_roots WHERE block_number <= ? AND contract_address = ? ORDER BY block_number DESC LIMIT 1
-            ",
-            params![&block_number, contract],
-            |row| row.get_optional_i64(0),
-        )
-        .optional()?
-        .flatten();
+        let root_index = self
+            .inner()
+            .query_row(
+                "SELECT root_index FROM contract_roots WHERE block_number <= ? AND \
+                 contract_address = ? ORDER BY block_number DESC LIMIT 1",
+                params![&block_number, contract],
+                |row| row.get_optional_i64(0),
+            )
+            .optional()?
+            .flatten();
 
         if let Some(root_index) = root_index {
             let root_index = TrieStorageIndex(root_index.try_into()?);
@@ -276,6 +275,8 @@ impl Transaction<'_> {
             batch.delete_cf(&column, key);
             iter.next();
         }
+        iter.status()
+            .context("Iterating contract state hashes for deletion")?;
 
         Ok(())
     }
@@ -695,7 +696,7 @@ impl Transaction<'_> {
 
         // Reusable (and oversized) buffer for encoding.
         let mut buffer = [0u8; 256];
-        let mut key: [u8; 40] = [0u8; TRIE_CONTRACT_KEY_LEN];
+        let mut key = [0u8; TRIE_CONTRACT_KEY_LEN];
 
         let mut batch = self.batch.lock().expect("Batch lock poisoned");
 
@@ -750,7 +751,7 @@ impl Transaction<'_> {
         rocksdb_column: &Column,
         key_prefix: Option<&Felt>,
     ) -> anyhow::Result<Option<StoredNode>> {
-        let mut key: [u8; 40] = [0u8; TRIE_CONTRACT_KEY_LEN];
+        let mut key = [0u8; TRIE_CONTRACT_KEY_LEN];
         let key_length = if let Some(key_prefix) = key_prefix {
             contract_trie_key(key_prefix, index, &mut key);
             TRIE_CONTRACT_KEY_LEN
@@ -774,7 +775,7 @@ impl Transaction<'_> {
         rocksdb_hash_column: &Column,
         key_prefix: Option<&Felt>,
     ) -> anyhow::Result<Option<Felt>> {
-        let mut key: [u8; 40] = [0u8; TRIE_CONTRACT_KEY_LEN];
+        let mut key = [0u8; TRIE_CONTRACT_KEY_LEN];
         let key_length = if let Some(key_prefix) = key_prefix {
             contract_trie_key(key_prefix, index, &mut key);
             TRIE_CONTRACT_KEY_LEN

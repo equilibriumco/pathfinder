@@ -433,17 +433,18 @@ pub fn spawn(
                                 use pathfinder_merkle_tree::starknet_state::update_starknet_state;
 
                                 let starknet_version = block.header.starknet_version;
-                                let state_commitment = update_starknet_state::<PedersenHash, PoseidonHash>(
-                                    &main_db_tx,
-                                    block.state_update.as_ref(),
-                                    verify_tree_hashes,
-                                    block.header.number,
-                                    main_readonly_storage.clone(),
-                                )
-                                .context("Updating Starknet state")
-                                .map(|(storage, class)| {
-                                    StateCommitment::calculate(storage, class, starknet_version)
-                                });
+                                let state_commitment =
+                                    update_starknet_state::<PedersenHash, PoseidonHash>(
+                                        &main_db_tx,
+                                        block.state_update.as_ref(),
+                                        verify_tree_hashes,
+                                        block.header.number,
+                                        main_readonly_storage.clone(),
+                                    )
+                                    .context("Updating Starknet state")
+                                    .map(|(storage, class)| {
+                                        StateCommitment::calculate(storage, class, starknet_version)
+                                    });
 
                                 // Do not commit this.
                                 drop(main_db_tx);

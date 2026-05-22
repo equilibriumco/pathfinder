@@ -365,17 +365,21 @@ fn get_class_proofs(
         return Ok((class_root_hash, NodeHashToNodeMappings(vec![])));
     };
 
-    let nodes: Vec<NodeHashToNodeMapping> =
-        ClassCommitmentTree::<PoseidonHash>::get_proofs(tx, block_number, class_hashes, class_root_idx)?
-            .into_iter()
-            .flatten()
-            .map(|(node, node_hash)| NodeHashToNodeMapping {
-                node_hash,
-                node: ProofNode(node),
-            })
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
+    let nodes: Vec<NodeHashToNodeMapping> = ClassCommitmentTree::<PoseidonHash>::get_proofs(
+        tx,
+        block_number,
+        class_hashes,
+        class_root_idx,
+    )?
+    .into_iter()
+    .flatten()
+    .map(|(node, node_hash)| NodeHashToNodeMapping {
+        node_hash,
+        node: ProofNode(node),
+    })
+    .collect::<HashSet<_>>()
+    .into_iter()
+    .collect();
     let classes_proof = NodeHashToNodeMappings(nodes);
 
     Ok((class_root_hash, classes_proof))
@@ -410,17 +414,21 @@ fn get_contract_proofs(
         return Ok((storage_root_hash, NodeHashToNodeMappings(vec![]), vec![]));
     };
 
-    let nodes =
-        StorageCommitmentTree::<PedersenHash>::get_proofs(tx, block_number, contract_addresses, storage_root_idx)?
-            .into_iter()
-            .flatten()
-            .map(|(node, node_hash)| NodeHashToNodeMapping {
-                node_hash,
-                node: ProofNode(node),
-            })
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
+    let nodes = StorageCommitmentTree::<PedersenHash>::get_proofs(
+        tx,
+        block_number,
+        contract_addresses,
+        storage_root_idx,
+    )?
+    .into_iter()
+    .flatten()
+    .map(|(node, node_hash)| NodeHashToNodeMapping {
+        node_hash,
+        node: ProofNode(node),
+    })
+    .collect::<HashSet<_>>()
+    .into_iter()
+    .collect();
 
     let contract_proof_nodes = NodeHashToNodeMappings(nodes);
 
@@ -471,22 +479,23 @@ fn get_contract_storage_proofs(
                     .context("Querying contract root index")?;
 
                 if let Some(root) = root {
-                    let nodes: Vec<NodeHashToNodeMapping> = ContractsStorageTree::<PedersenHash>::get_proofs(
-                        &tx,
-                        csk.contract_address,
-                        block_number,
-                        &csk.storage_keys,
-                        root,
-                    )?
-                    .into_iter()
-                    .flatten()
-                    .map(|(node, node_hash)| NodeHashToNodeMapping {
-                        node_hash,
-                        node: ProofNode(node),
-                    })
-                    .collect::<HashSet<_>>()
-                    .into_iter()
-                    .collect();
+                    let nodes: Vec<NodeHashToNodeMapping> =
+                        ContractsStorageTree::<PedersenHash>::get_proofs(
+                            &tx,
+                            csk.contract_address,
+                            block_number,
+                            &csk.storage_keys,
+                            root,
+                        )?
+                        .into_iter()
+                        .flatten()
+                        .map(|(node, node_hash)| NodeHashToNodeMapping {
+                            node_hash,
+                            node: ProofNode(node),
+                        })
+                        .collect::<HashSet<_>>()
+                        .into_iter()
+                        .collect();
 
                     proofs.push(NodeHashToNodeMappings(nodes));
                 } else {
@@ -835,7 +844,13 @@ mod tests {
                 ..Default::default()
             },
         );
-        pathfinder_storage::fake::fill(&storage, &blocks, Some(Box::new(update_starknet_state::<PedersenHash, PoseidonHash>)));
+        pathfinder_storage::fake::fill(
+            &storage,
+            &blocks,
+            Some(Box::new(
+                update_starknet_state::<PedersenHash, PoseidonHash>,
+            )),
+        );
 
         let context = RpcContext::for_tests().with_storage(storage);
 
@@ -968,7 +983,13 @@ mod tests {
             },
         );
 
-        fill(&storage, &blocks, Some(Box::new(update_starknet_state::<PedersenHash, PoseidonHash>)));
+        fill(
+            &storage,
+            &blocks,
+            Some(Box::new(
+                update_starknet_state::<PedersenHash, PoseidonHash>,
+            )),
+        );
 
         let context = RpcContext::for_tests().with_storage(storage);
         let input = req.into_input(&blocks);

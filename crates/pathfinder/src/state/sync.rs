@@ -1304,14 +1304,15 @@ fn l2_update(
     // parallel contract state updates
     storage: Storage,
 ) -> anyhow::Result<L2Block> {
-    let (storage_commitment, class_commitment) = update_starknet_state::<PedersenHash, PoseidonHash>(
-        transaction,
-        block.state_update().as_ref(),
-        verify_tree_hashes,
-        block.number(),
-        storage,
-    )
-    .context("Updating Starknet state")?;
+    let (storage_commitment, class_commitment) =
+        update_starknet_state::<PedersenHash, PoseidonHash>(
+            transaction,
+            block.state_update().as_ref(),
+            verify_tree_hashes,
+            block.number(),
+            storage,
+        )
+        .context("Updating Starknet state")?;
 
     let state_commitment = StateCommitment::calculate(
         storage_commitment,

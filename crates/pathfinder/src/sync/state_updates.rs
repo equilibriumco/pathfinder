@@ -260,22 +260,23 @@ pub async fn batch_update_starknet_state(
 
         let PeerData { peer, data: merged } = merge_state_updates(state_updates);
 
-        let (storage_commitment, class_commitment) = update_starknet_state::<PedersenHash, PoseidonHash>(
-            &db,
-            (&merged).into(),
-            verify_tree_hashes,
-            tail,
-            storage.clone(),
-        )
-        .map_err(|error| match error {
-            StateUpdateError::ContractClassHashMissing(for_contract) => {
-                tracing::debug!(%for_contract, "Contract class hash is missing");
-                SyncError::ContractClassMissing(peer)
-            }
-            StateUpdateError::StorageError(error) => SyncError::Fatal(Arc::new(
-                error.context(format!("Updating Starknet state, tail {tail}")),
-            )),
-        })?;
+        let (storage_commitment, class_commitment) =
+            update_starknet_state::<PedersenHash, PoseidonHash>(
+                &db,
+                (&merged).into(),
+                verify_tree_hashes,
+                tail,
+                storage.clone(),
+            )
+            .map_err(|error| match error {
+                StateUpdateError::ContractClassHashMissing(for_contract) => {
+                    tracing::debug!(%for_contract, "Contract class hash is missing");
+                    SyncError::ContractClassMissing(peer)
+                }
+                StateUpdateError::StorageError(error) => SyncError::Fatal(Arc::new(
+                    error.context(format!("Updating Starknet state, tail {tail}")),
+                )),
+            })?;
         let starknet_version = db
             .block_header(tail.into())
             .context("Querying block header for starknet version")?

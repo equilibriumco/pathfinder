@@ -1,7 +1,7 @@
 //! Replay storage updates block-by-block from a Pathfinder database.
 //!
 //! Uses a null hash function to avoid computation overhead of building the
-//! Merkle trees. This way storage performance can be measeured without the
+//! Merkle trees. This way storage performance can be measured without the
 //! overhead of hashing.
 use std::num::NonZeroU32;
 
@@ -13,7 +13,7 @@ use pathfinder_crypto::Felt;
 use pathfinder_merkle_tree::starknet_state::update_starknet_state;
 use pathfinder_storage::StorageBuilder;
 
-/// Implements [Hash] for the [Starknet Poseidon hash](poseidon_hash).
+/// A no-op hash function that returns the first argument unchanged.
 #[derive(Debug, Clone, Copy)]
 pub struct NullHash;
 impl FeltHash for NullHash {

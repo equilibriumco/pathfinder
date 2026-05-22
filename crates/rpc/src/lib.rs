@@ -289,8 +289,7 @@ pub mod test_utils {
         SerializedSierraDefinition,
     };
     use pathfinder_common::event::Event;
-    use pathfinder_common::hash::PedersenHash;
-    use pathfinder_common::hash::PoseidonHash;
+    use pathfinder_common::hash::{PedersenHash, PoseidonHash};
     use pathfinder_common::macro_prelude::*;
     use pathfinder_common::prelude::*;
     use pathfinder_common::receipt::{
