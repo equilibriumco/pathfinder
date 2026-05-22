@@ -114,6 +114,7 @@ pub struct SyncContext<G, E> {
     pub head_poll_interval: Duration,
     pub l1_poll_interval: Duration,
     pub pre_confirmed_cache: Arc<PreConfirmedCache>,
+    pub pre_confirmed_idle_timeout: Duration,
     pub submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker,
     pub block_validation_mode: l2::BlockValidationMode,
     pub notifications: Notifications,
@@ -195,6 +196,7 @@ where
         head_poll_interval,
         l1_poll_interval: _,
         pre_confirmed_cache,
+        pre_confirmed_idle_timeout,
         submitted_tx_tracker,
         block_validation_mode: _,
         notifications,
@@ -288,15 +290,12 @@ where
     let mut consumer_handle =
         util::task::spawn(consumer(event_receiver, consumer_context, tx_current));
 
-    // TODO: This should be a cli flag
-    const PRE_CONFIRMED_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
-
     let mut pending_handle = util::task::spawn(pending::poll_pre_confirmed(
         event_sender.clone(),
         sequencer.clone(),
         head_poll_interval,
         pre_confirmed_cache.clone(),
-        PRE_CONFIRMED_INACTIVITY_TIMEOUT,
+        pre_confirmed_idle_timeout,
         rx_latest.clone(),
         rx_current.clone(),
     ));
@@ -311,7 +310,7 @@ where
                     sequencer.clone(),
                     Duration::from_secs(2),
                     pre_confirmed_cache.clone(),
-                    PRE_CONFIRMED_INACTIVITY_TIMEOUT,
+                    pre_confirmed_idle_timeout,
                     rx_latest.clone(),
                     rx_current.clone(),
                 ));
@@ -490,6 +489,7 @@ where
         head_poll_interval,
         l1_poll_interval: _,
         pre_confirmed_cache,
+        pre_confirmed_idle_timeout: _,
         submitted_tx_tracker,
         block_validation_mode: _,
         notifications,
