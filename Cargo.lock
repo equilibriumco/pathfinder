@@ -8535,6 +8535,8 @@ dependencies = [
  "pathfinder-executor",
  "pathfinder-gas-price",
  "pathfinder-merkle-tree",
+ "pathfinder-pre-confirmed",
+ "pathfinder-retry",
  "pathfinder-rpc",
  "pathfinder-serde",
  "pathfinder-storage",

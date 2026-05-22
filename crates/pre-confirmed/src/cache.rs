@@ -81,6 +81,16 @@ impl PreConfirmedCache {
         Ok(self.data_rx.borrow().clone())
     }
 
+    /// Returns the latest cached data if it is fresh, `None` otherwise.
+    /// Fast path (non-blocking). Always fires the read signal.
+    pub fn try_read(&self) -> Option<PendingData> {
+        self.on_read.notify_one();
+        if self.freshness_tx.borrow().stale {
+            return None;
+        }
+        Some(self.data_rx.borrow().clone())
+    }
+
     /// A fresh `watch::Receiver` for awaiting changes directly.
     pub fn subscribe(&self) -> watch::Receiver<PendingData> {
         self.data_rx.clone()
@@ -351,5 +361,29 @@ mod tests {
             .expect("read should be immediate")
             .unwrap();
         assert_eq!(got, expected);
+    }
+
+    #[tokio::test]
+    async fn try_read_returns_none_when_stale() {
+        let cache = PreConfirmedCache::new();
+        cache.mark_idle();
+        assert!(cache.try_read().is_none());
+    }
+
+    #[tokio::test]
+    async fn try_read_returns_data_when_fresh_and_fires_on_read() {
+        let cache = Arc::new(PreConfirmedCache::new());
+        let expected = sample_data(33);
+        cache.store(expected.clone());
+
+        let waiter_cache = cache.clone();
+        let waiter = tokio::spawn(async move { waiter_cache.wait_for_read().await });
+
+        assert_eq!(cache.try_read(), Some(expected));
+
+        timeout(Duration::from_millis(100), waiter)
+            .await
+            .expect("wait_for_read should complete after try_read")
+            .unwrap();
     }
 }
