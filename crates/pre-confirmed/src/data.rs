@@ -104,10 +104,10 @@ impl PendingBlocks {
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct PendingData {
-    blocks: Arc<PendingBlocks>,
-    state_update: Arc<StateUpdate>,
-    aggregated_state_update: Arc<StateUpdate>,
-    number: BlockNumber,
+    pub blocks: Arc<PendingBlocks>,
+    pub state_update: Arc<StateUpdate>,
+    pub aggregated_state_update: Arc<StateUpdate>,
+    pub number: BlockNumber,
 }
 
 impl PendingData {
