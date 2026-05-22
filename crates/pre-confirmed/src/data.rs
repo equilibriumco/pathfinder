@@ -303,11 +303,6 @@ impl PendingData {
             .map(|data| data.block.number)
     }
 
-    #[doc(hidden)]
-    pub fn pre_confirmed_block_number_mut(&mut self) -> &mut BlockNumber {
-        &mut self.number
-    }
-
     /// Synthesise a `BlockHeader` from the pre-confirmed block. Fields that
     /// the pre-confirmed block does not yet know (hash, commitments) are
     /// left as defaults.
