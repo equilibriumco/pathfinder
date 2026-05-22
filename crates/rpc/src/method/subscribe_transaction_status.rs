@@ -231,7 +231,7 @@ impl RpcSubscriptionFlow for SubscribeTransactionStatus {
                         }
                         let pending = pending_data.borrow_and_update().clone();
                         if let Some((block, finality_status, execution_status)) =
-                            pending_data_tx_status(&pending, tx_hash)
+                            pre_confirmed_cache_status(&pending, tx_hash)
                         {
                             if sender
                                 .send_and_update(
@@ -385,7 +385,7 @@ async fn current_known_tx_status(
     }
 
     let pending = pending_data.borrow_and_update().clone();
-    let status = pending_data_tx_status(&pending, tx_hash).or_else(|| {
+    let status = pre_confirmed_cache_status(&pending, tx_hash).or_else(|| {
         submission_tracker
             .get_block(&tx_hash)
             .map(|block| (block, FinalityStatus::Received, None))
@@ -394,7 +394,7 @@ async fn current_known_tx_status(
     Ok(status)
 }
 
-fn pending_data_tx_status(
+fn pre_confirmed_cache_status(
     pending_data: &PendingData,
     tx_hash: TransactionHash,
 ) -> Option<(BlockNumber, FinalityStatus, Option<ExecutionStatus>)> {
@@ -513,6 +513,7 @@ mod tests {
     use pathfinder_common::L2Block;
     use pathfinder_crypto::Felt;
     use pathfinder_ethereum::EthereumStateUpdate;
+    use pathfinder_pre_confirmed::PreConfirmedCache;
     use pathfinder_storage::StorageBuilder;
     use pretty_assertions_sorted::assert_eq;
     use starknet_gateway_types::reply::{PreConfirmedBlock, PreLatestBlock};
@@ -528,7 +529,7 @@ mod tests {
 
     #[tokio::test]
     async fn transaction_already_exists_in_db_accepted_on_l2_succeeded() {
-        let (router, mut rx, pending_sender, subscription_id) =
+        let (router, mut rx, pre_confirmed_cache, subscription_id) =
             test_transaction_already_exists_in_db(
                 ExecutionStatus::Succeeded,
                 None,
@@ -554,9 +555,7 @@ mod tests {
         // Test streaming updates after L2 update from DB.
 
         // Irrelevant pending update.
-        pending_sender.send_modify(|pending| {
-            *pending.pre_confirmed_block_number_mut() = BlockNumber::GENESIS + 1;
-        });
+        pre_confirmed_cache.store(PendingData::empty(&BlockHeader::default()));
 
         // No message expected.
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1313,7 +1312,7 @@ mod tests {
 
     #[tokio::test]
     async fn transaction_found_in_submission_tracker() {
-        let (router, pending_sender) = setup().await;
+        let (router, pre_confirmed_cache) = setup().await;
         tokio::task::spawn_blocking({
             let storage = router.context.storage.clone();
             move || {
@@ -1462,7 +1461,7 @@ mod tests {
             },
             subscription_id,
             router,
-            pending_sender,
+            pre_confirmed_cache,
             sender_rx,
         )
         .await;
@@ -1471,7 +1470,7 @@ mod tests {
     async fn test_transaction_status_streaming(
         events: impl FnOnce(serde_json::Value) -> Vec<TestEvent>,
     ) {
-        let (router, pending_sender) = setup().await;
+        let (router, pre_confirmed_cache) = setup().await;
         tokio::task::spawn_blocking({
             let storage = router.context.storage.clone();
             move || {
@@ -1520,14 +1519,21 @@ mod tests {
             _ => panic!("Expected text message"),
         };
 
-        handle_test_events(events, subscription_id, router, pending_sender, sender_rx).await;
+        handle_test_events(
+            events,
+            subscription_id,
+            router,
+            pre_confirmed_cache,
+            sender_rx,
+        )
+        .await;
     }
 
     async fn handle_test_events(
         events: impl FnOnce(serde_json::Value) -> Vec<TestEvent>,
         subscription_id: serde_json::Value,
         router: RpcRouter,
-        pending_sender: tokio::sync::watch::Sender<PendingData>,
+        pre_confirmed_cache: std::sync::Arc<PreConfirmedCache>,
         mut sender_rx: mpsc::Receiver<Result<Message, RpcResponse>>,
     ) {
         while router.context.notifications.l2_blocks.receiver_count() == 0
@@ -1540,9 +1546,7 @@ mod tests {
         for event in events(subscription_id) {
             match event {
                 TestEvent::Pending(pending_data) => {
-                    pending_sender.send_modify(|pending| {
-                        *pending = pending_data;
-                    });
+                    pre_confirmed_cache.store(pending_data);
                 }
                 TestEvent::L2Block(block) => {
                     tokio::task::spawn_blocking({
@@ -1621,10 +1625,10 @@ mod tests {
     ) -> (
         RpcRouter,
         mpsc::Receiver<Result<Message, RpcResponse>>,
-        tokio::sync::watch::Sender<PendingData>,
+        std::sync::Arc<PreConfirmedCache>,
         SubscriptionId,
     ) {
-        let (router, pending_sender) = setup().await;
+        let (router, pre_confirmed_cache) = setup().await;
         let tx_hash = TARGET_TX_HASH;
         let block_number = BlockNumber::new_or_panic(1);
         tokio::task::spawn_blocking({
@@ -1714,7 +1718,7 @@ mod tests {
         // No more messages expected.
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(sender_rx.try_recv().is_err());
-        (router, sender_rx, pending_sender, subscription_id)
+        (router, sender_rx, pre_confirmed_cache, subscription_id)
     }
 
     #[derive(Debug)]
@@ -1726,13 +1730,13 @@ mod tests {
         Message(serde_json::Value),
     }
 
-    async fn setup() -> (RpcRouter, tokio::sync::watch::Sender<PendingData>) {
+    async fn setup() -> (RpcRouter, std::sync::Arc<PreConfirmedCache>) {
         let storage = StorageBuilder::in_memory().unwrap();
-        let (pending_data_sender, pending_data) = tokio::sync::watch::channel(Default::default());
+        let pre_confirmed_cache = std::sync::Arc::new(PreConfirmedCache::new());
         let ctx = RpcContext::for_tests()
             .with_storage(storage)
-            .with_pending_data(pending_data.clone())
+            .with_pre_confirmed_cache(pre_confirmed_cache.clone())
             .with_websockets(WebsocketContext::new(WebsocketHistory::Unlimited));
-        (v08::register_routes().build(ctx), pending_data_sender)
+        (v08::register_routes().build(ctx), pre_confirmed_cache)
     }
 }
