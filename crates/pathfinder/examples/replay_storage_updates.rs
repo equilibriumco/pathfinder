@@ -91,7 +91,7 @@ fn main() -> anyhow::Result<()> {
                     block_number,
                     output_storage.clone(),
                 )
-                .expect("Failed to update state");
+                .context("Failed to update state")?;
             let elapsed = start.elapsed();
             tracing::info!(%block_number, elapsed=%elapsed.as_millis(), "State update applied");
             aggregate_state_update = StateUpdate::default();
@@ -157,7 +157,8 @@ fn main() -> anyhow::Result<()> {
             latest_block_number,
             output_storage.clone(),
         )
-        .expect("Failed to update state");
+        .context("Failed to update state")?;
+        output_txn.commit().context("Commit final transaction")?;
     }
 
     Ok(())

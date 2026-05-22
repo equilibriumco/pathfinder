@@ -67,6 +67,11 @@ fn migrate_trie(
 
     for (i, trie_result) in trie_iter.enumerate() {
         let (idx, hash, data) = trie_result?;
+        anyhow::ensure!(
+            data.len() <= buf.len() - 32,
+            "Trie node data too large ({} bytes) for table {sqlite_table_name} at index {idx}",
+            data.len()
+        );
         let idx = idx.to_be_bytes();
         buf[..32].copy_from_slice(&hash);
         buf[32..32 + data.len()].copy_from_slice(&data);

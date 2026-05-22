@@ -263,6 +263,8 @@ impl Transaction<'_> {
         let mut iter = self.rocksdb().raw_iterator_cf_opt(&column, read_options);
         iter.seek(key);
         if !iter.valid() {
+            iter.status()
+                .context("Seeking contract state hashes for deletion")?;
             return Ok(());
         }
 
@@ -294,6 +296,7 @@ impl Transaction<'_> {
         let mut iter = self.rocksdb().raw_iterator_cf_opt(&column, read_options);
         iter.seek(key);
         if !iter.valid() {
+            iter.status().context("Seeking contract state hash")?;
             return Ok(None);
         }
 

@@ -566,6 +566,7 @@ impl Transaction<'_> {
             .raw_iterator_cf_opt(&storage_update_column, read_options);
         iter.seek(key);
         if !iter.valid() {
+            iter.status().context("Seeking storage update")?;
             return Ok(None);
         }
         let value = iter
@@ -595,6 +596,7 @@ impl Transaction<'_> {
             .raw_iterator_cf_opt(&storage_updates_column, read_options);
         iter.seek(lookup_key);
         if !iter.valid() {
+            iter.status().context("Seeking storage update with block")?;
             return Ok(None);
         }
 
@@ -683,6 +685,7 @@ impl Transaction<'_> {
             .raw_iterator_cf_opt(&nonce_updates_column, read_options);
         iter.seek(key);
         if !iter.valid() {
+            iter.status().context("Seeking nonce update")?;
             return Ok(None);
         }
         let value = iter
@@ -857,6 +860,7 @@ impl Transaction<'_> {
                 let value = Felt::from_be_slice(value).context("Parsing storage update value")?;
                 StorageValue(value)
             } else {
+                iter.status().context("Seeking storage update for revert")?;
                 StorageValue::ZERO
             };
 
@@ -907,6 +911,7 @@ impl Transaction<'_> {
                 let value = Felt::from_be_slice(value).context("Parsing nonce update value")?;
                 Some(ContractNonce(value))
             } else {
+                iter.status().context("Seeking nonce update for revert")?;
                 None
             };
 

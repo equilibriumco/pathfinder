@@ -139,7 +139,7 @@ impl<'inner> Transaction<'inner> {
     /// that write-then-read within a single transaction.
     pub(crate) fn flush_rocksdb_batch(&self) -> anyhow::Result<()> {
         let mut batch = self.batch.lock().expect("Batch lock poisoned");
-        let old = std::mem::replace(&mut *batch, crate::RocksDBBatch::default());
+        let old = std::mem::take(&mut *batch);
         self.rocksdb.rocksdb.write(&old)?;
         Ok(())
     }
@@ -202,6 +202,9 @@ impl Transaction<'_> {
         self.rocksdb.get_column(column)
     }
 
+    /// Write RocksDB batch first, then commit SQLite. If a crash occurs
+    /// between the two, `reconcile_rocksdb_with_sqlite` purges orphaned
+    /// RocksDB data on next startup.
     pub fn commit(self) -> anyhow::Result<()> {
         let transaction = self.transaction;
         let rocksdb = self.rocksdb;
