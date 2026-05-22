@@ -8,7 +8,7 @@ pub mod jsonrpc;
 pub(crate) mod method;
 pub mod middleware;
 mod pathfinder;
-mod pending;
+pub mod pending;
 #[cfg(test)]
 mod test_setup;
 pub mod tracker;

@@ -62,7 +62,8 @@ pub async fn get_transaction_status(
             .get(&db_tx, rpc_version)
             .context("Querying pending data")?;
 
-        if let Some(finalized_tx_data) = pending_data.find_finalized_tx_data(input.transaction_hash)
+        if let Some(finalized_tx_data) =
+            crate::pending::find_finalized_tx_data(&pending_data, input.transaction_hash)
         {
             let execution_status = &finalized_tx_data.receipt.execution_status;
             let output = match finalized_tx_data.finality_status {

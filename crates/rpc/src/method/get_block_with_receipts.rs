@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Context;
 
 use crate::context::RpcContext;
-use crate::dto::TransactionResponseFlags;
+use crate::dto::{TransactionResponseFlags, TxnFinalityStatus};
 use crate::pending::PendingBlocks;
 use crate::types::BlockId;
 use crate::RpcVersion;
@@ -195,7 +195,7 @@ impl crate::dto::SerializeForVersion for Output {
                             transaction,
                             receipt,
                             events,
-                            finality: block.finality_status(),
+                            finality: TxnFinalityStatus::PreConfirmed,
                             include_proof_facts: *include_proof_facts,
                         }),
                 )?;
