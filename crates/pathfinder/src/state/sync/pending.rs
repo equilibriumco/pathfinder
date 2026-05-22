@@ -135,7 +135,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
 
     loop {
         // Suspend if idle.
-        if last_active.elapsed() >= inactivity_timeout {
+        if last_active.elapsed() >= inactivity_timeout && cache.subscriber_count() == 0 {
             tracing::debug!("Pre-confirmed polling idle; waiting for cache reads");
             cache.mark_idle();
             cache.wait_for_read().await;

@@ -93,7 +93,15 @@ impl PreConfirmedCache {
 
     /// A fresh `watch::Receiver` for awaiting changes directly.
     pub fn subscribe(&self) -> watch::Receiver<PendingData> {
+        self.on_read.notify_one();
         self.data_rx.clone()
+    }
+
+    pub fn subscriber_count(&self) -> usize {
+        self.data_tx
+            .receiver_count()
+            // Exclude the cache's own internal receiver from the count.
+            .saturating_sub(1)
     }
 
     fn bump_freshness(&self) {
@@ -384,6 +392,42 @@ mod tests {
         timeout(Duration::from_millis(100), waiter)
             .await
             .expect("wait_for_read should complete after try_read")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn subscriber_count_tracks_live_receivers() {
+        let cache = PreConfirmedCache::new();
+        assert_eq!(cache.subscriber_count(), 0);
+
+        let rx1 = cache.subscribe();
+        assert_eq!(cache.subscriber_count(), 1);
+
+        let rx2 = cache.subscribe();
+        assert_eq!(cache.subscriber_count(), 2);
+
+        drop(rx1);
+        assert_eq!(cache.subscriber_count(), 1);
+
+        drop(rx2);
+        assert_eq!(cache.subscriber_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn subscribe_wakes_wait_for_read() {
+        let cache = Arc::new(PreConfirmedCache::new());
+
+        let waiter_cache = cache.clone();
+        let waiter = tokio::spawn(async move { waiter_cache.wait_for_read().await });
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!waiter.is_finished(), "producer should still be suspended");
+
+        let _rx = cache.subscribe();
+
+        timeout(Duration::from_millis(100), waiter)
+            .await
+            .expect("subscribe() should wake wait_for_read()")
             .unwrap();
     }
 }
