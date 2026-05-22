@@ -17,6 +17,9 @@ pub enum SequencerError {
     /// not informative enough or bloated
     #[error("error decoding response body: invalid error variant")]
     InvalidStarknetErrorVariant,
+    /// Response body did not match its expected schema.
+    #[error("invalid sequencer response: {0}")]
+    InvalidResponse(String),
 }
 
 /// Errors related to constructing a request to the gateway.

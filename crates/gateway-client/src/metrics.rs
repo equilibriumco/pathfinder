@@ -177,6 +177,9 @@ pub async fn with_metrics<T>(
             SequencerError::InvalidStarknetErrorVariant => {
                 increment_failed(meta, REASON_DECODE);
             }
+            SequencerError::InvalidResponse(_) => {
+                increment_failed(meta, REASON_DECODE);
+            }
             SequencerError::ReqwestError(e) if e.is_decode() => {
                 increment_failed(meta, REASON_DECODE);
             }
