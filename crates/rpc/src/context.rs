@@ -4,7 +4,7 @@ use std::sync::Arc;
 use pathfinder_common::{consensus_info, contract_address, ChainId, ContractAddress};
 use pathfinder_ethereum::EthereumClient;
 use pathfinder_executor::{NativeClassCache, TraceCache, VersionedConstantsMap};
-use pathfinder_pre_confirmed::PreConfirmedCache;
+use pathfinder_pre_confirmed::PendingDataCache;
 use pathfinder_storage::Storage;
 use primitive_types::H160;
 use tokio::sync::watch;
@@ -111,7 +111,7 @@ impl RpcContext {
         chain_id: ChainId,
         contract_addresses: EthContractAddresses,
         sequencer: SequencerClient,
-        pre_confirmed_cache: Arc<PreConfirmedCache>,
+        pending_data_cache: Arc<PendingDataCache>,
         notifications: Notifications,
         ethereum: EthereumClient,
         config: RpcConfig,
@@ -120,7 +120,7 @@ impl RpcContext {
             config.submission_tracker_size_limit.into(),
             config.submission_tracker_time_limit.into(),
         );
-        let pending_watcher = PendingWatcher::new(pre_confirmed_cache);
+        let pending_watcher = PendingWatcher::new(pending_data_cache);
         let native_class_cache = if config.native_execution {
             Some(NativeClassCache::spawn(
                 config.native_class_cache_size,
@@ -157,7 +157,7 @@ impl RpcContext {
         }
     }
 
-    pub fn with_pre_confirmed_cache(self, cache: Arc<PreConfirmedCache>) -> Self {
+    pub fn with_pending_data_cache(self, cache: Arc<PendingDataCache>) -> Self {
         Self {
             pending_data: PendingWatcher::new(cache),
             ..self
@@ -244,7 +244,7 @@ impl RpcContext {
 
         let storage = super::test_utils::setup_storage(trie_prune_mode);
         let sync_state = Arc::new(SyncState::default());
-        let pre_confirmed_cache = Arc::new(PreConfirmedCache::new());
+        let pending_data_cache = Arc::new(PendingDataCache::new());
 
         let config = RpcConfig {
             batch_concurrency_limit: NonZeroUsize::new(8).unwrap(),
@@ -273,7 +273,7 @@ impl RpcContext {
             chain_id,
             EthContractAddresses::new_known(core_contract_address),
             sequencer.disable_retry_for_tests(),
-            pre_confirmed_cache,
+            pending_data_cache,
             Notifications::default(),
             ethereum,
             config,
@@ -286,9 +286,9 @@ impl RpcContext {
         let pending_data =
             super::test_utils::create_pre_confirmed_data(context.storage.clone()).await;
 
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
         cache.store(pending_data);
-        context.with_pre_confirmed_cache(cache)
+        context.with_pending_data_cache(cache)
     }
 
     #[cfg(test)]
@@ -298,8 +298,8 @@ impl RpcContext {
             super::test_utils::create_pre_confirmed_data_with_pre_latest(context.storage.clone())
                 .await;
 
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
         cache.store(pending_data);
-        context.with_pre_confirmed_cache(cache)
+        context.with_pending_data_cache(cache)
     }
 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use pathfinder_common::{BlockNumber, StateUpdate};
-use pathfinder_pre_confirmed::PreConfirmedCache;
+use pathfinder_pre_confirmed::PendingDataCache;
 pub use pathfinder_pre_confirmed::{
     PendingBlocks,
     PendingData,
@@ -30,11 +30,11 @@ pub struct FinalizedTxData {
 /// storage and the JSON-RPC version before returning it.
 #[derive(Clone)]
 pub struct PendingWatcher {
-    cache: Arc<PreConfirmedCache>,
+    cache: Arc<PendingDataCache>,
 }
 
 impl PendingWatcher {
-    pub fn new(cache: Arc<PreConfirmedCache>) -> Self {
+    pub fn new(cache: Arc<PendingDataCache>) -> Self {
         Self { cache }
     }
 
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn valid_pre_confirmed() {
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
         let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
@@ -401,7 +401,7 @@ mod tests {
         // the new L2 block. This test makes sure that we still provide pending data
         // from the pre-confirmed block in this case and *we do not provide* the
         // pre-latest block because it is not pending anymore.
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
         let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn valid_pre_confirmed_is_not_used_for_old_rpc_versions() {
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
         let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn valid_pre_confirmed_with_pre_latest_is_not_used_for_old_rpc_versions() {
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
         let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
@@ -510,7 +510,7 @@ mod tests {
         // then the result should be an empty block with the gas price, timestamp
         // and hash as parent hash of the latest block in storage.
 
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
         let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
@@ -551,7 +551,7 @@ mod tests {
         // then the result should be an empty block with the gas price, timestamp
         // and hash as parent hash of the latest block in storage.
 
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
         let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
@@ -595,7 +595,7 @@ mod tests {
         // then the result should be an empty block with the gas price, timestamp
         // and hash as parent hash of the latest block in storage.
 
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
         let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()
@@ -650,7 +650,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn pre_confirmed_is_not_child_of_pre_latest_panics() {
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
         let uut = PendingWatcher::new(cache.clone());
 
         let mut storage = pathfinder_storage::StorageBuilder::in_memory()

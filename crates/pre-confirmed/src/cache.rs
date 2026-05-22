@@ -17,7 +17,7 @@ struct Freshness {
 /// - Writes via [`Self::store`] / [`Self::refresh`] / [`Self::mark_idle`].
 /// - Reads via [`Self::read`] (blocks if stale, then returns fresh data) and
 ///   [`Self::subscribe`] for streaming.
-pub struct PreConfirmedCache {
+pub struct PendingDataCache {
     data_tx: watch::Sender<PendingData>,
     data_rx: watch::Receiver<PendingData>,
     on_read: Arc<Notify>,
@@ -25,7 +25,7 @@ pub struct PreConfirmedCache {
     cold_start_timeout: Duration,
 }
 
-impl PreConfirmedCache {
+impl PendingDataCache {
     /// Default maximum time a cold-start read will block before erroring.
     pub const DEFAULT_COLD_START_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -141,7 +141,7 @@ impl PreConfirmedCache {
     }
 }
 
-impl Default for PreConfirmedCache {
+impl Default for PendingDataCache {
     fn default() -> Self {
         Self::new()
     }
@@ -155,7 +155,7 @@ mod tests {
     use pathfinder_common::{BlockHeader, BlockNumber};
     use tokio::time::timeout;
 
-    use super::PreConfirmedCache;
+    use super::PendingDataCache;
     use crate::data::PendingData;
 
     fn sample_data(number: u64) -> PendingData {
@@ -167,14 +167,14 @@ mod tests {
 
     #[tokio::test]
     async fn read_returns_default_when_unwritten() {
-        let cache = PreConfirmedCache::new();
+        let cache = PendingDataCache::new();
         let data = cache.read().await.unwrap();
         assert_eq!(data, PendingData::default());
     }
 
     #[tokio::test]
     async fn read_returns_stored_data() {
-        let cache = PreConfirmedCache::new();
+        let cache = PendingDataCache::new();
         let expected = sample_data(42);
         cache.store(expected.clone());
         assert_eq!(cache.read().await.unwrap(), expected);
@@ -182,7 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn store_notifies_subscribers() {
-        let cache = PreConfirmedCache::new();
+        let cache = PendingDataCache::new();
         let mut rx = cache.subscribe();
         let _ = rx.borrow_and_update();
 
@@ -197,7 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_does_not_notify_subscribers() {
-        let cache = PreConfirmedCache::new();
+        let cache = PendingDataCache::new();
         let mut rx = cache.subscribe();
         let _ = rx.borrow_and_update();
 
@@ -210,7 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn wait_for_read_completes_when_read() {
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
 
         let waiter_cache = cache.clone();
         let waiter = tokio::spawn(async move { waiter_cache.wait_for_read().await });
@@ -225,7 +225,7 @@ mod tests {
 
     #[tokio::test]
     async fn idle_cache_blocks_read_until_store() {
-        let cache = Arc::new(PreConfirmedCache::with_cold_start_timeout(
+        let cache = Arc::new(PendingDataCache::with_cold_start_timeout(
             Duration::from_secs(5),
         ));
         cache.mark_idle();
@@ -249,7 +249,7 @@ mod tests {
 
     #[tokio::test]
     async fn idle_cache_blocks_read_until_refresh() {
-        let cache = Arc::new(PreConfirmedCache::with_cold_start_timeout(
+        let cache = Arc::new(PendingDataCache::with_cold_start_timeout(
             Duration::from_secs(5),
         ));
         let initial = sample_data(99);
@@ -274,7 +274,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_cold_reads_share_one_refresh() {
-        let cache = Arc::new(PreConfirmedCache::with_cold_start_timeout(
+        let cache = Arc::new(PendingDataCache::with_cold_start_timeout(
             Duration::from_secs(5),
         ));
         cache.mark_idle();
@@ -302,7 +302,7 @@ mod tests {
 
     #[tokio::test]
     async fn cold_read_times_out_when_no_refresh() {
-        let cache = PreConfirmedCache::with_cold_start_timeout(Duration::from_millis(40));
+        let cache = PendingDataCache::with_cold_start_timeout(Duration::from_millis(40));
         cache.mark_idle();
 
         let result = cache.read().await;
@@ -312,7 +312,7 @@ mod tests {
 
     #[tokio::test]
     async fn store_after_idle_clears_stale() {
-        let cache = PreConfirmedCache::with_cold_start_timeout(Duration::from_millis(50));
+        let cache = PendingDataCache::with_cold_start_timeout(Duration::from_millis(50));
         cache.mark_idle();
         cache.store(sample_data(1));
 
@@ -324,7 +324,7 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_after_idle_clears_stale() {
-        let cache = PreConfirmedCache::with_cold_start_timeout(Duration::from_millis(50));
+        let cache = PendingDataCache::with_cold_start_timeout(Duration::from_millis(50));
         cache.mark_idle();
         cache.refresh();
 
@@ -336,7 +336,7 @@ mod tests {
 
     #[tokio::test]
     async fn repeated_mark_idle_is_idempotent() {
-        let cache = Arc::new(PreConfirmedCache::with_cold_start_timeout(
+        let cache = Arc::new(PendingDataCache::with_cold_start_timeout(
             Duration::from_secs(5),
         ));
         cache.mark_idle();
@@ -359,7 +359,7 @@ mod tests {
 
     #[tokio::test]
     async fn active_reads_return_immediately() {
-        let cache = PreConfirmedCache::new();
+        let cache = PendingDataCache::new();
         cache.store(sample_data(10));
         let expected = sample_data(20);
         cache.store(expected.clone());
@@ -373,14 +373,14 @@ mod tests {
 
     #[tokio::test]
     async fn try_read_returns_none_when_stale() {
-        let cache = PreConfirmedCache::new();
+        let cache = PendingDataCache::new();
         cache.mark_idle();
         assert!(cache.try_read().is_none());
     }
 
     #[tokio::test]
     async fn try_read_returns_data_when_fresh_and_fires_on_read() {
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
         let expected = sample_data(33);
         cache.store(expected.clone());
 
@@ -397,7 +397,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscriber_count_tracks_live_receivers() {
-        let cache = PreConfirmedCache::new();
+        let cache = PendingDataCache::new();
         assert_eq!(cache.subscriber_count(), 0);
 
         let rx1 = cache.subscribe();
@@ -415,7 +415,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_wakes_wait_for_read() {
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
 
         let waiter_cache = cache.clone();
         let waiter = tokio::spawn(async move { waiter_cache.wait_for_read().await });
