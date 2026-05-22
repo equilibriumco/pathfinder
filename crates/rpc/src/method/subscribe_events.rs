@@ -383,7 +383,7 @@ impl RpcSubscriptionFlow for SubscribeEvents {
 
                     tracing::trace!(block_number=%pending.pre_confirmed_block_number(), "Received pre-confirmed block update");
 
-                    let pending_finality = pending.finality_status();
+                    let pending_finality = TxnFinalityStatus::PreConfirmed;
                     let pre_confirmed_block_number = pending.pre_confirmed_block_number();
                     let sent_pending_updates = sent_updates_per_block
                         .entry(pre_confirmed_block_number)
@@ -492,6 +492,7 @@ mod tests {
     use pathfinder_common::transaction::{Transaction, TransactionVariant};
     use pathfinder_common::L2Block;
     use pathfinder_crypto::Felt;
+    use pathfinder_pre_confirmed::PreConfirmedCache;
     use pathfinder_storage::StorageBuilder;
     use pretty_assertions_sorted::assert_eq;
     use starknet_gateway_types::reply::PreConfirmedBlock;
@@ -506,7 +507,7 @@ mod tests {
     #[tokio::test]
     async fn no_filtering() {
         let num_blocks = SubscribeEvents::CATCH_UP_BATCH_SIZE + 10;
-        let (router, _pending_data_tx) = setup(num_blocks, RpcVersion::V08).await;
+        let (router, _pre_confirmed_cache) = setup(num_blocks, RpcVersion::V08).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
         handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
@@ -568,7 +569,7 @@ mod tests {
 
     #[tokio::test]
     async fn filter_from_address() {
-        let (router, _pending_data_tx) =
+        let (router, _pre_confirmed_cache) =
             setup(SubscribeEvents::CATCH_UP_BATCH_SIZE + 10, RpcVersion::V08).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
@@ -636,7 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn filter_keys() {
-        let (router, _pending_data_tx) =
+        let (router, _pre_confirmed_cache) =
             setup(SubscribeEvents::CATCH_UP_BATCH_SIZE + 10, RpcVersion::V08).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
@@ -705,7 +706,7 @@ mod tests {
     #[tokio::test]
     async fn filter_from_address_and_keys() {
         let rpc_version = RpcVersion::V10;
-        let (router, _pending_data_tx) =
+        let (router, _pre_confirmed_cache) =
             setup(SubscribeEvents::CATCH_UP_BATCH_SIZE + 10, rpc_version).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
@@ -775,7 +776,7 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn filter_keys_pre_confirmed() {
         let num_blocks = SubscribeEvents::CATCH_UP_BATCH_SIZE + 10;
-        let (router, pending_data_tx) = setup(num_blocks, RpcVersion::V09).await;
+        let (router, pre_confirmed_cache) = setup(num_blocks, RpcVersion::V09).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
         handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
@@ -819,15 +820,13 @@ mod tests {
         assert_eq!(json, expected);
 
         let next_block_number = SubscribeEvents::CATCH_UP_BATCH_SIZE + 10;
-        pending_data_tx
-            .send(
-                crate::PendingData::try_from_pre_confirmed_block(
-                    sample_pre_confirmed_block(next_block_number).into(),
-                    BlockNumber::new_or_panic(next_block_number),
-                )
-                .unwrap(),
+        pre_confirmed_cache.store(
+            crate::PendingData::try_from_pre_confirmed_block(
+                sample_pre_confirmed_block(next_block_number).into(),
+                BlockNumber::new_or_panic(next_block_number),
             )
-            .unwrap();
+            .unwrap(),
+        );
         let expected = sample_event_message_without_block_hash(next_block_number, subscription_id);
         let event = sender_rx.recv().await.unwrap().unwrap();
         let json: serde_json::Value = match event {
@@ -875,7 +874,7 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn ignore_pre_confirmed_data() {
         let num_blocks = SubscribeEvents::CATCH_UP_BATCH_SIZE + 10;
-        let (router, pending_data_tx) = setup(num_blocks, RpcVersion::V09).await;
+        let (router, pre_confirmed_cache) = setup(num_blocks, RpcVersion::V09).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
         handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
@@ -918,15 +917,13 @@ mod tests {
         assert_eq!(json, expected);
 
         // Send pre-confirmed data, expecting it to be ignored.
-        pending_data_tx
-            .send(
-                crate::PendingData::try_from_pre_confirmed_block(
-                    sample_pre_confirmed_block(num_blocks).into(),
-                    BlockNumber::new_or_panic(num_blocks),
-                )
-                .unwrap(),
+        pre_confirmed_cache.store(
+            crate::PendingData::try_from_pre_confirmed_block(
+                sample_pre_confirmed_block(num_blocks).into(),
+                BlockNumber::new_or_panic(num_blocks),
             )
-            .unwrap();
+            .unwrap(),
+        );
         assert!(sender_rx.is_empty());
 
         // Process a new block to make sure that we are still receiving new blocks, just
@@ -957,7 +954,7 @@ mod tests {
     #[tokio::test]
     async fn include_pre_confirmed_data_when_asked() {
         let num_blocks = SubscribeEvents::CATCH_UP_BATCH_SIZE + 10;
-        let (router, pending_data_tx) = setup(num_blocks, RpcVersion::V09).await;
+        let (router, pre_confirmed_cache) = setup(num_blocks, RpcVersion::V09).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
         handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
@@ -1001,15 +998,13 @@ mod tests {
         assert_eq!(json, expected);
 
         // Send pre-confirmed data.
-        pending_data_tx
-            .send(
-                crate::PendingData::try_from_pre_confirmed_block(
-                    sample_pre_confirmed_block(num_blocks).into(),
-                    BlockNumber::new_or_panic(num_blocks),
-                )
-                .unwrap(),
+        pre_confirmed_cache.store(
+            crate::PendingData::try_from_pre_confirmed_block(
+                sample_pre_confirmed_block(num_blocks).into(),
+                BlockNumber::new_or_panic(num_blocks),
             )
-            .unwrap();
+            .unwrap(),
+        );
         let event = sender_rx.recv().await.unwrap().unwrap();
         let json: serde_json::Value = match event {
             Message::Text(json) => serde_json::from_str(&json).unwrap(),
@@ -1036,7 +1031,7 @@ mod tests {
 
     #[tokio::test]
     async fn too_many_keys_filter() {
-        let (router, _pending_data_tx) =
+        let (router, _pre_confirmed_cache) =
             setup(SubscribeEvents::CATCH_UP_BATCH_SIZE + 10, RpcVersion::V08).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
@@ -1102,7 +1097,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn reorg() {
-        let (router, _pending_data_tx) = setup(1, RpcVersion::V08).await;
+        let (router, _pre_confirmed_cache) = setup(1, RpcVersion::V08).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
         handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
@@ -1193,7 +1188,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_with_pending_block() {
-        let (router, _pending_data_tx) = setup(1, RpcVersion::V08).await;
+        let (router, _pre_confirmed_cache) = setup(1, RpcVersion::V08).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
         handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
@@ -1239,7 +1234,7 @@ mod tests {
     async fn setup(
         num_blocks: u64,
         version: RpcVersion,
-    ) -> (RpcRouter, tokio::sync::watch::Sender<crate::PendingData>) {
+    ) -> (RpcRouter, std::sync::Arc<PreConfirmedCache>) {
         assert!(num_blocks > 0);
 
         let storage = StorageBuilder::in_memory().unwrap();
@@ -1267,19 +1262,19 @@ mod tests {
         })
         .await
         .unwrap();
-        let (pending_data_tx, pending_data) = tokio::sync::watch::channel(Default::default());
+        let pre_confirmed_cache = std::sync::Arc::new(PreConfirmedCache::new());
         let notifications = Notifications::default();
         let ctx = RpcContext::for_tests()
             .with_storage(storage)
             .with_notifications(notifications)
-            .with_pending_data(pending_data.clone())
+            .with_pre_confirmed_cache(pre_confirmed_cache.clone())
             .with_websockets(WebsocketContext::new(WebsocketHistory::Unlimited));
         match version {
-            RpcVersion::V06 => (v06::register_routes().build(ctx), pending_data_tx),
-            RpcVersion::V07 => (v07::register_routes().build(ctx), pending_data_tx),
-            RpcVersion::V08 => (v08::register_routes().build(ctx), pending_data_tx),
-            RpcVersion::V09 => (v09::register_routes().build(ctx), pending_data_tx),
-            RpcVersion::V10 => (v10::register_routes().build(ctx), pending_data_tx),
+            RpcVersion::V06 => (v06::register_routes().build(ctx), pre_confirmed_cache),
+            RpcVersion::V07 => (v07::register_routes().build(ctx), pre_confirmed_cache),
+            RpcVersion::V08 => (v08::register_routes().build(ctx), pre_confirmed_cache),
+            RpcVersion::V09 => (v09::register_routes().build(ctx), pre_confirmed_cache),
+            RpcVersion::V10 => (v10::register_routes().build(ctx), pre_confirmed_cache),
             RpcVersion::PathfinderV01 => {
                 unreachable!("Did not expect RPC version for tests to be Pathfinder v0.1")
             }
