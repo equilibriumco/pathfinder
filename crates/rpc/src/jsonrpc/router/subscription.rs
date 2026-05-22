@@ -1453,12 +1453,13 @@ mod tests {
         })
         .await
         .unwrap();
-        let (_, pending_data) = tokio::sync::watch::channel(Default::default());
+        let pre_confirmed_cache =
+            std::sync::Arc::new(pathfinder_pre_confirmed::PreConfirmedCache::new());
         let notifications = Notifications::default();
         let ctx = RpcContext::for_tests()
             .with_storage(storage)
             .with_notifications(notifications)
-            .with_pending_data(pending_data.clone())
+            .with_pre_confirmed_cache(pre_confirmed_cache.clone())
             .with_websockets(WebsocketContext::new(websocket_history));
 
         RpcRouter::builder(crate::RpcVersion::V08)
