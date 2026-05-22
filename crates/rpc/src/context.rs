@@ -157,10 +157,7 @@ impl RpcContext {
         }
     }
 
-    pub fn with_pre_confirmed_cache(
-        self,
-        cache: Arc<PreConfirmedCache>,
-    ) -> Self {
+    pub fn with_pre_confirmed_cache(self, cache: Arc<PreConfirmedCache>) -> Self {
         Self {
             pending_data: PendingWatcher::new(cache),
             ..self
