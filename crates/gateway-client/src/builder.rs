@@ -530,6 +530,7 @@ fn retry_condition(e: &SequencerError) -> bool {
             error!(reason=?e, "Request failed, retrying");
             true
         }
+        SequencerError::InvalidResponse(_) => false,
     }
 }
 
