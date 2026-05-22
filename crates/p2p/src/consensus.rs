@@ -1,6 +1,7 @@
 //! Consensus behaviour and other related utilities for the consensus p2p
 //! network.
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use libp2p::gossipsub::{PublishError, TopicHash};
 use libp2p::PeerId;
@@ -108,8 +109,7 @@ pub enum TestEventKind {
 #[derive(Default, Debug)]
 pub struct State {
     /// The active streams of the consensus P2P network.
-    // TODO: Implement cleanup of inactive streams
-    active_streams: HashMap<HeightAndRound, StreamState<ProposalPart>>,
+    active_streams: HashMap<HeightAndRound, ActiveStream>,
     /// Application scores for connected peers.
     peer_app_scores: HashMap<PeerId, f64>,
 }
@@ -123,6 +123,36 @@ impl State {
     }
 }
 
+#[derive(Debug)]
+struct ActiveStream {
+    state: StreamState<ProposalPart>,
+    last_active_at: Instant,
+}
+
+impl ActiveStream {
+    /// How long a stream is considered active, even when there are no new
+    /// messages.
+    const TTL: Duration = Duration::from_secs(30);
+
+    fn new_incoming() -> Self {
+        Self {
+            state: StreamState::new_incoming(),
+            last_active_at: Instant::now(),
+        }
+    }
+
+    fn new_outgoing() -> Self {
+        Self {
+            state: StreamState::new_outgoing(),
+            last_active_at: Instant::now(),
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        Instant::now().duration_since(self.last_active_at) <= Self::TTL
+    }
+}
+
 /// Create a new outgoing proposal stream message.
 pub fn create_outgoing_proposal_message(
     state: &mut State,
@@ -130,41 +160,53 @@ pub fn create_outgoing_proposal_message(
     proposal: ProposalPart,
 ) -> SmallVec<[StreamMessage<ProposalPart>; 2]> {
     let mut messages = SmallVec::with_capacity(2);
+    // Evict only when inserting a new stream.
+    let mut evict = false;
 
     // Get or create stream state
-    let stream_state = state
+    let stream = state
         .active_streams
         .entry(height_and_round)
-        .or_insert_with(StreamState::new_outgoing);
-
-    if let StreamState::Outgoing(state) = stream_state {
-        let message_id = state.last_sent_message_id.map_or(0, |id| id + 1);
-
-        // Track the sent message
-        state.sent_messages.insert(message_id, proposal.clone());
-        state.last_sent_message_id = Some(message_id);
-
-        messages.push(StreamMessage {
-            message: StreamMessageBody::Content(proposal.clone()),
-            stream_id: height_and_round,
-            message_id,
+        .and_modify(|e| e.last_active_at = Instant::now())
+        .or_insert_with(|| {
+            evict = true;
+            ActiveStream::new_outgoing()
         });
 
-        // If this is the last message, send the Fin signal
-        if matches!(proposal, ProposalPart::Fin(_)) {
-            let message_id = state.last_sent_message_id.unwrap();
-
-            // Track the Fin message
-            state.fin_sent = true;
-
-            messages.push(StreamMessage {
-                message: StreamMessageBody::Fin,
-                stream_id: height_and_round,
-                message_id: message_id + 1,
-            });
-        }
-    } else {
+    let StreamState::Outgoing(stream_state) = &mut stream.state else {
         panic!("Expected Outgoing stream state")
+    };
+
+    let message_id = stream_state.last_sent_message_id.map_or(0, |id| id + 1);
+
+    // Track the sent message
+    stream_state
+        .sent_messages
+        .insert(message_id, proposal.clone());
+    stream_state.last_sent_message_id = Some(message_id);
+
+    messages.push(StreamMessage {
+        message: StreamMessageBody::Content(proposal.clone()),
+        stream_id: height_and_round,
+        message_id,
+    });
+
+    // If this is the last message, send the Fin signal
+    if matches!(proposal, ProposalPart::Fin(_)) {
+        let message_id = stream_state.last_sent_message_id.unwrap();
+
+        // Track the Fin message
+        stream_state.fin_sent = true;
+
+        messages.push(StreamMessage {
+            message: StreamMessageBody::Fin,
+            stream_id: height_and_round,
+            message_id: message_id + 1,
+        });
+    }
+
+    if evict {
+        state.active_streams.retain(|_, s| s.is_active());
     }
 
     messages
@@ -177,64 +219,79 @@ pub fn handle_incoming_proposal_message(
     propagation_source: PeerId,
 ) -> Vec<Event> {
     let stream_id = message.stream_id;
+    // Evict only when inserting a new stream.
+    let mut evict = false;
 
     // Get or create stream state for this (height, round)
-    let stream_state = state
+    let stream = state
         .active_streams
         .entry(stream_id)
-        .or_insert_with(StreamState::new_incoming);
+        .and_modify(|e| e.last_active_at = Instant::now())
+        .or_insert_with(|| {
+            evict = true;
+            ActiveStream::new_incoming()
+        });
 
-    if let StreamState::Incoming(state) = stream_state {
-        // Discard invalid messages
-        if let Some(fin_id) = state.fin_message_id {
-            if message.message_id >= fin_id {
-                return vec![];
-            }
-        }
+    let StreamState::Incoming(stream_state) = &mut stream.state else {
+        panic!("Expected Incoming stream state")
+    };
 
-        // Handle "Fin" message
-        if let StreamMessageBody::Fin = message.message {
-            state.fin_message_id = Some(message.message_id);
-            // Remove messages after the Fin message
-            state
-                .received_messages
-                .retain(|id, _| id < &message.message_id);
+    // Discard invalid messages
+    if let Some(fin_id) = stream_state.fin_message_id {
+        if message.message_id >= fin_id {
             return vec![];
         }
+    }
 
-        // Buffer out of order messages
-        if message.message_id != state.next_message_id {
-            state.received_messages.insert(message.message_id, message);
-            return vec![];
-        }
+    // Handle "Fin" message
+    if let StreamMessageBody::Fin = message.message {
+        stream_state.fin_message_id = Some(message.message_id);
+        // Remove messages after the Fin message
+        stream_state
+            .received_messages
+            .retain(|id, _| id < &message.message_id);
+        return vec![];
+    }
 
-        // Process this message (it's in order)
-        let mut events = Vec::new();
-        if let StreamMessageBody::Content(content) = message.message {
+    // Buffer out of order messages
+    if message.message_id != stream_state.next_message_id {
+        stream_state
+            .received_messages
+            .insert(message.message_id, message);
+        return vec![];
+    }
+
+    // Process this message (it's in order)
+    let mut events = Vec::new();
+    if let StreamMessageBody::Content(content) = message.message {
+        let event = Event {
+            source: propagation_source,
+            kind: EventKind::Proposal(stream_id, content),
+        };
+        events.push(event);
+        stream_state.next_message_id += 1;
+    }
+
+    // Process any buffered messages that are now in order
+    while let Some(next_message) = stream_state
+        .received_messages
+        .remove(&stream_state.next_message_id)
+    {
+        if let StreamMessageBody::Content(content) = next_message.message {
             let event = Event {
                 source: propagation_source,
-                kind: EventKind::Proposal(stream_id, content),
+                kind: EventKind::Proposal(stream_id, content.clone()),
             };
             events.push(event);
-            state.next_message_id += 1;
+            stream_state.next_message_id += 1;
         }
-
-        // Process any buffered messages that are now in order
-        while let Some(next_message) = state.received_messages.remove(&state.next_message_id) {
-            if let StreamMessageBody::Content(content) = next_message.message {
-                let event = Event {
-                    source: propagation_source,
-                    kind: EventKind::Proposal(stream_id, content.clone()),
-                };
-                events.push(event);
-                state.next_message_id += 1;
-            }
-        }
-
-        events
-    } else {
-        panic!("Expected Incoming stream state")
     }
+
+    if evict {
+        state.active_streams.retain(|_, s| s.is_active());
+    }
+
+    events
 }
 
 #[cfg(test)]
@@ -319,8 +376,8 @@ mod tests {
             create_outgoing_proposal_message(&mut state, height_and_round, proposal.clone());
 
         // Verify state was updated
-        let stream_state = state.active_streams.get(&height_and_round).unwrap();
-        if let StreamState::Outgoing(outgoing_state) = stream_state {
+        let stream = state.active_streams.get(&height_and_round).unwrap();
+        if let StreamState::Outgoing(outgoing_state) = &stream.state {
             assert_eq!(outgoing_state.last_sent_message_id, Some(0));
             assert_eq!(outgoing_state.sent_messages.len(), 1);
             assert_eq!(outgoing_state.sent_messages.get(&0).unwrap(), &proposal);
@@ -371,8 +428,8 @@ mod tests {
         let events = handle_incoming_proposal_message(&mut state, message, PeerId::random());
 
         // Verify state was updated
-        let stream_state = state.active_streams.get(&height_and_round).unwrap();
-        if let StreamState::Incoming(incoming_state) = stream_state {
+        let stream = state.active_streams.get(&height_and_round).unwrap();
+        if let StreamState::Incoming(incoming_state) = &stream.state {
             println!("Next message id: {}", incoming_state.next_message_id);
             assert_eq!(incoming_state.next_message_id, 1);
             assert!(incoming_state.received_messages.is_empty());
@@ -387,6 +444,112 @@ mod tests {
             events[0].kind,
             EventKind::Proposal(height_and_round, proposal)
         );
+    }
+
+    #[test]
+    fn create_outgoing_proposal_message_refreshes_existing_stream_activity() {
+        let mut state = State::new();
+        let height_and_round: HeightAndRound = (1, 2).into();
+
+        state
+            .active_streams
+            .insert(height_and_round, ActiveStream::new_outgoing());
+        state
+            .active_streams
+            .get_mut(&height_and_round)
+            .unwrap()
+            .last_active_at = Instant::now() - ActiveStream::TTL - Duration::from_secs(1);
+
+        let proposal = create_proposal_stream(1, 2, 100).1[0].clone();
+
+        create_outgoing_proposal_message(&mut state, height_and_round, proposal);
+
+        let stream = state.active_streams.get(&height_and_round).unwrap();
+        assert!(stream.is_active());
+    }
+
+    #[test]
+    fn handle_incoming_proposal_message_evicts_inactive_streams() {
+        let mut state = State::new();
+        let inactive_incoming: HeightAndRound = (1, 1).into();
+        let inactive_outgoing: HeightAndRound = (1, 2).into();
+        let active_existing: HeightAndRound = (1, 3).into();
+        let new_stream: HeightAndRound = (1, 4).into();
+
+        state
+            .active_streams
+            .insert(inactive_incoming, ActiveStream::new_incoming());
+        state
+            .active_streams
+            .insert(inactive_outgoing, ActiveStream::new_outgoing());
+        state
+            .active_streams
+            .insert(active_existing, ActiveStream::new_incoming());
+
+        state
+            .active_streams
+            .get_mut(&inactive_incoming)
+            .unwrap()
+            .last_active_at = Instant::now() - ActiveStream::TTL - Duration::from_secs(1);
+        state
+            .active_streams
+            .get_mut(&inactive_outgoing)
+            .unwrap()
+            .last_active_at = Instant::now() - ActiveStream::TTL - Duration::from_secs(1);
+
+        let proposal = create_proposal_stream(1, 4, 100).1[0].clone();
+        let message = StreamMessage {
+            stream_id: new_stream,
+            message_id: 0,
+            message: StreamMessageBody::Content(proposal),
+        };
+
+        let events = handle_incoming_proposal_message(&mut state, message, PeerId::random());
+
+        assert_eq!(events.len(), 1);
+        assert!(!state.active_streams.contains_key(&inactive_incoming));
+        assert!(!state.active_streams.contains_key(&inactive_outgoing));
+        assert!(state.active_streams.contains_key(&active_existing));
+        assert!(state.active_streams.contains_key(&new_stream));
+    }
+
+    #[test]
+    fn create_outgoing_proposal_message_evicts_inactive_streams() {
+        let mut state = State::new();
+        let inactive_incoming: HeightAndRound = (1, 1).into();
+        let inactive_outgoing: HeightAndRound = (1, 2).into();
+        let active_existing: HeightAndRound = (1, 3).into();
+        let new_stream: HeightAndRound = (1, 4).into();
+
+        state
+            .active_streams
+            .insert(inactive_incoming, ActiveStream::new_incoming());
+        state
+            .active_streams
+            .insert(inactive_outgoing, ActiveStream::new_outgoing());
+        state
+            .active_streams
+            .insert(active_existing, ActiveStream::new_outgoing());
+
+        state
+            .active_streams
+            .get_mut(&inactive_incoming)
+            .unwrap()
+            .last_active_at = Instant::now() - ActiveStream::TTL - Duration::from_secs(1);
+        state
+            .active_streams
+            .get_mut(&inactive_outgoing)
+            .unwrap()
+            .last_active_at = Instant::now() - ActiveStream::TTL - Duration::from_secs(1);
+
+        let proposal = create_proposal_stream(1, 4, 100).1[0].clone();
+
+        create_outgoing_proposal_message(&mut state, new_stream, proposal);
+
+        assert!(!state.active_streams.contains_key(&inactive_incoming));
+        assert!(!state.active_streams.contains_key(&inactive_outgoing));
+        assert!(state.active_streams.contains_key(&active_existing));
+        assert!(state.active_streams.contains_key(&new_stream));
     }
 
     /// Tests sending proposal streams between two nodes with message shuffling.
