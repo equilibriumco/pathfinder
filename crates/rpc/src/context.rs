@@ -4,7 +4,7 @@ use std::sync::Arc;
 use pathfinder_common::{consensus_info, contract_address, ChainId, ContractAddress};
 use pathfinder_ethereum::EthereumClient;
 use pathfinder_executor::{NativeClassCache, TraceCache, VersionedConstantsMap};
-use pathfinder_pre_confirmed::PendingDataCache;
+use pathfinder_pending_data::PendingDataCache;
 use pathfinder_storage::Storage;
 use primitive_types::H160;
 use tokio::sync::watch;

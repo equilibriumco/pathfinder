@@ -8535,7 +8535,7 @@ dependencies = [
  "pathfinder-executor",
  "pathfinder-gas-price",
  "pathfinder-merkle-tree",
- "pathfinder-pre-confirmed",
+ "pathfinder-pending-data",
  "pathfinder-rpc",
  "pathfinder-serde",
  "pathfinder-storage",
@@ -8805,7 +8805,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pathfinder-pre-confirmed"
+name = "pathfinder-pending-data"
 version = "0.22.3"
 dependencies = [
  "anyhow",
@@ -8845,7 +8845,7 @@ dependencies = [
  "pathfinder-ethereum",
  "pathfinder-executor",
  "pathfinder-merkle-tree",
- "pathfinder-pre-confirmed",
+ "pathfinder-pending-data",
  "pathfinder-serde",
  "pathfinder-storage",
  "pathfinder-version",

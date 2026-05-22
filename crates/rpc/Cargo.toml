@@ -29,7 +29,7 @@ pathfinder-crypto = { path = "../crypto" }
 pathfinder-ethereum = { path = "../ethereum" }
 pathfinder-executor = { path = "../executor" }
 pathfinder-merkle-tree = { path = "../merkle-tree" }
-pathfinder-pre-confirmed = { path = "../pre-confirmed" }
+pathfinder-pending-data = { path = "../pending-data" }
 pathfinder-serde = { path = "../serde" }
 pathfinder-storage = { path = "../storage" }
 pathfinder-version = { path = "../version" }

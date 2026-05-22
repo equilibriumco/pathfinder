@@ -1454,7 +1454,7 @@ mod tests {
         .await
         .unwrap();
         let pending_data_cache =
-            std::sync::Arc::new(pathfinder_pre_confirmed::PendingDataCache::new());
+            std::sync::Arc::new(pathfinder_pending_data::PendingDataCache::new());
         let notifications = Notifications::default();
         let ctx = RpcContext::for_tests()
             .with_storage(storage)

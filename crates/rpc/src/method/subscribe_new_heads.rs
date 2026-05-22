@@ -160,7 +160,7 @@ mod tests {
     use axum::extract::ws::Message;
     use pathfinder_common::{felt, BlockHash, BlockHeader, BlockNumber};
     use pathfinder_crypto::Felt;
-    use pathfinder_pre_confirmed::PendingDataCache;
+    use pathfinder_pending_data::PendingDataCache;
     use pathfinder_storage::StorageBuilder;
     use tokio::sync::mpsc;
 

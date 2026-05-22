@@ -1,5 +1,5 @@
 [package]
-name = "pathfinder-pre-confirmed"
+name = "pathfinder-pending-data"
 version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }

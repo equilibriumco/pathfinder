@@ -265,7 +265,7 @@ mod tests {
         };
         use pathfinder_common::felt;
         use pathfinder_common::prelude::*;
-        use pathfinder_pre_confirmed::PendingDataCache;
+        use pathfinder_pending_data::PendingDataCache;
         use starknet_gateway_test_fixtures::class_definitions::{
             CONTRACT_DEFINITION,
             CONTRACT_DEFINITION_CLASS_HASH,
