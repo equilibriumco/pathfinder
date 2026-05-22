@@ -160,7 +160,7 @@ mod tests {
     use axum::extract::ws::Message;
     use pathfinder_common::{felt, BlockHash, BlockHeader, BlockNumber};
     use pathfinder_crypto::Felt;
-    use pathfinder_pre_confirmed::PreConfirmedCache;
+    use pathfinder_pre_confirmed::PendingDataCache;
     use pathfinder_storage::StorageBuilder;
     use tokio::sync::mpsc;
 
@@ -538,12 +538,12 @@ mod tests {
         })
         .await
         .unwrap();
-        let pre_confirmed_cache = std::sync::Arc::new(PreConfirmedCache::new());
+        let pending_data_cache = std::sync::Arc::new(PendingDataCache::new());
         let notifications = Notifications::default();
         let ctx = RpcContext::for_tests()
             .with_storage(storage)
             .with_notifications(notifications)
-            .with_pre_confirmed_cache(pre_confirmed_cache.clone())
+            .with_pending_data_cache(pending_data_cache.clone())
             .with_websockets(WebsocketContext::new(WebsocketHistory::Unlimited));
         v08::register_routes().build(ctx)
     }

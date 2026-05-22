@@ -469,7 +469,7 @@ mod tests {
     use pathfinder_common::transaction::{InvokeTransactionV3, Transaction, TransactionVariant};
     use pathfinder_common::L2Block;
     use pathfinder_crypto::Felt;
-    use pathfinder_pre_confirmed::PreConfirmedCache;
+    use pathfinder_pre_confirmed::PendingDataCache;
     use pathfinder_storage::StorageBuilder;
     use starknet_gateway_types::reply::PreConfirmedBlock;
     use tokio::sync::mpsc;
@@ -564,7 +564,7 @@ mod tests {
             tx,
             mut rx,
             #[allow(unused_variables)]
-            pre_confirmed_cache,
+            pending_data_cache,
             submission_tracker,
             ..
         } = setup();
@@ -625,7 +625,7 @@ mod tests {
             tx,
             mut rx,
             #[allow(unused_variables)]
-            pre_confirmed_cache,
+            pending_data_cache,
             submission_tracker,
             ..
         } = setup();
@@ -686,7 +686,7 @@ mod tests {
         let Setup {
             tx,
             mut rx,
-            pre_confirmed_cache,
+            pending_data_cache,
             submission_tracker,
             ..
         } = setup();
@@ -741,7 +741,7 @@ mod tests {
         assert_recv_nothing(&mut rx).await;
 
         // First pre-confirmed block update.
-        pre_confirmed_cache.store(sample_pre_confirmed_block(
+        pending_data_cache.store(sample_pre_confirmed_block(
             BlockNumber::new_or_panic(1),
             vec![
                 (contract_address!("0x1"), transaction_hash!("0x3")),
@@ -785,7 +785,7 @@ mod tests {
         let Setup {
             tx,
             mut rx,
-            pre_confirmed_cache,
+            pending_data_cache,
             ..
         } = setup();
         tx.send(Ok(Message::Text(
@@ -817,7 +817,7 @@ mod tests {
         assert_recv_nothing(&mut rx).await;
 
         // First pre-confirmed block update.
-        pre_confirmed_cache.store(sample_pre_confirmed_block(
+        pending_data_cache.store(sample_pre_confirmed_block(
             BlockNumber::new_or_panic(1),
             vec![
                 (contract_address!("0x1"), transaction_hash!("0x3")),
@@ -837,7 +837,7 @@ mod tests {
 
         // We expect that the second pre-confirmed block update will ignore
         // transactions that were already sent.
-        pre_confirmed_cache.store(sample_pre_confirmed_block(
+        pending_data_cache.store(sample_pre_confirmed_block(
             BlockNumber::new_or_panic(1),
             vec![
                 (contract_address!("0x1"), transaction_hash!("0x3")),
@@ -863,7 +863,7 @@ mod tests {
         let Setup {
             tx,
             mut rx,
-            pre_confirmed_cache,
+            pending_data_cache,
             ..
         } = setup();
         tx.send(Ok(Message::Text(
@@ -895,7 +895,7 @@ mod tests {
         assert_recv_nothing(&mut rx).await;
 
         // First pre-confirmed block update.
-        pre_confirmed_cache.store(sample_pre_confirmed_block(
+        pending_data_cache.store(sample_pre_confirmed_block(
             BlockNumber::new_or_panic(1),
             vec![
                 (contract_address!("0x1"), transaction_hash!("0x3")),
@@ -916,7 +916,7 @@ mod tests {
         // We expect that the second pre-confirmed block update will ignore
         // transactions that were already sent. This includes a candidate transaction
         // that was not sent before.
-        pre_confirmed_cache.store(sample_pre_confirmed_block(
+        pending_data_cache.store(sample_pre_confirmed_block(
             BlockNumber::new_or_panic(1),
             vec![
                 (contract_address!("0x1"), transaction_hash!("0x3")),
@@ -938,7 +938,7 @@ mod tests {
         // The next pre-confirmed block does have a receipt for the previously sent
         // candidate transaction. We expect the transaction to be re-sent with
         // PRE_CONFIRMED status.
-        pre_confirmed_cache.store(sample_pre_confirmed_block(
+        pending_data_cache.store(sample_pre_confirmed_block(
             BlockNumber::new_or_panic(1),
             vec![
                 (contract_address!("0x1"), transaction_hash!("0x3")),
@@ -960,7 +960,7 @@ mod tests {
         let Setup {
             tx,
             mut rx,
-            pre_confirmed_cache,
+            pending_data_cache,
             ..
         } = setup();
         tx.send(Ok(Message::Text(
@@ -991,7 +991,7 @@ mod tests {
             }
         };
         assert_recv_nothing(&mut rx).await;
-        pre_confirmed_cache.store(sample_pre_confirmed_block(
+        pending_data_cache.store(sample_pre_confirmed_block(
             BlockNumber::new_or_panic(1),
             vec![
                 (contract_address!("0x1"), transaction_hash!("0x1")),
@@ -1011,7 +1011,7 @@ mod tests {
         let Setup {
             tx,
             mut rx,
-            pre_confirmed_cache,
+            pending_data_cache,
             ..
         } = setup();
         tx.send(Ok(Message::Text(
@@ -1042,7 +1042,7 @@ mod tests {
             }
         };
         assert_recv_nothing(&mut rx).await;
-        pre_confirmed_cache.store(sample_pre_confirmed_block(
+        pending_data_cache.store(sample_pre_confirmed_block(
             BlockNumber::new_or_panic(1),
             vec![
                 (contract_address!("0x1"), transaction_hash!("0x3")),
@@ -1067,7 +1067,7 @@ mod tests {
         let Setup {
             tx,
             mut rx,
-            pre_confirmed_cache,
+            pending_data_cache,
             submission_tracker: _,
             notifications,
         } = setup();
@@ -1100,7 +1100,7 @@ mod tests {
         assert_recv_nothing(&mut rx).await;
 
         // Send a pre-confirmed block with two transactions.
-        pre_confirmed_cache.store(sample_pre_confirmed_block(
+        pending_data_cache.store(sample_pre_confirmed_block(
             BlockNumber::new_or_panic(1),
             vec![
                 (contract_address!("0x1"), transaction_hash!("0x3")),
@@ -1156,7 +1156,7 @@ mod tests {
         assert_recv_nothing(&mut rx).await;
 
         // The next pre-confirmed block is sent.
-        pre_confirmed_cache.store(sample_pre_confirmed_block(
+        pending_data_cache.store(sample_pre_confirmed_block(
             BlockNumber::new_or_panic(2),
             vec![
                 (contract_address!("0x1"), transaction_hash!("0x7")),
@@ -1180,7 +1180,7 @@ mod tests {
         let Setup {
             tx,
             mut rx,
-            pre_confirmed_cache,
+            pending_data_cache,
             submission_tracker: _,
             notifications,
         } = setup();
@@ -1231,7 +1231,7 @@ mod tests {
         // Send a pre-confirmed block with two transactions: since we're filtering on
         // finality status ACCEPTED_ON_L2, we expect that the pre-confirmed
         // block will not send any receipts.
-        pre_confirmed_cache.store(sample_pre_confirmed_block(
+        pending_data_cache.store(sample_pre_confirmed_block(
             BlockNumber::new_or_panic(1),
             vec![
                 (contract_address!("0x1"), transaction_hash!("0x3")),
@@ -1277,7 +1277,7 @@ mod tests {
         assert_recv_nothing(&mut rx).await;
 
         // The next pre-confirmed block is sent, we expect no receipts.
-        pre_confirmed_cache.store(sample_pre_confirmed_block(
+        pending_data_cache.store(sample_pre_confirmed_block(
             BlockNumber::new_or_panic(2),
             vec![
                 (contract_address!("0x1"), transaction_hash!("0x7")),
@@ -1294,7 +1294,7 @@ mod tests {
             tx,
             mut rx,
             #[allow(unused_variables)]
-            pre_confirmed_cache,
+            pending_data_cache,
             submission_tracker: _,
             notifications,
         } = setup();
@@ -1601,12 +1601,12 @@ mod tests {
             db.insert_block_header(&sample_header(0)).unwrap();
             db.commit().unwrap();
         }
-        let pre_confirmed_cache = std::sync::Arc::new(PreConfirmedCache::new());
+        let pending_data_cache = std::sync::Arc::new(PendingDataCache::new());
         let notifications = Notifications::default();
         let ctx = RpcContext::for_tests()
             .with_storage(storage)
             .with_notifications(notifications.clone())
-            .with_pre_confirmed_cache(pre_confirmed_cache.clone())
+            .with_pending_data_cache(pending_data_cache.clone())
             .with_websockets(WebsocketContext::new(WebsocketHistory::Unlimited));
         let submission_tracker = ctx.submission_tracker.clone();
         let router = v10::register_routes().build(ctx);
@@ -1616,7 +1616,7 @@ mod tests {
         Setup {
             tx: receiver_tx,
             rx: sender_rx,
-            pre_confirmed_cache,
+            pending_data_cache,
             submission_tracker,
             notifications,
         }
@@ -1625,7 +1625,7 @@ mod tests {
     struct Setup {
         tx: mpsc::Sender<Result<Message, axum::Error>>,
         rx: mpsc::Receiver<Result<Message, RpcResponse>>,
-        pre_confirmed_cache: std::sync::Arc<PreConfirmedCache>,
+        pending_data_cache: std::sync::Arc<PendingDataCache>,
         submission_tracker: SubmittedTransactionTracker,
         notifications: Notifications,
     }

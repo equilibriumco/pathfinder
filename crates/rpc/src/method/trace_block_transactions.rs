@@ -834,7 +834,7 @@ pub(crate) mod tests {
     use pathfinder_common::receipt::Receipt;
     use pathfinder_common::Chain;
     use pathfinder_crypto::Felt;
-    use pathfinder_pre_confirmed::PreConfirmedCache;
+    use pathfinder_pre_confirmed::PendingDataCache;
     use starknet_gateway_types::reply::{GasPrices, L1DataAvailabilityMode};
     use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
@@ -1298,10 +1298,10 @@ pub(crate) mod tests {
             .unwrap()
         };
 
-        let pre_confirmed_cache = Arc::new(PreConfirmedCache::new());
-        pre_confirmed_cache.store(pending_data);
+        let pending_data_cache = Arc::new(PendingDataCache::new());
+        pending_data_cache.store(pending_data);
 
-        let context = context.with_pre_confirmed_cache(pre_confirmed_cache);
+        let context = context.with_pending_data_cache(pending_data_cache);
 
         let traces = vec![
             Trace {
@@ -1424,10 +1424,10 @@ pub(crate) mod tests {
             .unwrap()
         };
 
-        let pre_confirmed_cache = Arc::new(PreConfirmedCache::new());
-        pre_confirmed_cache.store(pending_data);
+        let pending_data_cache = Arc::new(PendingDataCache::new());
+        pending_data_cache.store(pending_data);
 
-        let context = context.with_pre_confirmed_cache(pre_confirmed_cache);
+        let context = context.with_pending_data_cache(pending_data_cache);
 
         let traces = vec![
             Trace {

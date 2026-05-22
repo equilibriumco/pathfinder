@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use pathfinder_common::{BlockHash, BlockNumber};
-use pathfinder_pre_confirmed::PreConfirmedCache;
+use pathfinder_pre_confirmed::PendingDataCache;
 use starknet_gateway_client::{BlockId, GatewayApi};
 use starknet_gateway_types::reply::{PreConfirmedBlock, PreConfirmedPollResponse};
 use tokio::sync::watch;
@@ -125,7 +125,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
     tx_event: tokio::sync::mpsc::Sender<SyncEvent>,
     sequencer: S,
     poll_interval: std::time::Duration,
-    cache: Arc<PreConfirmedCache>,
+    cache: Arc<PendingDataCache>,
     inactivity_timeout: std::time::Duration,
     latest: watch::Receiver<(BlockNumber, BlockHash)>,
     current: watch::Receiver<(BlockNumber, BlockHash)>,
@@ -258,7 +258,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
 
 /// Sleeps until `deadline`, returning early if the cache is read. Returns
 /// `true` when woken by a read, `false` when the deadline elapsed.
-async fn wait_for_next_poll(deadline: Instant, cache: &PreConfirmedCache) -> bool {
+async fn wait_for_next_poll(deadline: Instant, cache: &PendingDataCache) -> bool {
     tokio::select! {
         _ = tokio::time::sleep_until(deadline) => false,
         _ = cache.wait_for_read() => true,
@@ -350,7 +350,7 @@ mod tests {
         Transaction,
         TransactionVariant,
     };
-    use pathfinder_pre_confirmed::PreConfirmedCache;
+    use pathfinder_pre_confirmed::PendingDataCache;
     use starknet_gateway_client::MockGatewayApi;
     use starknet_gateway_types::reply::state_update::{
         DeclaredSierraClass,
@@ -561,7 +561,7 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                Arc::new(PreConfirmedCache::new()),
+                Arc::new(PendingDataCache::new()),
                 std::time::Duration::from_secs(60),
                 latest,
                 current,
@@ -660,7 +660,7 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                Arc::new(PreConfirmedCache::new()),
+                Arc::new(PendingDataCache::new()),
                 std::time::Duration::from_secs(60),
                 rx_latest,
                 rx_current,
@@ -817,7 +817,7 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                Arc::new(PreConfirmedCache::new()),
+                Arc::new(PendingDataCache::new()),
                 std::time::Duration::from_secs(60),
                 rx_latest,
                 rx_current,
@@ -1113,7 +1113,7 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                Arc::new(PreConfirmedCache::new()),
+                Arc::new(PendingDataCache::new()),
                 std::time::Duration::from_secs(60),
                 rx_latest,
                 rx_current,
@@ -1235,7 +1235,7 @@ mod tests {
                 tx,
                 sequencer,
                 std::time::Duration::ZERO,
-                Arc::new(PreConfirmedCache::new()),
+                Arc::new(PendingDataCache::new()),
                 std::time::Duration::from_secs(60),
                 latest,
                 current,
@@ -1318,7 +1318,7 @@ mod tests {
         let (_, latest) = watch::channel((latest_block_number, latest_hash));
         let (_, current) = watch::channel((latest_block_number, latest_hash));
 
-        let cache = Arc::new(PreConfirmedCache::new());
+        let cache = Arc::new(PendingDataCache::new());
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
         let sequencer = Arc::new(sequencer);

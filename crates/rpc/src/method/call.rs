@@ -265,7 +265,7 @@ mod tests {
         };
         use pathfinder_common::felt;
         use pathfinder_common::prelude::*;
-        use pathfinder_pre_confirmed::PreConfirmedCache;
+        use pathfinder_pre_confirmed::PendingDataCache;
         use starknet_gateway_test_fixtures::class_definitions::{
             CONTRACT_DEFINITION,
             CONTRACT_DEFINITION_CLASS_HASH,
@@ -373,9 +373,9 @@ mod tests {
                 StateUpdate::default().with_storage_update(contract_address, test_key, new_value),
             );
 
-            let pre_confirmed_cache = Arc::new(PreConfirmedCache::new());
-            pre_confirmed_cache.store(pending_data);
-            let context = context.with_pre_confirmed_cache(pre_confirmed_cache);
+            let pending_data_cache = Arc::new(PendingDataCache::new());
+            pending_data_cache.store(pending_data);
+            let context = context.with_pending_data_cache(pending_data_cache);
 
             // unchanged on latest block
             let input = Input {
@@ -415,9 +415,9 @@ mod tests {
                     .with_deployed_contract(new_contract_address, CONTRACT_DEFINITION_CLASS_HASH)
                     .with_storage_update(new_contract_address, test_key, new_value),
             );
-            let pre_confirmed_cache = Arc::new(PreConfirmedCache::new());
-            pre_confirmed_cache.store(pending_data);
-            let context = context.with_pre_confirmed_cache(pre_confirmed_cache);
+            let pending_data_cache = Arc::new(PendingDataCache::new());
+            pending_data_cache.store(pending_data);
+            let context = context.with_pending_data_cache(pending_data_cache);
 
             let input = Input {
                 request: FunctionCall {
@@ -467,9 +467,9 @@ mod tests {
                     .with_deployed_contract(new_contract_address, ClassHash(sierra_hash.0))
                     .with_storage_update(new_contract_address, storage_key, storage_value),
             );
-            let pre_confirmed_cache = Arc::new(PreConfirmedCache::new());
-            pre_confirmed_cache.store(pending_data);
-            let context = context.with_pre_confirmed_cache(pre_confirmed_cache);
+            let pending_data_cache = Arc::new(PendingDataCache::new());
+            pending_data_cache.store(pending_data);
+            let context = context.with_pending_data_cache(pending_data_cache);
 
             let input = Input {
                 request: FunctionCall {
