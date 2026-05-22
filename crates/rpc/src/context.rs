@@ -4,6 +4,7 @@ use std::sync::Arc;
 use pathfinder_common::{consensus_info, contract_address, ChainId, ContractAddress};
 use pathfinder_ethereum::EthereumClient;
 use pathfinder_executor::{NativeClassCache, TraceCache, VersionedConstantsMap};
+use pathfinder_pre_confirmed::PreConfirmedCache;
 use pathfinder_storage::Storage;
 use primitive_types::H160;
 use tokio::sync::watch;
@@ -11,12 +12,11 @@ use util::percentage::Percentage;
 
 pub use crate::jsonrpc::websocket::WebsocketContext;
 use crate::jsonrpc::Notifications;
-use crate::pending::{PendingData, PendingWatcher};
+use crate::pending::PendingWatcher;
 use crate::tracker::SubmittedTransactionTracker;
 use crate::SyncState;
 
 type SequencerClient = starknet_gateway_client::Client;
-use tokio::sync::watch as tokio_watch;
 
 // NOTE: these are the same for all _non-custom_ networks
 pub const ETH_FEE_TOKEN_ADDRESS: ContractAddress =
@@ -111,7 +111,7 @@ impl RpcContext {
         chain_id: ChainId,
         contract_addresses: EthContractAddresses,
         sequencer: SequencerClient,
-        pending_data: tokio_watch::Receiver<PendingData>,
+        pre_confirmed_cache: Arc<PreConfirmedCache>,
         notifications: Notifications,
         ethereum: EthereumClient,
         config: RpcConfig,
@@ -120,7 +120,7 @@ impl RpcContext {
             config.submission_tracker_size_limit.into(),
             config.submission_tracker_time_limit.into(),
         );
-        let pending_watcher = PendingWatcher::new(pending_data.clone());
+        let pending_watcher = PendingWatcher::new(pre_confirmed_cache);
         let native_class_cache = if config.native_execution {
             Some(NativeClassCache::spawn(
                 config.native_class_cache_size,
@@ -157,10 +157,12 @@ impl RpcContext {
         }
     }
 
-    pub fn with_pending_data(self, pending_data: tokio_watch::Receiver<PendingData>) -> Self {
-        let pending_data = PendingWatcher::new(pending_data);
+    pub fn with_pre_confirmed_cache(
+        self,
+        cache: Arc<PreConfirmedCache>,
+    ) -> Self {
         Self {
-            pending_data,
+            pending_data: PendingWatcher::new(cache),
             ..self
         }
     }
@@ -245,7 +247,7 @@ impl RpcContext {
 
         let storage = super::test_utils::setup_storage(trie_prune_mode);
         let sync_state = Arc::new(SyncState::default());
-        let (_, rx) = tokio_watch::channel(Default::default());
+        let pre_confirmed_cache = Arc::new(PreConfirmedCache::new());
 
         let config = RpcConfig {
             batch_concurrency_limit: NonZeroUsize::new(8).unwrap(),
@@ -274,7 +276,7 @@ impl RpcContext {
             chain_id,
             EthContractAddresses::new_known(core_contract_address),
             sequencer.disable_retry_for_tests(),
-            rx,
+            pre_confirmed_cache,
             Notifications::default(),
             ethereum,
             config,
@@ -287,10 +289,9 @@ impl RpcContext {
         let pending_data =
             super::test_utils::create_pre_confirmed_data(context.storage.clone()).await;
 
-        let (tx, rx) = tokio_watch::channel(Default::default());
-        tx.send(pending_data).unwrap();
-
-        context.with_pending_data(rx)
+        let cache = Arc::new(PreConfirmedCache::new());
+        cache.store(pending_data);
+        context.with_pre_confirmed_cache(cache)
     }
 
     #[cfg(test)]
@@ -300,9 +301,8 @@ impl RpcContext {
             super::test_utils::create_pre_confirmed_data_with_pre_latest(context.storage.clone())
                 .await;
 
-        let (tx, rx) = tokio_watch::channel(Default::default());
-        tx.send(pending_data).unwrap();
-
-        context.with_pending_data(rx)
+        let cache = Arc::new(PreConfirmedCache::new());
+        cache.store(pending_data);
+        context.with_pre_confirmed_cache(cache)
     }
 }
