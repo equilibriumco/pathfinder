@@ -1202,7 +1202,6 @@ mod tests {
         use fake::{Dummy, Fake, Faker};
         use futures::stream;
         use p2p::libp2p::PeerId;
-        use pathfinder_common::hash::{PedersenHash, PoseidonHash};
         use pathfinder_common::state_update::{ContractClassUpdate, StateUpdateData};
         use pathfinder_common::transaction::DeployTransactionV0;
         use pathfinder_common::TransactionHash;
@@ -1225,7 +1224,7 @@ mod tests {
                 let blocks = fake_storage::generate::with_config(
                     num_blocks,
                     Config {
-                        update_tries: Box::new(update_starknet_state::<PedersenHash, PoseidonHash>),
+                        update_tries: Box::new(update_starknet_state),
                         ..Default::default()
                     },
                 );

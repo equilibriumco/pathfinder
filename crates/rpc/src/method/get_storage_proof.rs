@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use anyhow::Context;
-use pathfinder_common::hash::{PedersenHash, PoseidonHash};
 use pathfinder_common::prelude::*;
 use pathfinder_common::trie::TrieNode;
 use pathfinder_crypto::Felt;
@@ -365,7 +364,7 @@ fn get_class_proofs(
         return Ok((class_root_hash, NodeHashToNodeMappings(vec![])));
     };
 
-    let nodes: Vec<NodeHashToNodeMapping> = ClassCommitmentTree::<PoseidonHash>::get_proofs(
+    let nodes: Vec<NodeHashToNodeMapping> = ClassCommitmentTree::get_proofs(
         tx,
         block_number,
         class_hashes,
@@ -414,7 +413,7 @@ fn get_contract_proofs(
         return Ok((storage_root_hash, NodeHashToNodeMappings(vec![]), vec![]));
     };
 
-    let nodes = StorageCommitmentTree::<PedersenHash>::get_proofs(
+    let nodes = StorageCommitmentTree::get_proofs(
         tx,
         block_number,
         contract_addresses,
@@ -480,7 +479,7 @@ fn get_contract_storage_proofs(
 
                 if let Some(root) = root {
                     let nodes: Vec<NodeHashToNodeMapping> =
-                        ContractsStorageTree::<PedersenHash>::get_proofs(
+                        ContractsStorageTree::get_proofs(
                             &tx,
                             csk.contract_address,
                             block_number,
@@ -833,7 +832,7 @@ mod tests {
         let blocks = pathfinder_storage::fake::generate::with_config(
             1,
             Config {
-                update_tries: Box::new(update_starknet_state::<PedersenHash, PoseidonHash>),
+                update_tries: Box::new(update_starknet_state),
                 occurrence: OccurrencePerBlock {
                     cairo: 0..=0,
                     sierra: 0..=0,
@@ -848,7 +847,7 @@ mod tests {
             &storage,
             &blocks,
             Some(Box::new(
-                update_starknet_state::<PedersenHash, PoseidonHash>,
+                update_starknet_state,
             )),
         );
 
@@ -971,7 +970,7 @@ mod tests {
         let blocks = generate::with_config(
             2,
             Config {
-                update_tries: Box::new(update_starknet_state::<PedersenHash, PoseidonHash>),
+                update_tries: Box::new(update_starknet_state),
                 occurrence: OccurrencePerBlock {
                     cairo: 1..=10,
                     sierra: 1..=10,
@@ -987,7 +986,7 @@ mod tests {
             &storage,
             &blocks,
             Some(Box::new(
-                update_starknet_state::<PedersenHash, PoseidonHash>,
+                update_starknet_state,
             )),
         );
 

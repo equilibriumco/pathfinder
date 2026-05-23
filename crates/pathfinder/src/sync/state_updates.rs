@@ -5,7 +5,6 @@ use std::sync::Arc;
 use anyhow::Context;
 use p2p::libp2p::PeerId;
 use p2p::PeerData;
-use pathfinder_common::hash::{PedersenHash, PoseidonHash};
 use pathfinder_common::prelude::*;
 use pathfinder_common::state_update::{
     self,
@@ -261,7 +260,7 @@ pub async fn batch_update_starknet_state(
         let PeerData { peer, data: merged } = merge_state_updates(state_updates);
 
         let (storage_commitment, class_commitment) =
-            update_starknet_state::<PedersenHash, PoseidonHash>(
+            update_starknet_state(
                 &db,
                 (&merged).into(),
                 verify_tree_hashes,

@@ -325,7 +325,6 @@ mod tests {
         SerializedSierraDefinition,
     };
     use pathfinder_common::event::Event;
-    use pathfinder_common::hash::{PedersenHash, PoseidonHash};
     use pathfinder_common::prelude::*;
     use pathfinder_common::receipt::Receipt;
     use pathfinder_common::state_update::{self, StateUpdateData};
@@ -366,7 +365,7 @@ mod tests {
                 calculate_transaction_commitment: Box::new(calculate_transaction_commitment),
                 calculate_receipt_commitment: Box::new(calculate_receipt_commitment),
                 calculate_event_commitment: Box::new(calculate_event_commitment),
-                update_tries: Box::new(update_starknet_state::<PedersenHash, PoseidonHash>),
+                update_tries: Box::new(update_starknet_state),
                 ..Default::default()
             },
         );

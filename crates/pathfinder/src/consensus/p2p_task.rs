@@ -19,7 +19,6 @@ use p2p::consensus::{peer_score, Client, Event, EventKind, HeightAndRound};
 use p2p::libp2p::PeerId;
 use p2p_proto::common::{Address, Hash};
 use p2p_proto::consensus::{ProposalFin, ProposalInit, ProposalPart};
-use pathfinder_common::hash::{PedersenHash, PoseidonHash};
 use pathfinder_common::{
     consensus_info,
     BlockId,
@@ -434,7 +433,7 @@ pub fn spawn(
 
                                 let starknet_version = block.header.starknet_version;
                                 let state_commitment =
-                                    update_starknet_state::<PedersenHash, PoseidonHash>(
+                                    update_starknet_state(
                                         &main_db_tx,
                                         block.state_update.as_ref(),
                                         verify_tree_hashes,

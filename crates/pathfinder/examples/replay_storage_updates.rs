@@ -1,26 +1,22 @@
 //! Replay storage updates block-by-block from a Pathfinder database.
 //!
-//! Uses a null hash function to avoid computation overhead of building the
-//! Merkle trees. This way storage performance can be measured without the
-//! overhead of hashing.
+//! Uses the `bench-skip-hashing` feature to replace hash computations with
+//! no-ops, so storage performance can be measured without hashing overhead.
+
+#[cfg(not(feature = "bench-skip-hashing"))]
+compile_error!(
+    "This example requires the `bench-skip-hashing` feature: cargo run --example \
+     replay_storage_updates --features bench-skip-hashing"
+);
+
 use std::num::NonZeroU32;
 
 use anyhow::Context;
-use pathfinder_common::hash::FeltHash;
 use pathfinder_common::prelude::*;
 use pathfinder_common::state_update::StateUpdateRef;
 use pathfinder_crypto::Felt;
 use pathfinder_merkle_tree::starknet_state::update_starknet_state;
 use pathfinder_storage::StorageBuilder;
-
-/// A no-op hash function that returns the first argument unchanged.
-#[derive(Debug, Clone, Copy)]
-pub struct NullHash;
-impl FeltHash for NullHash {
-    fn hash(a: Felt, _b: Felt) -> Felt {
-        a
-    }
-}
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -83,15 +79,14 @@ fn main() -> anyhow::Result<()> {
         if i % 1000 == 999 {
             tracing::info!(%block_number, "Applying state update");
             let start = std::time::Instant::now();
-            let (_storage_commitment, _class_commitment) =
-                update_starknet_state::<NullHash, NullHash>(
-                    &output_txn,
-                    StateUpdateRef::from(&aggregate_state_update),
-                    false,
-                    block_number,
-                    output_storage.clone(),
-                )
-                .context("Failed to update state")?;
+            let (_storage_commitment, _class_commitment) = update_starknet_state(
+                &output_txn,
+                StateUpdateRef::from(&aggregate_state_update),
+                false,
+                block_number,
+                output_storage.clone(),
+            )
+            .context("Failed to update state")?;
             let elapsed = start.elapsed();
             tracing::info!(%block_number, elapsed=%elapsed.as_millis(), "State update applied");
             aggregate_state_update = StateUpdate::default();
@@ -150,7 +145,7 @@ fn main() -> anyhow::Result<()> {
         let output_txn = output_db_conn
             .transaction()
             .context("Create database transaction")?;
-        let (_storage_commitment, _class_commitment) = update_starknet_state::<NullHash, NullHash>(
+        let (_storage_commitment, _class_commitment) = update_starknet_state(
             &output_txn,
             StateUpdateRef::from(&aggregate_state_update),
             false,
