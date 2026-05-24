@@ -189,10 +189,12 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             }
         };
 
-        // Reconcile state with the resolved height. Only `Full` carries a
-        // height; `Unchanged`/`Delta` leave state at its tracked block.
+        // Reconcile state with the resolved height. The gateway only reports
+        // a height on `Full` responses to `latest` requests; everything else
+        // (Unchanged, Delta, and concrete-number Full) leaves state at its
+        // tracked block.
         let resolved = match response {
-            PreConfirmedPollResponse::Full { block_number, .. } => Some(block_number),
+            PreConfirmedPollResponse::Full { block_number, .. } => block_number,
             _ => None,
         };
 
@@ -545,7 +547,7 @@ mod tests {
             .returning(move |_, _, _| {
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: String::new(),
-                    block_number: BlockNumber::new_or_panic(3),
+                    block_number: Some(BlockNumber::new_or_panic(3)),
                     block: PRE_CONFIRMED_BLOCK.clone(),
                 })
             });
@@ -645,7 +647,7 @@ mod tests {
 
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: String::new(),
-                    block_number: BlockNumber::new_or_panic(3),
+                    block_number: Some(BlockNumber::new_or_panic(3)),
                     block,
                 })
             });
@@ -801,7 +803,7 @@ mod tests {
 
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: String::new(),
-                    block_number: BlockNumber::new_or_panic(12),
+                    block_number: Some(BlockNumber::new_or_panic(12)),
                     block,
                 })
             });
@@ -993,7 +995,7 @@ mod tests {
             let emitted = s.apply(
                 PreConfirmedPollResponse::Full {
                     identifier: "xyz".into(),
-                    block_number: BlockNumber::new_or_panic(10),
+                    block_number: Some(BlockNumber::new_or_panic(10)),
                     block: new_block.clone(),
                 },
                 false,
@@ -1012,7 +1014,7 @@ mod tests {
             let emitted = s.apply(
                 PreConfirmedPollResponse::Full {
                     identifier: "abc".into(),
-                    block_number: BlockNumber::new_or_panic(10),
+                    block_number: Some(BlockNumber::new_or_panic(10)),
                     block: new_block.clone(),
                 },
                 false,
@@ -1031,7 +1033,7 @@ mod tests {
             let emitted = s.apply(
                 PreConfirmedPollResponse::Full {
                     identifier: "abc".into(),
-                    block_number: BlockNumber::new_or_panic(10),
+                    block_number: Some(BlockNumber::new_or_panic(10)),
                     block: same_block.clone(),
                 },
                 false,
@@ -1051,7 +1053,7 @@ mod tests {
             let emitted = s.apply(
                 PreConfirmedPollResponse::Full {
                     identifier: "abc".into(),
-                    block_number: BlockNumber::new_or_panic(10),
+                    block_number: Some(BlockNumber::new_or_panic(10)),
                     block: same_block,
                 },
                 false,
@@ -1097,7 +1099,7 @@ mod tests {
                 };
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: String::new(),
-                    block_number,
+                    block_number: Some(block_number),
                     block: PRE_CONFIRMED_BLOCK.clone(),
                 })
             });
@@ -1185,7 +1187,7 @@ mod tests {
                     // pre-confirmed block 11.
                     (BlockId::Latest, None) => Ok(PreConfirmedPollResponse::Full {
                         identifier: BLOCK_11_ID.into(),
-                        block_number: BlockNumber::new_or_panic(11),
+                        block_number: Some(BlockNumber::new_or_panic(11)),
                         block: PRE_CONFIRMED_BLOCK.clone(),
                     }),
 
@@ -1194,7 +1196,7 @@ mod tests {
                     (BlockId::Latest, Some(id)) if id == BLOCK_11_ID => {
                         Ok(PreConfirmedPollResponse::Full {
                             identifier: BLOCK_12_ID.into(),
-                            block_number: BlockNumber::new_or_panic(12),
+                            block_number: Some(BlockNumber::new_or_panic(12)),
                             block: PRE_CONFIRMED_BLOCK.clone(),
                         })
                     }
@@ -1308,7 +1310,7 @@ mod tests {
                 *c += 1;
                 Ok(PreConfirmedPollResponse::Full {
                     identifier: format!("id-{}", *c),
-                    block_number: BlockNumber::new_or_panic(3),
+                    block_number: Some(BlockNumber::new_or_panic(3)),
                     block: PRE_CONFIRMED_BLOCK.clone(),
                 })
             });
