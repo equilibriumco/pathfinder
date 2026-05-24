@@ -534,7 +534,7 @@ impl GatewayApi for Client {
             .get()
             .await?;
 
-        wire.try_into().map_err(
+        PreConfirmedPollResponse::try_from(wire).map_err(
             |e: starknet_gateway_types::reply::MalformedPreConfirmedResponse| {
                 SequencerError::InvalidResponse(e.to_string())
             },

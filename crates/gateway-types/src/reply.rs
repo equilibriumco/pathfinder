@@ -198,7 +198,8 @@ pub enum PreConfirmedPollResponse {
 
     Full {
         identifier: String,
-        block_number: BlockNumber,
+
+        block_number: Option<BlockNumber>,
         block: PreConfirmedBlock,
     },
 }
@@ -208,6 +209,31 @@ pub enum PreConfirmedPollResponse {
 #[derive(Debug, thiserror::Error)]
 #[error("missing field `{0}` in pre-confirmed response")]
 pub struct MalformedPreConfirmedResponse(&'static str);
+
+impl TryFrom<PreConfirmedPollResponseWire> for PreConfirmedPollResponse {
+    type Error = MalformedPreConfirmedResponse;
+
+    fn try_from(mut wire: PreConfirmedPollResponseWire) -> Result<Self, Self::Error> {
+        if !wire.changed {
+            return Ok(Self::Unchanged);
+        }
+        let identifier = wire.known_block_identifier.take().unwrap_or_default();
+        if wire.status.is_some() {
+            Ok(Self::Full {
+                identifier,
+                block_number: wire.block_number.take(),
+                block: build_block(&mut wire)?,
+            })
+        } else {
+            Ok(Self::Delta {
+                identifier,
+                new_transactions: wire.transactions,
+                new_receipts: wire.transaction_receipts,
+                new_state_diffs: wire.transaction_state_diffs,
+            })
+        }
+    }
+}
 
 fn build_block(
     wire: &mut PreConfirmedPollResponseWire,
@@ -249,37 +275,6 @@ fn build_block(
         transaction_receipts: std::mem::take(&mut wire.transaction_receipts),
         transaction_state_diffs: std::mem::take(&mut wire.transaction_state_diffs),
     })
-}
-
-impl TryFrom<PreConfirmedPollResponseWire> for PreConfirmedPollResponse {
-    type Error = MalformedPreConfirmedResponse;
-
-    fn try_from(mut wire: PreConfirmedPollResponseWire) -> Result<Self, Self::Error> {
-        if !wire.changed {
-            return Ok(Self::Unchanged);
-        }
-        let identifier = wire.known_block_identifier.take().unwrap_or_default();
-        if wire.status.is_some() {
-            // Full: block-header fields are present.
-            let block_number = wire
-                .block_number
-                .take()
-                .ok_or(MalformedPreConfirmedResponse("block_number"))?;
-            Ok(Self::Full {
-                identifier,
-                block_number,
-                block: build_block(&mut wire)?,
-            })
-        } else {
-            // Delta: only transaction vecs; no block-header fields.
-            Ok(Self::Delta {
-                identifier,
-                new_transactions: wire.transactions,
-                new_receipts: wire.transaction_receipts,
-                new_state_diffs: wire.transaction_state_diffs,
-            })
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug, Default, Deserialize, PartialEq, Eq, serde::Serialize)]
@@ -2822,7 +2817,7 @@ mod tests {
                     block,
                 } => {
                     assert_eq!(identifier, "xyz");
-                    assert_eq!(block_number, BlockNumber::new_or_panic(1));
+                    assert_eq!(block_number, Some(BlockNumber::new_or_panic(1)));
                     assert_eq!(
                         block.l1_gas_price,
                         GasPrices {
@@ -2838,15 +2833,21 @@ mod tests {
         }
 
         #[test]
-        fn full_missing_block_number_returns_error() {
+        fn full_without_block_number() {
             let mut json = minimal_block_json();
             let obj = json.as_object_mut().unwrap();
             obj.insert("changed".into(), true.into());
             obj.remove("block_number");
 
             let wire: PreConfirmedPollResponseWire = serde_json::from_value(json).unwrap();
-            let err = PreConfirmedPollResponse::try_from(wire).unwrap_err();
-            assert!(err.to_string().contains("block_number"));
+            let response = PreConfirmedPollResponse::try_from(wire).unwrap();
+
+            match response {
+                PreConfirmedPollResponse::Full { block_number, .. } => {
+                    assert_eq!(block_number, None);
+                }
+                other => panic!("expected Full, got {other:?}"),
+            }
         }
     }
 }
