@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
+
 use pathfinder_common::{ChainId, ContractAddress};
 use pathfinder_consensus::{PublicKey, SigningKey, Validator, ValidatorSet};
 use pathfinder_consensus_fetcher as consensus_fetcher;
@@ -6,12 +9,21 @@ use rand::rngs::OsRng;
 
 use crate::config::ConsensusConfig;
 
+/// Upper bound on the number of distinct heights whose proposer sets are kept
+/// in memory. Consensus advances monotonically, so when the cache is full we
+/// evict the smallest key, which approximates LRU for the expected workload.
+const MAX_CACHED_HEIGHTS: usize = 32;
+
 /// A proposer selector that fetches proposers from config or L2.
 #[derive(Clone)]
 pub struct L2ProposerSelector {
     storage: Storage,
     chain_id: ChainId,
     config: ConsensusConfig,
+    /// Memoized proposer sets keyed by height. `select_proposer` is invoked
+    /// multiple times per height (once per round, once per incoming proposal),
+    /// and the underlying L2 lookup is expensive, so we cache the result.
+    cache: Arc<RwLock<BTreeMap<u64, Arc<ValidatorSet<ContractAddress>>>>>,
 }
 
 impl L2ProposerSelector {
@@ -20,7 +32,37 @@ impl L2ProposerSelector {
             storage,
             chain_id,
             config,
+            cache: Arc::new(RwLock::new(BTreeMap::new())),
         }
+    }
+
+    /// Returns the proposer set for `height`, fetching from L2 only on a cache
+    /// miss.
+    fn proposer_set_at(
+        &self,
+        height: u64,
+    ) -> Result<Arc<ValidatorSet<ContractAddress>>, anyhow::Error> {
+        if let Some(set) = self.cache.read().unwrap().get(&height).cloned() {
+            return Ok(set);
+        }
+
+        let fetched = Arc::new(fetch_proposers(
+            &self.storage,
+            self.chain_id,
+            height,
+            &self.config,
+        )?);
+
+        let mut cache = self.cache.write().unwrap();
+        // Another thread may have inserted between our read and write locks.
+        if let Some(existing) = cache.get(&height).cloned() {
+            return Ok(existing);
+        }
+        cache.insert(height, fetched.clone());
+        while cache.len() > MAX_CACHED_HEIGHTS {
+            cache.pop_first();
+        }
+        Ok(fetched)
     }
 }
 
@@ -31,8 +73,8 @@ impl pathfinder_consensus::ProposerSelector<ContractAddress> for L2ProposerSelec
         height: u64,
         _round: u32,
     ) -> &'a Validator<ContractAddress> {
-        // Fetch proposers from L2 using the same logic as validators
-        let proposer_set = fetch_proposers(&self.storage, self.chain_id, height, &self.config)
+        let proposer_set = self
+            .proposer_set_at(height)
             .expect("Failed to fetch proposers");
 
         // For now, just use the first proposer from the set
