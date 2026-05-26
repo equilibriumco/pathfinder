@@ -173,3 +173,59 @@ fn fetch_proposers_from_l2(
         .collect::<Vec<Validator<ContractAddress>>>();
     Ok(ValidatorSet::new(proposers))
 }
+
+#[cfg(test)]
+mod tests {
+    use pathfinder_common::macro_prelude::*;
+    use pathfinder_common::StarknetVersion;
+    use pathfinder_storage::StorageBuilder;
+
+    use super::*;
+
+    fn selector() -> L2ProposerSelector {
+        let storage = StorageBuilder::in_memory().unwrap();
+        let proposer = contract_address!("0x1");
+        let config = ConsensusConfig {
+            my_starknet_version: StarknetVersion::default(),
+            my_validator_address: proposer,
+            validator_addresses: vec![proposer],
+            proposer_addresses: vec![proposer],
+            history_depth: 0,
+            l1_gas_price_tolerance: 0.0,
+            l1_gas_price_max_time_gap: 0,
+        };
+        L2ProposerSelector::new(storage, ChainId::SEPOLIA_TESTNET, config)
+    }
+
+    #[test]
+    fn repeat_lookup_at_same_height_hits_cache() {
+        let selector = selector();
+        let first = selector.proposer_set_at(42).unwrap();
+        let second = selector.proposer_set_at(42).unwrap();
+        // Same allocation proves the second call was served from the cache,
+        // not refetched.
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn distinct_heights_get_distinct_entries() {
+        let selector = selector();
+        let a = selector.proposer_set_at(1).unwrap();
+        let b = selector.proposer_set_at(2).unwrap();
+        assert!(!Arc::ptr_eq(&a, &b));
+    }
+
+    #[test]
+    fn evicts_oldest_height_when_over_capacity() {
+        let selector = selector();
+        let zero_first = selector.proposer_set_at(0).unwrap();
+        // Insert MAX_CACHED_HEIGHTS more entries: at the last insertion the
+        // map size hits MAX_CACHED_HEIGHTS + 1 and the smallest key (0) is
+        // evicted.
+        for h in 1..=MAX_CACHED_HEIGHTS as u64 {
+            selector.proposer_set_at(h).unwrap();
+        }
+        let zero_again = selector.proposer_set_at(0).unwrap();
+        assert!(!Arc::ptr_eq(&zero_first, &zero_again));
+    }
+}
