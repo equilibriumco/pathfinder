@@ -1,6 +1,5 @@
 //! Contains the [FeltHash] trait and implementations thereof for the
 //! [Pedersen](PedersenHash) and [Poseidon](PoseidonHash) hashes.
-#[cfg(not(feature = "bench-skip-hashing"))]
 use pathfinder_crypto::hash::{pedersen_hash, poseidon_hash};
 use pathfinder_crypto::Felt;
 
@@ -17,15 +16,7 @@ pub struct PedersenHash {}
 
 impl FeltHash for PedersenHash {
     fn hash(a: Felt, b: Felt) -> Felt {
-        #[cfg(feature = "bench-skip-hashing")]
-        {
-            let _ = b;
-            a
-        }
-        #[cfg(not(feature = "bench-skip-hashing"))]
-        {
-            pedersen_hash(a, b)
-        }
+        pedersen_hash(a, b)
     }
 }
 
@@ -34,14 +25,6 @@ impl FeltHash for PedersenHash {
 pub struct PoseidonHash;
 impl FeltHash for PoseidonHash {
     fn hash(a: Felt, b: Felt) -> Felt {
-        #[cfg(feature = "bench-skip-hashing")]
-        {
-            let _ = b;
-            a
-        }
-        #[cfg(not(feature = "bench-skip-hashing"))]
-        {
-            poseidon_hash(a.into(), b.into()).into()
-        }
+        poseidon_hash(a.into(), b.into()).into()
     }
 }
