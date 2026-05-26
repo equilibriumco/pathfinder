@@ -72,6 +72,7 @@ use pathfinder_gas_price::{
 };
 
 pub mod error;
+pub mod proposer;
 
 use crate::error::ProposalHandlingError;
 
