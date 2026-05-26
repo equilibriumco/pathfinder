@@ -4,7 +4,14 @@ use crate::hash::poseidon::permutation::*;
 /// Hashes two elements using the Poseidon hash.
 ///
 /// Equivalent to [`poseidon_hash`](https://github.com/starkware-libs/cairo-lang/blob/12ca9e91bbdc8a423c63280949c7e34382792067/src/starkware/cairo/common/builtin_poseidon/poseidon.cairo#L5).
+#[allow(unreachable_code)]
 pub fn poseidon_hash(x: MontFelt, y: MontFelt) -> MontFelt {
+    #[cfg(feature = "bench-skip-hashing")]
+    {
+        let _ = y;
+        return x;
+    }
+
     let mut state = [x, y, MontFelt::TWO];
     permute(&mut state);
 
@@ -14,7 +21,13 @@ pub fn poseidon_hash(x: MontFelt, y: MontFelt) -> MontFelt {
 /// Hashes a number of messages using the Poseidon hash.
 ///
 /// Equivalent to [`poseidon_hash_many`](https://github.com/starkware-libs/cairo-lang/blob/12ca9e91bbdc8a423c63280949c7e34382792067/src/starkware/cairo/common/builtin_poseidon/poseidon.cairo#L28).
+#[allow(unreachable_code)]
 pub fn poseidon_hash_many(msgs: &[MontFelt]) -> MontFelt {
+    #[cfg(feature = "bench-skip-hashing")]
+    {
+        return msgs.first().copied().unwrap_or(MontFelt::ZERO);
+    }
+
     let mut state = [MontFelt::ZERO, MontFelt::ZERO, MontFelt::ZERO];
     let mut iter = msgs.chunks_exact(2);
 
