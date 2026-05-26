@@ -166,14 +166,17 @@ impl ApplicationBehaviour for Behaviour {
                 message,
             } => match message.topic {
                 hash if hash == topic_proposals_hash => {
-                    if let Ok(stream_msg) = StreamMessage::from_protobuf_bytes(&message.data) {
-                        let events =
-                            handle_incoming_proposal_message(state, stream_msg, propagation_source);
+                    let Ok(stream_msg) = StreamMessage::from_protobuf_bytes(&message.data) else {
+                        error!("Failed to parse proposal message with id: {}", message_id);
+                        return;
+                    };
+
+                    if let Some(events) =
+                        handle_incoming_proposal_message(state, stream_msg, propagation_source)
+                    {
                         for event in events {
                             let _ = event_sender.send(event);
                         }
-                    } else {
-                        error!("Failed to parse proposal message with id: {}", message_id);
                     }
                 }
                 hash if hash == topic_votes_hash => {

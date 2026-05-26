@@ -78,8 +78,8 @@ pub enum StreamState<T> {
 
 impl<T> StreamState<T> {
     /// Create a new incoming stream state.
-    pub fn new_incoming() -> Self {
-        Self::Incoming(IncomingStreamState::new())
+    pub fn new_incoming(source: libp2p::PeerId) -> Self {
+        Self::Incoming(IncomingStreamState::new(source))
     }
 
     /// Create a new outgoing stream state.
@@ -91,6 +91,8 @@ impl<T> StreamState<T> {
 /// State of a stream that is receiving messages.
 #[derive(Debug)]
 pub struct IncomingStreamState<T> {
+    /// Source of the incoming stream messages.
+    pub source: libp2p::PeerId,
     /// The next message id that is expected.
     pub next_message_id: u64,
     /// The messages that have been received.
@@ -100,8 +102,9 @@ pub struct IncomingStreamState<T> {
 }
 
 impl<T> IncomingStreamState<T> {
-    fn new() -> Self {
+    fn new(source: libp2p::PeerId) -> Self {
         Self {
+            source,
             next_message_id: 0,
             received_messages: HashMap::new(),
             fin_message_id: None,
