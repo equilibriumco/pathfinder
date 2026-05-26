@@ -11,7 +11,6 @@ name = "pathfinder_lib"
 path = "src/lib.rs"
 
 [features]
-bench-skip-hashing = ["pathfinder-common/bench-skip-hashing"]
 cairo-native = ["pathfinder-executor/cairo-native"]
 consensus-integration-tests = []
 tokio-console = ["console-subscriber", "tokio/tracing"]
@@ -103,7 +102,3 @@ starknet-gateway-test-fixtures = { path = "../gateway-test-fixtures" }
 test-log = { workspace = true, features = ["trace"] }
 tokio = { workspace = true, features = ["test-util"] }
 warp = { workspace = true }
-
-[[example]]
-name = "replay_storage_updates"
-required-features = ["bench-skip-hashing"]
