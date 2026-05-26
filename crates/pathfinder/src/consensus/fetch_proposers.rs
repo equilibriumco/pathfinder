@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
+use anyhow::Context;
 use pathfinder_common::{ChainId, ContractAddress};
 use pathfinder_consensus::{PublicKey, SigningKey, Validator, ValidatorSet};
 use pathfinder_consensus_fetcher as consensus_fetcher;
 use pathfinder_storage::Storage;
+use pathfinder_validator::proposer::ExpectedProposer;
 use rand::rngs::OsRng;
 
 use crate::config::ConsensusConfig;
@@ -66,6 +68,24 @@ impl L2ProposerSelector {
         }
         Ok(fetched)
     }
+
+    /// Returns the address of the proposer expected to propose at
+    /// `(height, round)`.
+    ///
+    /// Shared by [`ProposerSelector::select_proposer`] and the
+    /// [`ExpectedProposer`] implementation so that consensus selection and
+    /// proposal validation cannot disagree on who the proposer is.
+    fn proposer_address_at(&self, height: u64, _round: u32) -> anyhow::Result<ContractAddress> {
+        let proposer_set = self.proposer_set_at(height)?;
+        // For now, just use the first proposer from the set. `round` is available for
+        // when selection becomes round-dependent.
+        let address = proposer_set
+            .validators
+            .first()
+            .context("No proposers found")?
+            .address;
+        Ok(address)
+    }
 }
 
 impl pathfinder_consensus::ProposerSelector<ContractAddress> for L2ProposerSelector {
@@ -73,18 +93,11 @@ impl pathfinder_consensus::ProposerSelector<ContractAddress> for L2ProposerSelec
         &self,
         validator_set: &'a ValidatorSet<ContractAddress>,
         height: u64,
-        _round: u32,
+        round: u32,
     ) -> &'a Validator<ContractAddress> {
-        let proposer_set = self
-            .proposer_set_at(height)
-            .expect("Failed to fetch proposers");
-
-        // For now, just use the first proposer from the set
-        let proposer_address = proposer_set
-            .validators
-            .first()
-            .expect("No proposers found")
-            .address;
+        let proposer_address = self
+            .proposer_address_at(height, round)
+            .expect("Failed to determine proposer");
 
         // Find the proposer in the validator set
         validator_set
@@ -92,6 +105,12 @@ impl pathfinder_consensus::ProposerSelector<ContractAddress> for L2ProposerSelec
             .iter()
             .find(|v| v.address == proposer_address)
             .expect("Proposer must be in validator set")
+    }
+}
+
+impl ExpectedProposer for L2ProposerSelector {
+    fn expected_proposer(&self, height: u64, round: u32) -> anyhow::Result<ContractAddress> {
+        self.proposer_address_at(height, round)
     }
 }
 
