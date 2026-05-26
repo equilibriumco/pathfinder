@@ -54,6 +54,19 @@ impl PendingWatcher {
         tx: &Transaction<'_>,
         rpc_version: RpcVersion,
     ) -> anyhow::Result<PendingData> {
+        let latest = tx
+            .block_header(pathfinder_common::BlockId::Latest)
+            .context("Querying latest block header")?
+            .unwrap_or_default();
+
+        // The pre-confirmed block is to be only ever used on JSON-RPC 0.9 and up.
+        // Older versions did have the semantics that expected that pending block
+        // contents are L2_ACCEPTED, which is not the case for the pre-confirmed
+        // block.
+        if rpc_version < RpcVersion::V09 {
+            return Ok(PendingData::empty(&latest));
+        }
+
         let watched_pending_data = match self.cache.try_read() {
             Some(data) => data,
             None => tokio::runtime::Handle::current()
@@ -61,22 +74,14 @@ impl PendingWatcher {
                 .context("Reading pre-confirmed cache")?,
         };
 
-        let latest = tx
-            .block_header(pathfinder_common::BlockId::Latest)
-            .context("Querying latest block header")?
-            .unwrap_or_default();
-
         let watched_pending_blocks = watched_pending_data.pending_block();
         let PendingBlocks {
             pre_confirmed,
             pre_latest,
             candidate_transactions,
         } = watched_pending_blocks.as_ref();
-        // The pre-confirmed block is to be only ever used on JSON-RPC 0.9 and up.
-        // Older versions did have the semantics that expected that pending block
-        // contents are L2_ACCEPTED, which is not the case for the pre-confirmed
-        // block.
-        let pending_data = if rpc_version >= RpcVersion::V09 {
+
+        let pending_data = {
             // The parent state commitment is only available here. The task polling the
             // pre-confirmed block has no access to the parent block header, thus it
             // cannot properly set the parent state commitment.
@@ -163,8 +168,6 @@ impl PendingWatcher {
                 }
                 _ => PendingData::empty(&latest),
             }
-        } else {
-            PendingData::empty(&latest)
         };
 
         Ok(pending_data)
