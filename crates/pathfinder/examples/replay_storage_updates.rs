@@ -12,6 +12,11 @@ compile_error!(
 use std::num::NonZeroU32;
 
 use anyhow::Context;
+use pathfinder_common::class_definition::{
+    SerializedCairoDefinition,
+    SerializedCasmDefinition,
+    SerializedSierraDefinition,
+};
 use pathfinder_common::prelude::*;
 use pathfinder_common::state_update::StateUpdateRef;
 use pathfinder_crypto::Felt;
@@ -28,6 +33,12 @@ fn main() -> anyhow::Result<()> {
     let output_database_path = std::env::args()
         .nth(2)
         .context("Please provide the output database path as the second argument")?;
+
+    let measure_from: u64 = std::env::args()
+        .nth(3)
+        .map(|s| s.parse().context("measure_from must be a block number"))
+        .transpose()?
+        .unwrap_or(0);
 
     let input_storage = StorageBuilder::file(input_database_path.into())
         .migrate()
@@ -62,6 +73,16 @@ fn main() -> anyhow::Result<()> {
 
     let mut aggregate_state_update = StateUpdate::default();
 
+    let mut batch_start: u64 = 0;
+    let mut batches_measured: u64 = 0;
+    let total_start = std::time::Instant::now();
+
+    println!(
+        "batch_start,batch_end,trie_ms,commit_ms,contract_updates,system_updates,storage_changes,\
+         nonce_updates,class_updates,declared_cairo_classes,declared_sierra_classes,\
+         migrated_compiled_classes,state_diff_length"
+    );
+
     for i in 0..=latest_block_number.get() {
         let block_number = BlockNumber::new(i).expect("is valid");
 
@@ -76,9 +97,10 @@ fn main() -> anyhow::Result<()> {
 
         aggregate_state_update = aggregate_state_update.apply(&state_update);
 
+        let mut trie_ms = None;
         if i % 1000 == 999 {
             tracing::info!(%block_number, "Applying state update");
-            let start = std::time::Instant::now();
+            let trie_start = std::time::Instant::now();
             let (_storage_commitment, _class_commitment) = update_starknet_state(
                 &output_txn,
                 StateUpdateRef::from(&aggregate_state_update),
@@ -87,9 +109,7 @@ fn main() -> anyhow::Result<()> {
                 output_storage.clone(),
             )
             .context("Failed to update state")?;
-            let elapsed = start.elapsed();
-            tracing::info!(%block_number, elapsed=%elapsed.as_millis(), "State update applied");
-            aggregate_state_update = StateUpdate::default();
+            trie_ms = Some(trie_start.elapsed().as_millis());
         }
 
         let header = BlockHeader {
@@ -123,13 +143,21 @@ fn main() -> anyhow::Result<()> {
 
         for class_hash in &state_update.declared_cairo_classes {
             output_txn
-                .insert_cairo_class_definition(*class_hash, b"")
+                .insert_cairo_class_definition(
+                    *class_hash,
+                    &SerializedCairoDefinition::from_slice(b""),
+                )
                 .context("Insert Cairo class definition")?;
         }
 
         for (class_hash, casm_hash) in &state_update.declared_sierra_classes {
             output_txn
-                .insert_sierra_class_definition(&SierraHash(class_hash.0), b"", b"", casm_hash)
+                .insert_sierra_class_definition(
+                    &SierraHash(class_hash.0),
+                    &SerializedSierraDefinition::from_slice(b""),
+                    &SerializedCasmDefinition::from_slice(b""),
+                    casm_hash,
+                )
                 .context("Insert Sierra class definition")?;
         }
 
@@ -137,14 +165,62 @@ fn main() -> anyhow::Result<()> {
             .insert_state_update_data(block_number, &state_update.into())
             .context("Insert state update into database")?;
 
+        let commit_start = std::time::Instant::now();
         output_txn.commit().context("Commit transaction")?;
+        let commit_ms = commit_start.elapsed().as_millis();
+
+        if let Some(trie_ms) = trie_ms {
+            tracing::info!(%block_number, %trie_ms, %commit_ms, "State update applied");
+
+            if batch_start >= measure_from {
+                let contract_updates = aggregate_state_update.contract_updates.len();
+                let system_updates = aggregate_state_update.system_contract_updates.len();
+                let storage_changes: usize = aggregate_state_update
+                    .contract_updates
+                    .values()
+                    .map(|u| u.storage.len())
+                    .sum::<usize>()
+                    + aggregate_state_update
+                        .system_contract_updates
+                        .values()
+                        .map(|u| u.storage.len())
+                        .sum::<usize>();
+                let nonce_updates = aggregate_state_update
+                    .contract_updates
+                    .values()
+                    .filter(|u| u.nonce.is_some())
+                    .count();
+                let class_updates = aggregate_state_update
+                    .contract_updates
+                    .values()
+                    .filter(|u| u.class.is_some())
+                    .count();
+                let declared_cairo_classes = aggregate_state_update.declared_cairo_classes.len();
+                let declared_sierra_classes = aggregate_state_update.declared_sierra_classes.len();
+                let migrated_compiled_classes =
+                    aggregate_state_update.migrated_compiled_classes.len();
+                let state_diff_length = aggregate_state_update.state_diff_length();
+
+                println!(
+                    "{batch_start},{},{trie_ms},{commit_ms},{contract_updates},{system_updates},\
+                     {storage_changes},{nonce_updates},{class_updates},{declared_cairo_classes},\
+                     {declared_sierra_classes},{migrated_compiled_classes},{state_diff_length}",
+                    i,
+                );
+                batches_measured += 1;
+            }
+
+            aggregate_state_update = StateUpdate::default();
+            batch_start = i + 1;
+        }
     }
 
-    // Apply any remaining state updates.
     if aggregate_state_update.state_diff_length() > 0 {
         let output_txn = output_db_conn
             .transaction()
             .context("Create database transaction")?;
+
+        let trie_start = std::time::Instant::now();
         let (_storage_commitment, _class_commitment) = update_starknet_state(
             &output_txn,
             StateUpdateRef::from(&aggregate_state_update),
@@ -153,8 +229,57 @@ fn main() -> anyhow::Result<()> {
             output_storage.clone(),
         )
         .context("Failed to update state")?;
+        let trie_ms = trie_start.elapsed().as_millis();
+
+        let commit_start = std::time::Instant::now();
         output_txn.commit().context("Commit final transaction")?;
+        let commit_ms = commit_start.elapsed().as_millis();
+
+        if batch_start >= measure_from {
+            let contract_updates = aggregate_state_update.contract_updates.len();
+            let system_updates = aggregate_state_update.system_contract_updates.len();
+            let storage_changes: usize = aggregate_state_update
+                .contract_updates
+                .values()
+                .map(|u| u.storage.len())
+                .sum::<usize>()
+                + aggregate_state_update
+                    .system_contract_updates
+                    .values()
+                    .map(|u| u.storage.len())
+                    .sum::<usize>();
+            let nonce_updates = aggregate_state_update
+                .contract_updates
+                .values()
+                .filter(|u| u.nonce.is_some())
+                .count();
+            let class_updates = aggregate_state_update
+                .contract_updates
+                .values()
+                .filter(|u| u.class.is_some())
+                .count();
+            let declared_cairo_classes = aggregate_state_update.declared_cairo_classes.len();
+            let declared_sierra_classes = aggregate_state_update.declared_sierra_classes.len();
+            let migrated_compiled_classes = aggregate_state_update.migrated_compiled_classes.len();
+            let state_diff_length = aggregate_state_update.state_diff_length();
+
+            println!(
+                "{batch_start},{},{trie_ms},{commit_ms},{contract_updates},{system_updates},\
+                 {storage_changes},{nonce_updates},{class_updates},{declared_cairo_classes},\
+                 {declared_sierra_classes},{migrated_compiled_classes},{state_diff_length}",
+                latest_block_number.get(),
+            );
+            batches_measured += 1;
+        }
     }
+
+    let total_elapsed = total_start.elapsed();
+    eprintln!(
+        "Total blocks: {}, Total elapsed: {}ms, Batches measured: {}",
+        latest_block_number.get() + 1,
+        total_elapsed.as_millis(),
+        batches_measured,
+    );
 
     Ok(())
 }
