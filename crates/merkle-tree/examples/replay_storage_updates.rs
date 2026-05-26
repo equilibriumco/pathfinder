@@ -24,7 +24,9 @@ use pathfinder_merkle_tree::starknet_state::update_starknet_state;
 use pathfinder_storage::StorageBuilder;
 
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
 
     let input_database_path = std::env::args()
         .nth(1)
