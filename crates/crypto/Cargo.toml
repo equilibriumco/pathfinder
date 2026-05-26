@@ -20,6 +20,9 @@ categories = [
 name = "pathfinder_crypto"
 path = "src/lib.rs"
 
+[features]
+bench-skip-hashing = []
+
 [dependencies]
 bincode = { workspace = true }
 bitvec = { workspace = true }

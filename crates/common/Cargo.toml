@@ -17,7 +17,7 @@ categories = [
 ]
 
 [features]
-bench-skip-hashing = []
+bench-skip-hashing = ["pathfinder-crypto/bench-skip-hashing"]
 full-serde = []
 
 [dependencies]
