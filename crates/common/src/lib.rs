@@ -177,14 +177,6 @@ impl From<BlockNumber> for Felt {
     }
 }
 
-impl std::iter::Iterator for BlockNumber {
-    type Item = BlockNumber;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(*self + 1)
-    }
-}
-
 /// The timestamp of a Starknet block.
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Default)]
 pub struct BlockTimestamp(u64);
@@ -229,11 +221,6 @@ pub struct ResourcePricePerUnit(pub u128);
 pub struct TransactionVersion(pub Felt);
 
 impl TransactionVersion {
-    /// Checks if version is zero, handling QUERY_VERSION_BASE.
-    pub fn is_zero(&self) -> bool {
-        self.without_query_version() == 0
-    }
-
     /// Returns the transaction version without QUERY_VERSION_BASE.
     ///
     /// QUERY_VERSION_BASE (2**128) is a large constant that gets
@@ -307,10 +294,6 @@ impl BlockNumber {
         } else {
             Some(*self - 1)
         }
-    }
-
-    pub fn is_zero(&self) -> bool {
-        self == &Self::GENESIS
     }
 
     pub fn checked_add(&self, rhs: u64) -> Option<Self> {
