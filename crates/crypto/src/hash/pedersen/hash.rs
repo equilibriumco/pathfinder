@@ -11,7 +11,14 @@ use crate::hash::pedersen::gens::*;
 /// Computes the [Starknet Pedersen hash] of `(a,b)`.
 ///
 /// [Starknet Pedersen hash]: https://docs.starkware.co/starkex/crypto/pedersen-hash-function.html
+#[allow(unreachable_code)]
 pub fn pedersen_hash(a: Felt, b: Felt) -> Felt {
+    #[cfg(feature = "bench-skip-hashing")]
+    {
+        let _ = b;
+        return a;
+    }
+
     let a = a.to_le_bytes();
     let b = b.to_le_bytes();
     let a_bits = a.view_bits::<Lsb0>();
