@@ -32,6 +32,7 @@ use pathfinder_validator::ValidatorWorkerPool;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 
+use self::fetch_proposers::L2ProposerSelector;
 use crate::config::integration_testing::InjectFailureConfig;
 use crate::config::ConsensusConfig;
 
@@ -89,6 +90,8 @@ pub fn start(
         watch::channel(consensus_info::ConsensusInfo::default());
     let finalized_blocks = HashMap::new();
 
+    let proposer_selector = L2ProposerSelector::new(main_storage.clone(), chain_id, config.clone());
+
     let (consensus_p2p_event_processing_handle, worker_pool) = p2p_task::spawn(
         chain_id,
         (&config).into(),
@@ -105,6 +108,7 @@ pub fn start(
         blockifier_libfuncs,
         verify_tree_hashes,
         gas_price_provider,
+        proposer_selector.clone(),
         inject_failure_config,
     );
 
@@ -118,6 +122,7 @@ pub fn start(
         data_directory,
         compiler_resource_limits,
         blockifier_libfuncs,
+        proposer_selector,
         inject_failure_config,
     );
 

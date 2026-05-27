@@ -17,6 +17,7 @@ use p2p_proto::consensus::ProposalPart;
 use pathfinder_common::prelude::*;
 use pathfinder_common::{
     consensus_info,
+    contract_address,
     ChainId,
     ConsensusFinalizedBlockHeader,
     ConsensusFinalizedL2Block,
@@ -31,7 +32,9 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::error::Elapsed;
 use tokio::time::timeout;
 
+use crate::config::ConsensusConfig;
 use crate::consensus::dummy_proposal::{create_test_proposal_init, create_transaction_batch};
+use crate::consensus::fetch_proposers::L2ProposerSelector;
 use crate::consensus::{p2p_task, ConsensusTaskEvent, ConsensusValue, P2PTaskConfig, P2PTaskEvent};
 use crate::SyncMessageToConsensus;
 
@@ -83,6 +86,19 @@ impl TestEnvironment {
         let peer_id = keypair.public().to_peer_id();
         let p2p_client = Client::from((peer_id, client_sender));
 
+        let proposer_selector = {
+            let config = ConsensusConfig {
+                my_starknet_version: StarknetVersion::V_0_14_0,
+                my_validator_address: validator_address,
+                validator_addresses: vec![validator_address],
+                proposer_addresses: vec![contract_address!("0x456")],
+                history_depth: Self::HISTORY_DEPTH,
+                l1_gas_price_tolerance: 0.0,
+                l1_gas_price_max_time_gap: 0,
+            };
+            L2ProposerSelector::new(StorageBuilder::in_memory().unwrap(), chain_id, config)
+        };
+
         let (handle, worker_pool) = p2p_task::spawn(
             chain_id,
             P2PTaskConfig {
@@ -104,6 +120,7 @@ impl TestEnvironment {
             pathfinder_compiler::BlockifierLibfuncs::default(),
             true,
             None,
+            proposer_selector,
             None,
         );
 

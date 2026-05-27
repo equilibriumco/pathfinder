@@ -30,6 +30,7 @@ use pathfinder_common::{
     ChainId,
     ClassHash,
     ConsensusFinalizedL2Block,
+    ContractAddress,
     DecidedBlocks,
     EventCommitment,
     L1DataAvailabilityMode,
@@ -47,6 +48,7 @@ use pathfinder_executor::{ConcurrentStateReader, ExecutorWorkerPool};
 use pathfinder_merkle_tree::starknet_state::update_starknet_state;
 use pathfinder_storage::pruning::BlockchainHistoryMode;
 use pathfinder_storage::{Storage, StorageBuilder, TriePruneMode};
+use pathfinder_validator::proposer::ConstantProposer;
 use pathfinder_validator::{
     ProdTransactionMapper,
     ValidatorBlockInfoStage,
@@ -396,6 +398,9 @@ pub fn init_proposal_and_validator(
         None,
         worker_pool.clone(),
         StarknetVersion::V_0_14_0,
+        // This is our own proposal, so the expected proposer is exactly the one we put in the
+        // proposal.
+        &ConstantProposer(ContractAddress(proposer.0)),
     )?;
     Ok((validator, vec![ProposalPart::Init(proposal_init)]))
 }

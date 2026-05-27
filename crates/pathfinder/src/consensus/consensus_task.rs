@@ -49,6 +49,7 @@ pub fn spawn(
     data_directory: &Path,
     compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
+    proposer_selector: L2ProposerSelector,
     // Does nothing in production builds. Used for integration testing only.
     inject_failure: Option<InjectFailureConfig>,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
@@ -69,10 +70,6 @@ pub fn spawn(
         let validator_address = config.my_validator_address;
         let validator_set_provider =
             L2ValidatorSetProvider::new(main_storage.clone(), chain_id, config.clone());
-
-        // Get the proposer selector
-        let proposer_selector =
-            L2ProposerSelector::new(main_storage.clone(), chain_id, config.clone());
 
         let mut consensus =
             Consensus::<ConsensusValue, ContractAddress, L2ProposerSelector>::recover_with_proposal_selector(
