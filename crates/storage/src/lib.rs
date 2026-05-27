@@ -960,6 +960,14 @@ impl Storage {
         2 * 1024 * 1024 * 1024
     }
 
+    pub fn rocksdb_property(&self, name: &str) -> anyhow::Result<Option<String>> {
+        self.0
+            .rocksdb
+            .rocksdb
+            .property_value(name)
+            .map_err(anyhow::Error::from)
+    }
+
     #[cfg(test)]
     pub(crate) fn rocksdb_tempdir_path(&self) -> Option<std::path::PathBuf> {
         self.0

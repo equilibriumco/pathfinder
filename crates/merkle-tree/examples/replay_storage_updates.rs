@@ -23,7 +23,7 @@ use pathfinder_common::prelude::*;
 use pathfinder_common::state_update::StateUpdateRef;
 use pathfinder_crypto::Felt;
 use pathfinder_merkle_tree::starknet_state::update_starknet_state;
-use pathfinder_storage::{StorageBuilder, TriePruneMode};
+use pathfinder_storage::{StorageBuilder, Transaction, TrieBreakdown, TriePruneMode};
 
 struct ClassPayloads {
     cairo: SerializedOpaqueClassDefinition,
@@ -36,7 +36,7 @@ struct ClassPayloads {
 /// have been found; returns `None` if we reach `last_block` short of any
 /// payload (the caller falls back to synthetic bytes).
 fn fetch_class_payloads(
-    tx: &pathfinder_storage::Transaction<'_>,
+    tx: &Transaction<'_>,
     last_block: BlockNumber,
 ) -> anyhow::Result<Option<ClassPayloads>> {
     let mut cairo: Option<SerializedOpaqueClassDefinition> = None;
@@ -251,14 +251,23 @@ fn main() -> anyhow::Result<()> {
 
     writeln!(
         csv,
-        "batch_start,batch_end,trie_ms,commit_ms,contract_updates,system_updates,storage_changes,\
-         nonce_updates,class_updates,declared_cairo_classes,declared_sierra_classes,\
-         migrated_compiled_classes,state_diff_length"
+        "batch_start,batch_end,contract_tries_ms,class_trie_ms,storage_trie_ms,trie_total_ms,\
+         rocksdb_write_ms,sqlite_commit_ms,commit_total_ms,apply_ms,insert_metadata_ms,\
+         insert_state_update_data_ms,batch_wall_ms,contract_updates,system_updates,\
+         storage_changes,nonce_updates,class_updates,declared_cairo_classes,\
+         declared_sierra_classes,migrated_compiled_classes,state_diff_length"
     )?;
 
     let last_block = latest_block_number.get();
     let mut chunk_start: u64 = 0;
     let mut batch_buf: Vec<StateUpdate> = Vec::with_capacity(1000);
+
+    // Per-batch accumulators — reset at top of each batch.
+    let mut batch_wall_start = std::time::Instant::now();
+    let mut insert_metadata_ms_sum: u128 = 0;
+    let mut insert_state_update_data_ms_sum: u128 = 0;
+    let mut rocksdb_write_ms_sum: u128 = 0;
+    let mut sqlite_commit_ms_sum: u128 = 0;
 
     while chunk_start <= last_block {
         let chunk_end = (chunk_start + PRELOAD_CHUNK_BLOCKS - 1).min(last_block);
@@ -282,20 +291,27 @@ fn main() -> anyhow::Result<()> {
         for (block_number, state_update) in &chunk {
             let i = block_number.get();
 
+            if i == batch_start {
+                batch_wall_start = std::time::Instant::now();
+            }
+
             let output_txn = output_db_conn
                 .transaction()
                 .context("Create database transaction")?;
 
             batch_buf.push(state_update.clone());
 
-            let mut trie_ms = None;
+            let mut trie_opt: Option<TrieBreakdown> = None;
+            let mut apply_ms: u128 = 0;
             if i % 1000 == 999 {
+                let apply_start = std::time::Instant::now();
                 for su in batch_buf.drain(..) {
                     aggregate_state_update = aggregate_state_update.apply(&su);
                 }
+                apply_ms = apply_start.elapsed().as_millis();
+
                 tracing::info!(%block_number, "Applying state update");
-                let trie_start = std::time::Instant::now();
-                let (_storage_commitment, _class_commitment, _trie) = update_starknet_state(
+                let (_storage_commitment, _class_commitment, trie) = update_starknet_state(
                     &output_txn,
                     StateUpdateRef::from(&aggregate_state_update),
                     false,
@@ -303,7 +319,7 @@ fn main() -> anyhow::Result<()> {
                     output_storage.clone(),
                 )
                 .context("Failed to update state")?;
-                trie_ms = Some(trie_start.elapsed().as_millis());
+                trie_opt = Some(trie);
             }
 
             let header = BlockHeader {
@@ -331,6 +347,7 @@ fn main() -> anyhow::Result<()> {
             };
             parent_hash = header.hash;
 
+            let metadata_start = std::time::Instant::now();
             output_txn
                 .insert_block_header(&header)
                 .expect("Failed to insert block header");
@@ -354,79 +371,113 @@ fn main() -> anyhow::Result<()> {
                     )
                     .context("Insert Sierra class definition")?;
             }
+            insert_metadata_ms_sum += metadata_start.elapsed().as_millis();
 
+            let isud_start = std::time::Instant::now();
             output_txn
                 .insert_state_update_data(*block_number, &state_update.clone().into())
                 .context("Insert state update into database")?;
+            insert_state_update_data_ms_sum += isud_start.elapsed().as_millis();
 
-            let commit_start = std::time::Instant::now();
-            output_txn.commit().context("Commit transaction")?;
-            let commit_ms = commit_start.elapsed().as_millis();
+            let commit_breakdown = output_txn.commit().context("Commit transaction")?;
+            rocksdb_write_ms_sum += commit_breakdown.rocksdb_write_ms;
+            sqlite_commit_ms_sum += commit_breakdown.sqlite_commit_ms;
 
-            if let Some(trie_ms) = trie_ms {
-                tracing::info!(%block_number, %trie_ms, %commit_ms, "State update applied");
+            if let Some(trie) = trie_opt {
+                let trie_total_ms =
+                    trie.contract_tries_ms + trie.storage_trie_ms + trie.class_trie_ms;
+                let commit_total_ms = rocksdb_write_ms_sum + sqlite_commit_ms_sum;
+                let batch_wall_ms = batch_wall_start.elapsed().as_millis();
+
+                tracing::info!(%block_number, %trie_total_ms, %commit_total_ms, "State update applied");
 
                 if batch_start >= measure_from {
-                    let contract_updates = aggregate_state_update.contract_updates.len();
-                    let system_updates = aggregate_state_update.system_contract_updates.len();
-                    let storage_changes: usize = aggregate_state_update
-                        .contract_updates
-                        .values()
-                        .map(|u| u.storage.len())
-                        .sum::<usize>()
-                        + aggregate_state_update
-                            .system_contract_updates
-                            .values()
-                            .map(|u| u.storage.len())
-                            .sum::<usize>();
-                    let nonce_updates = aggregate_state_update
-                        .contract_updates
-                        .values()
-                        .filter(|u| u.nonce.is_some())
-                        .count();
-                    let class_updates = aggregate_state_update
-                        .contract_updates
-                        .values()
-                        .filter(|u| u.class.is_some())
-                        .count();
-                    let declared_cairo_classes =
-                        aggregate_state_update.declared_cairo_classes.len();
-                    let declared_sierra_classes =
-                        aggregate_state_update.declared_sierra_classes.len();
-                    let migrated_compiled_classes =
-                        aggregate_state_update.migrated_compiled_classes.len();
-                    let state_diff_length = aggregate_state_update.state_diff_length();
-
                     writeln!(
                         csv,
-                        "{batch_start},{},{trie_ms},{commit_ms},{contract_updates},\
-                         {system_updates},{storage_changes},{nonce_updates},{class_updates},\
-                         {declared_cairo_classes},{declared_sierra_classes},\
-                         {migrated_compiled_classes},{state_diff_length}",
-                        i,
+                        "{batch_start},{end},{ct},{class},{st},{tt},{rw},{sc},{ct2},{apply},{im},\
+                         {isud},{bw},{cu},{su2},{sch},{nu},{cu2},{dcc},{dsc},{mcc},{sdl}",
+                        batch_start = batch_start,
+                        end = i,
+                        ct = trie.contract_tries_ms,
+                        class = trie.class_trie_ms,
+                        st = trie.storage_trie_ms,
+                        tt = trie_total_ms,
+                        rw = rocksdb_write_ms_sum,
+                        sc = sqlite_commit_ms_sum,
+                        ct2 = commit_total_ms,
+                        apply = apply_ms,
+                        im = insert_metadata_ms_sum,
+                        isud = insert_state_update_data_ms_sum,
+                        bw = batch_wall_ms,
+                        cu = aggregate_state_update.contract_updates.len(),
+                        su2 = aggregate_state_update.system_contract_updates.len(),
+                        sch = aggregate_state_update
+                            .contract_updates
+                            .values()
+                            .map(|u| u.storage.len())
+                            .sum::<usize>()
+                            + aggregate_state_update
+                                .system_contract_updates
+                                .values()
+                                .map(|u| u.storage.len())
+                                .sum::<usize>(),
+                        nu = aggregate_state_update
+                            .contract_updates
+                            .values()
+                            .filter(|u| u.nonce.is_some())
+                            .count(),
+                        cu2 = aggregate_state_update
+                            .contract_updates
+                            .values()
+                            .filter(|u| u.class.is_some())
+                            .count(),
+                        dcc = aggregate_state_update.declared_cairo_classes.len(),
+                        dsc = aggregate_state_update.declared_sierra_classes.len(),
+                        mcc = aggregate_state_update.migrated_compiled_classes.len(),
+                        sdl = aggregate_state_update.state_diff_length(),
                     )?;
                     batches_measured += 1;
+
+                    let stats = output_storage
+                        .rocksdb_property("rocksdb.stats")?
+                        .unwrap_or_default();
+                    let line = serde_json::to_string(&serde_json::json!({
+                        "batch_start": batch_start,
+                        "rocksdb_stats": stats,
+                    }))?;
+                    let mut sidecar = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(format!("{csv_output_path}.rocksdb-stats.jsonl"))?;
+                    writeln!(sidecar, "{line}")?;
                 }
 
                 aggregate_state_update = StateUpdate::default();
                 batch_start = i + 1;
+
+                insert_metadata_ms_sum = 0;
+                insert_state_update_data_ms_sum = 0;
+                rocksdb_write_ms_sum = 0;
+                sqlite_commit_ms_sum = 0;
             }
         }
 
         chunk_start = chunk_end + 1;
     }
 
+    // Trailing flush for the final partial batch.
     if aggregate_state_update.state_diff_length() > 0 || !batch_buf.is_empty() {
+        let apply_start = std::time::Instant::now();
         for su in batch_buf.drain(..) {
             aggregate_state_update = aggregate_state_update.apply(&su);
         }
+        let apply_ms = apply_start.elapsed().as_millis();
 
         let output_txn = output_db_conn
             .transaction()
             .context("Create database transaction")?;
 
-        let trie_start = std::time::Instant::now();
-        let (_storage_commitment, _class_commitment, _trie) = update_starknet_state(
+        let (_storage_commitment, _class_commitment, trie) = update_starknet_state(
             &output_txn,
             StateUpdateRef::from(&aggregate_state_update),
             false,
@@ -434,48 +485,74 @@ fn main() -> anyhow::Result<()> {
             output_storage.clone(),
         )
         .context("Failed to update state")?;
-        let trie_ms = trie_start.elapsed().as_millis();
 
-        let commit_start = std::time::Instant::now();
-        output_txn.commit().context("Commit final transaction")?;
-        let commit_ms = commit_start.elapsed().as_millis();
+        let commit_breakdown = output_txn.commit().context("Commit final transaction")?;
+        rocksdb_write_ms_sum += commit_breakdown.rocksdb_write_ms;
+        sqlite_commit_ms_sum += commit_breakdown.sqlite_commit_ms;
+
+        let trie_total_ms = trie.contract_tries_ms + trie.storage_trie_ms + trie.class_trie_ms;
+        let commit_total_ms = rocksdb_write_ms_sum + sqlite_commit_ms_sum;
+        let batch_wall_ms = batch_wall_start.elapsed().as_millis();
 
         if batch_start >= measure_from {
-            let contract_updates = aggregate_state_update.contract_updates.len();
-            let system_updates = aggregate_state_update.system_contract_updates.len();
-            let storage_changes: usize = aggregate_state_update
-                .contract_updates
-                .values()
-                .map(|u| u.storage.len())
-                .sum::<usize>()
-                + aggregate_state_update
-                    .system_contract_updates
-                    .values()
-                    .map(|u| u.storage.len())
-                    .sum::<usize>();
-            let nonce_updates = aggregate_state_update
-                .contract_updates
-                .values()
-                .filter(|u| u.nonce.is_some())
-                .count();
-            let class_updates = aggregate_state_update
-                .contract_updates
-                .values()
-                .filter(|u| u.class.is_some())
-                .count();
-            let declared_cairo_classes = aggregate_state_update.declared_cairo_classes.len();
-            let declared_sierra_classes = aggregate_state_update.declared_sierra_classes.len();
-            let migrated_compiled_classes = aggregate_state_update.migrated_compiled_classes.len();
-            let state_diff_length = aggregate_state_update.state_diff_length();
-
             writeln!(
                 csv,
-                "{batch_start},{},{trie_ms},{commit_ms},{contract_updates},{system_updates},\
-                 {storage_changes},{nonce_updates},{class_updates},{declared_cairo_classes},\
-                 {declared_sierra_classes},{migrated_compiled_classes},{state_diff_length}",
-                latest_block_number.get(),
+                "{batch_start},{end},{ct},{class},{st},{tt},{rw},{sc},{ct2},{apply},{im},{isud},\
+                 {bw},{cu},{su2},{sch},{nu},{cu2},{dcc},{dsc},{mcc},{sdl}",
+                batch_start = batch_start,
+                end = latest_block_number.get(),
+                ct = trie.contract_tries_ms,
+                class = trie.class_trie_ms,
+                st = trie.storage_trie_ms,
+                tt = trie_total_ms,
+                rw = rocksdb_write_ms_sum,
+                sc = sqlite_commit_ms_sum,
+                ct2 = commit_total_ms,
+                apply = apply_ms,
+                im = insert_metadata_ms_sum,
+                isud = insert_state_update_data_ms_sum,
+                bw = batch_wall_ms,
+                cu = aggregate_state_update.contract_updates.len(),
+                su2 = aggregate_state_update.system_contract_updates.len(),
+                sch = aggregate_state_update
+                    .contract_updates
+                    .values()
+                    .map(|u| u.storage.len())
+                    .sum::<usize>()
+                    + aggregate_state_update
+                        .system_contract_updates
+                        .values()
+                        .map(|u| u.storage.len())
+                        .sum::<usize>(),
+                nu = aggregate_state_update
+                    .contract_updates
+                    .values()
+                    .filter(|u| u.nonce.is_some())
+                    .count(),
+                cu2 = aggregate_state_update
+                    .contract_updates
+                    .values()
+                    .filter(|u| u.class.is_some())
+                    .count(),
+                dcc = aggregate_state_update.declared_cairo_classes.len(),
+                dsc = aggregate_state_update.declared_sierra_classes.len(),
+                mcc = aggregate_state_update.migrated_compiled_classes.len(),
+                sdl = aggregate_state_update.state_diff_length(),
             )?;
             batches_measured += 1;
+
+            let stats = output_storage
+                .rocksdb_property("rocksdb.stats")?
+                .unwrap_or_default();
+            let line = serde_json::to_string(&serde_json::json!({
+                "batch_start": batch_start,
+                "rocksdb_stats": stats,
+            }))?;
+            let mut sidecar = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(format!("{csv_output_path}.rocksdb-stats.jsonl"))?;
+            writeln!(sidecar, "{line}")?;
         }
     }
 
