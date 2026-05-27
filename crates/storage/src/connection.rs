@@ -32,6 +32,13 @@ use crate::bloom::AggregateBloomCache;
 use crate::params::RowExt;
 use crate::{StorageError, VERSION_KEY};
 
+/// Timing breakdown for the two phases of [`Transaction::commit`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CommitBreakdown {
+    pub rocksdb_write_ms: u128,
+    pub sqlite_commit_ms: u128,
+}
+
 type PooledConnection = r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>;
 
 pub struct Connection {
@@ -125,8 +132,13 @@ impl Transaction<'_> {
         &self.transaction
     }
 
-    pub fn commit(self) -> anyhow::Result<()> {
-        Ok(self.transaction.commit()?)
+    pub fn commit(self) -> anyhow::Result<CommitBreakdown> {
+        let start = std::time::Instant::now();
+        self.transaction.commit()?;
+        Ok(CommitBreakdown {
+            rocksdb_write_ms: 0,
+            sqlite_commit_ms: start.elapsed().as_millis(),
+        })
     }
 
     pub fn trie_pruning_enabled(&self) -> bool {
@@ -143,7 +155,7 @@ impl Transaction<'_> {
     /// Store the in-memory [`Storage`](crate::Storage) state in the database.
     /// To be performed on shutdown.
     pub fn store_in_memory_state(self) -> anyhow::Result<()> {
-        self.store_running_event_filter()?.commit()
+        self.store_running_event_filter()?.commit().map(|_| ())
     }
 
     /// Resets the in-memory [`Storage`](crate::Storage) state. Required after
