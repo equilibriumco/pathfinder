@@ -216,6 +216,23 @@ Examples:
     max_rpc_connections: std::num::NonZeroUsize,
 
     #[arg(
+        long = "rpc.request-max-size",
+        long_help = "Maximum accepted RPC request size in bytes.",
+        default_value = "10485760", // 10 * 1024 * 1024
+        env = "PATHFINDER_RPC_REQUEST_MAX_SIZE"
+    )]
+    rpc_request_max_size: std::num::NonZeroUsize,
+
+    #[arg(
+        long = "rpc.request-timeout",
+        long_help = "Maximum RPC request duration in seconds.",
+        default_value = "120",
+        value_parser = parse_fractional_seconds,
+        env = "PATHFINDER_RPC_REQUEST_TIMEOUT"
+    )]
+    rpc_request_timeout: Duration,
+
+    #[arg(
         long = "sync.poll-interval",
         long_help = "New block poll interval in seconds (can use fractions)",
         default_value = "1",
@@ -1098,6 +1115,8 @@ pub struct Config {
     pub execution_concurrency: Option<std::num::NonZeroU32>,
     pub sqlite_wal: JournalMode,
     pub max_rpc_connections: std::num::NonZeroUsize,
+    pub rpc_request_max_size: std::num::NonZeroUsize,
+    pub rpc_request_timeout: Duration,
     pub poll_interval: Duration,
     pub l1_poll_interval: Duration,
     pub pre_confirmed_idle_timeout: Duration,
@@ -1399,6 +1418,8 @@ impl Config {
                 false => JournalMode::Rollback,
             },
             max_rpc_connections: args.max_rpc_connections,
+            rpc_request_max_size: args.rpc_request_max_size,
+            rpc_request_timeout: args.rpc_request_timeout,
             poll_interval: args.poll_interval,
             l1_poll_interval: Duration::from_secs(args.l1_poll_interval.get()),
             pre_confirmed_idle_timeout: Duration::from_secs(args.pre_confirmed_idle_timeout.get()),
