@@ -1,7 +1,9 @@
+use std::time::Instant;
+
 use anyhow::Context;
 use pathfinder_common::state_update::{StateUpdateError, StateUpdateRef};
 use pathfinder_common::{BlockNumber, ClassCommitment, StorageCommitment};
-use pathfinder_storage::{Storage, Transaction};
+use pathfinder_storage::{Storage, Transaction, TrieBreakdown};
 
 use crate::contract_state::update_contract_state;
 use crate::{ClassCommitmentTree, StorageCommitmentTree};
@@ -14,7 +16,7 @@ pub fn update_starknet_state(
     // we need this so that we can create extra read-only transactions for
     // parallel contract state updates
     storage: Storage,
-) -> Result<(StorageCommitment, ClassCommitment), StateUpdateError> {
+) -> Result<(StorageCommitment, ClassCommitment, TrieBreakdown), StateUpdateError> {
     use rayon::prelude::*;
 
     let mut storage_commitment_tree = match block.parent() {
@@ -23,6 +25,10 @@ pub fn update_starknet_state(
         None => StorageCommitmentTree::empty(transaction),
     }
     .with_verify_hashes(verify_hashes);
+
+    let mut breakdown = TrieBreakdown::default();
+
+    let phase_a = Instant::now();
 
     let (send, recv) = std::sync::mpsc::channel();
 
@@ -97,6 +103,10 @@ pub fn update_starknet_state(
             .context("Persisting system contract trie updates")?;
     }
 
+    breakdown.contract_tries_ms = phase_a.elapsed().as_millis();
+
+    let phase_b = Instant::now();
+
     // Apply storage commitment tree changes.
     let (storage_commitment, trie_update) = storage_commitment_tree
         .commit()
@@ -109,6 +119,10 @@ pub fn update_starknet_state(
     transaction
         .insert_storage_root(block, root_idx)
         .context("Inserting storage root index")?;
+
+    breakdown.storage_trie_ms = phase_b.elapsed().as_millis();
+
+    let phase_c = Instant::now();
 
     // Add new Sierra classes to class commitment tree.
     let mut class_commitment_tree = match block.parent() {
@@ -147,7 +161,9 @@ pub fn update_starknet_state(
         .insert_class_root(block, class_root_idx)
         .context("Inserting class root index")?;
 
-    Ok((storage_commitment, class_commitment))
+    breakdown.class_trie_ms = phase_c.elapsed().as_millis();
+
+    Ok((storage_commitment, class_commitment, breakdown))
 }
 
 #[cfg(test)]

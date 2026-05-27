@@ -259,7 +259,7 @@ pub async fn batch_update_starknet_state(
 
         let PeerData { peer, data: merged } = merge_state_updates(state_updates);
 
-        let (storage_commitment, class_commitment) =
+        let (storage_commitment, class_commitment, _trie) =
             update_starknet_state(
                 &db,
                 (&merged).into(),

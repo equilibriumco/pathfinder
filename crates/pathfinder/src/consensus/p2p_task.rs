@@ -441,7 +441,7 @@ pub fn spawn(
                                         main_readonly_storage.clone(),
                                     )
                                     .context("Updating Starknet state")
-                                    .map(|(storage, class)| {
+                                    .map(|(storage, class, _trie)| {
                                         StateCommitment::calculate(storage, class, starknet_version)
                                     });
 

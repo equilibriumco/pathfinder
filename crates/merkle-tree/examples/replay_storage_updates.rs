@@ -295,7 +295,7 @@ fn main() -> anyhow::Result<()> {
                 }
                 tracing::info!(%block_number, "Applying state update");
                 let trie_start = std::time::Instant::now();
-                let (_storage_commitment, _class_commitment) = update_starknet_state(
+                let (_storage_commitment, _class_commitment, _trie) = update_starknet_state(
                     &output_txn,
                     StateUpdateRef::from(&aggregate_state_update),
                     false,
@@ -426,7 +426,7 @@ fn main() -> anyhow::Result<()> {
             .context("Create database transaction")?;
 
         let trie_start = std::time::Instant::now();
-        let (_storage_commitment, _class_commitment) = update_starknet_state(
+        let (_storage_commitment, _class_commitment, _trie) = update_starknet_state(
             &output_txn,
             StateUpdateRef::from(&aggregate_state_update),
             false,
