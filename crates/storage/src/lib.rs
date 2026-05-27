@@ -713,7 +713,7 @@ impl StorageBuilder {
         options.set_env(&env);
 
         // TODO: make this configurable
-        let cache = rust_rocksdb::Cache::new_hyper_clock_cache(16 * 1024 * 1024 * 1024, 0);
+        let cache = rust_rocksdb::Cache::new_hyper_clock_cache(2 * 1024 * 1024 * 1024, 0);
 
         let cfs = columns::COLUMNS
             .iter()
