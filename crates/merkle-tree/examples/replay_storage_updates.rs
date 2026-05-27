@@ -16,6 +16,7 @@ use anyhow::Context;
 use pathfinder_common::class_definition::{
     SerializedCairoDefinition,
     SerializedCasmDefinition,
+    SerializedOpaqueClassDefinition,
     SerializedSierraDefinition,
 };
 use pathfinder_common::prelude::*;
@@ -23,6 +24,81 @@ use pathfinder_common::state_update::StateUpdateRef;
 use pathfinder_crypto::Felt;
 use pathfinder_merkle_tree::starknet_state::update_starknet_state;
 use pathfinder_storage::{StorageBuilder, TriePruneMode};
+
+struct ClassPayloads {
+    cairo: SerializedOpaqueClassDefinition,
+    sierra: SerializedOpaqueClassDefinition,
+    casm: SerializedCasmDefinition,
+}
+
+/// Scans blocks in order and grabs the first non-empty Cairo definition,
+/// Sierra definition, and CASM definition. Returns `Some` only once all three
+/// have been found; returns `None` if we reach `last_block` short of any
+/// payload (the caller falls back to synthetic bytes).
+fn fetch_class_payloads(
+    tx: &pathfinder_storage::Transaction<'_>,
+    last_block: BlockNumber,
+) -> anyhow::Result<Option<ClassPayloads>> {
+    let mut cairo: Option<SerializedOpaqueClassDefinition> = None;
+    let mut sierra: Option<SerializedOpaqueClassDefinition> = None;
+    let mut casm: Option<SerializedCasmDefinition> = None;
+
+    for b in 0..=last_block.get() {
+        if cairo.is_some() && sierra.is_some() && casm.is_some() {
+            break;
+        }
+        let block = BlockNumber::new(b).expect("valid");
+        let su = tx
+            .state_update(block.into())?
+            .context("missing state update")?;
+
+        if cairo.is_none() {
+            for class_hash in &su.declared_cairo_classes {
+                if let Some(def) = tx.class_definition(*class_hash)? {
+                    if !def.as_slice().is_empty() {
+                        cairo = Some(def);
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (sierra_hash, _casm_hash) in &su.declared_sierra_classes {
+            let class_hash = ClassHash(sierra_hash.0);
+            if sierra.is_none() {
+                if let Some(def) = tx.class_definition(class_hash)? {
+                    if !def.as_slice().is_empty() {
+                        sierra = Some(def);
+                    }
+                }
+            }
+            if casm.is_none() {
+                if let Some(ca) = tx.casm_definition(class_hash)? {
+                    if !ca.as_slice().is_empty() {
+                        casm = Some(ca);
+                    }
+                }
+            }
+            if sierra.is_some() && casm.is_some() {
+                break;
+            }
+        }
+    }
+
+    match (cairo, sierra, casm) {
+        (Some(cairo), Some(sierra), Some(casm)) => Ok(Some(ClassPayloads {
+            cairo,
+            sierra,
+            casm,
+        })),
+        _ => Ok(None),
+    }
+}
+
+fn synthetic_class_bytes() -> Vec<u8> {
+    // ~4 KB, repeating — non-trivial for zstd to compress, deterministic.
+    b"PATHFINDER_BENCH_CLASS_DEF_PAYLOAD_v1\n".repeat(110)
+}
 
 fn append_input_load_ms(config_path: &str, value: u128) -> anyhow::Result<()> {
     let bytes = std::fs::read(config_path)?;
@@ -136,6 +212,31 @@ fn main() -> anyhow::Result<()> {
     )
     .with_context(|| format!("Write config sidecar to {config_path}"))?;
 
+    let (cairo_bytes, sierra_bytes, casm_bytes, class_payload_source) =
+        match fetch_class_payloads(&input_txn, latest_block_number)? {
+            Some(p) => (
+                p.cairo.into_vec(),
+                p.sierra.into_vec(),
+                p.casm.into_vec(),
+                "input_db",
+            ),
+            None => (
+                synthetic_class_bytes(),
+                synthetic_class_bytes(),
+                synthetic_class_bytes(),
+                "synthetic",
+            ),
+        };
+
+    anyhow::ensure!(!cairo_bytes.is_empty(), "cairo_bytes empty");
+    anyhow::ensure!(!sierra_bytes.is_empty(), "sierra_bytes empty");
+    anyhow::ensure!(!casm_bytes.is_empty(), "casm_bytes empty");
+
+    let bytes = std::fs::read(&config_path)?;
+    let mut config: serde_json::Value = serde_json::from_slice(&bytes)?;
+    config["class_payload_source"] = serde_json::json!(class_payload_source);
+    std::fs::write(&config_path, serde_json::to_vec_pretty(&config)?)?;
+
     let mut parent_hash = pathfinder_common::BlockHash::ZERO;
 
     let mut aggregate_state_update = StateUpdate::default();
@@ -238,7 +339,7 @@ fn main() -> anyhow::Result<()> {
                 output_txn
                     .insert_cairo_class_definition(
                         *class_hash,
-                        &SerializedCairoDefinition::from_slice(b""),
+                        &SerializedCairoDefinition::from_slice(&cairo_bytes),
                     )
                     .context("Insert Cairo class definition")?;
             }
@@ -247,8 +348,8 @@ fn main() -> anyhow::Result<()> {
                 output_txn
                     .insert_sierra_class_definition(
                         &SierraHash(class_hash.0),
-                        &SerializedSierraDefinition::from_slice(b""),
-                        &SerializedCasmDefinition::from_slice(b""),
+                        &SerializedSierraDefinition::from_slice(&sierra_bytes),
+                        &SerializedCasmDefinition::from_slice(&casm_bytes),
                         casm_hash,
                     )
                     .context("Insert Sierra class definition")?;
