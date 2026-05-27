@@ -67,11 +67,6 @@ impl RpcVersion {
     }
 }
 
-// TODO: make this configurable
-const REQUEST_MAX_SIZE: usize = 10 * 1024 * 1024;
-// TODO: make this configurable
-const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-
 pub struct RpcServer {
     addr: SocketAddr,
     context: RpcContext,
@@ -155,8 +150,10 @@ impl RpcServer {
             // make sure to set request ids before the request reaches `TraceLayer`
             .set_x_request_id(middleware::request_id::RequestIdSource::default())
             .concurrency_limit(self.max_connections)
-            .layer(DefaultBodyLimit::max(REQUEST_MAX_SIZE))
-            .timeout(REQUEST_TIMEOUT)
+            .layer(DefaultBodyLimit::max(
+                self.context.config.request_max_size.get(),
+            ))
+            .timeout(self.context.config.request_timeout)
             .layer(middleware::tracing::trace_layer())
             .option_layer(self.cors)
             .propagate_x_request_id();

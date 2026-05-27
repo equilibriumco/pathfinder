@@ -1,5 +1,6 @@
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
+use std::time::Duration;
 
 use pathfinder_common::{consensus_info, contract_address, ChainId, ContractAddress};
 use pathfinder_ethereum::EthereumClient;
@@ -66,6 +67,8 @@ impl EthContractAddresses {
 
 #[derive(Clone)]
 pub struct RpcConfig {
+    pub request_max_size: NonZeroUsize,
+    pub request_timeout: Duration,
     pub batch_concurrency_limit: NonZeroUsize,
     pub disable_batch_requests: bool,
     pub get_events_event_filter_block_range_limit: NonZeroUsize,
@@ -247,6 +250,8 @@ impl RpcContext {
         let pending_data_cache = Arc::new(PendingDataCache::new());
 
         let config = RpcConfig {
+            request_max_size: NonZeroUsize::new(10 * 1024 * 1024).unwrap(),
+            request_timeout: Duration::from_secs(120),
             batch_concurrency_limit: NonZeroUsize::new(8).unwrap(),
             disable_batch_requests: false,
             get_events_event_filter_block_range_limit: NonZeroUsize::new(1000).unwrap(),

@@ -201,7 +201,7 @@ pub async fn rpc_handler(
                 return StatusCode::FORBIDDEN.into_response();
             }
 
-            ws.max_message_size(crate::REQUEST_MAX_SIZE)
+            ws.max_message_size(state.context.config.request_max_size.get())
                 .on_upgrade(|ws| async move {
                     let (ws_tx, ws_rx) = split_ws(ws, state.version);
                     handle_json_rpc_socket(state, ws_tx, ws_rx);
