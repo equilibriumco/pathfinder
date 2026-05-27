@@ -47,6 +47,13 @@ use crate::bloom::AggregateBloomCache;
 use crate::params::RowExt;
 use crate::{RocksDB, RocksDBInner, StorageError, VERSION_KEY};
 
+/// Timing breakdown for the two phases of [`Transaction::commit`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CommitBreakdown {
+    pub rocksdb_write_ms: u128,
+    pub sqlite_commit_ms: u128,
+}
+
 type PooledConnection = r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>;
 
 pub struct Connection {
@@ -205,12 +212,23 @@ impl Transaction<'_> {
     /// Write RocksDB batch first, then commit SQLite. If a crash occurs
     /// between the two, `reconcile_rocksdb_with_sqlite` purges orphaned
     /// RocksDB data on next startup.
-    pub fn commit(self) -> anyhow::Result<()> {
+    pub fn commit(self) -> anyhow::Result<CommitBreakdown> {
         let transaction = self.transaction;
         let rocksdb = self.rocksdb;
         let batch = self.batch.into_inner().expect("Batch lock poisoned");
+
+        let rocksdb_start = std::time::Instant::now();
         rocksdb.rocksdb.write(&batch)?;
-        Ok(transaction.commit()?)
+        let rocksdb_write_ms = rocksdb_start.elapsed().as_millis();
+
+        let sqlite_start = std::time::Instant::now();
+        transaction.commit()?;
+        let sqlite_commit_ms = sqlite_start.elapsed().as_millis();
+
+        Ok(CommitBreakdown {
+            rocksdb_write_ms,
+            sqlite_commit_ms,
+        })
     }
 
     pub fn trie_pruning_enabled(&self) -> bool {
@@ -227,7 +245,7 @@ impl Transaction<'_> {
     /// Store the in-memory [`Storage`](crate::Storage) state in the database.
     /// To be performed on shutdown.
     pub fn store_in_memory_state(self) -> anyhow::Result<()> {
-        self.store_running_event_filter()?.commit()
+        self.store_running_event_filter()?.commit().map(|_| ())
     }
 
     /// Resets the in-memory [`Storage`](crate::Storage) state. Required after
