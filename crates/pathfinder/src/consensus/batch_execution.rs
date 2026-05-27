@@ -14,6 +14,7 @@ use pathfinder_common::{DecidedBlocks, StarknetVersion};
 use pathfinder_gas_price::{L1GasPriceProvider, L2GasPriceProvider};
 use pathfinder_storage::Storage;
 use pathfinder_validator::error::ProposalHandlingError;
+use pathfinder_validator::proposer::ExpectedProposer;
 use pathfinder_validator::{
     should_defer_validation,
     TransactionExt,
@@ -21,6 +22,8 @@ use pathfinder_validator::{
     ValidatorTransactionBatchStage,
     ValidatorWorkerPool,
 };
+
+use crate::consensus::fetch_proposers::L2ProposerSelector;
 
 /// Manages batch execution with rollback support for executed transaction count
 #[derive(Clone)]
@@ -37,6 +40,8 @@ pub struct BatchExecutionManager {
     compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
     my_starknet_version: StarknetVersion,
+    /// Resolves the expected proposer for block info validation.
+    proposer_selector: L2ProposerSelector,
 }
 
 impl BatchExecutionManager {
@@ -48,6 +53,7 @@ impl BatchExecutionManager {
         compiler_resource_limits: pathfinder_compiler::ResourceLimits,
         blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
         my_starknet_version: StarknetVersion,
+        proposer_selector: L2ProposerSelector,
     ) -> Self {
         Self {
             executing: HashSet::new(),
@@ -57,7 +63,14 @@ impl BatchExecutionManager {
             compiler_resource_limits,
             blockifier_libfuncs,
             my_starknet_version,
+            proposer_selector,
         }
+    }
+
+    /// The expected proposer resolver for validating the proposer named in an
+    /// incoming proposal.
+    pub fn expected_proposer(&self) -> &dyn ExpectedProposer {
+        &self.proposer_selector
     }
 
     /// Check if execution has started for the given height and round
@@ -136,6 +149,7 @@ impl BatchExecutionManager {
                         self.l2_gas_price_provider.as_ref(),
                         self.worker_pool.clone(),
                         self.my_starknet_version,
+                        &self.proposer_selector,
                     )?
                 }
                 ValidatorStage::TransactionBatch(stage) => stage,
@@ -335,11 +349,31 @@ mod tests {
     use pathfinder_validator::{ProdTransactionMapper, ValidatorBlockInfoStage};
 
     use super::*;
+    use crate::config::ConsensusConfig;
     use crate::consensus::dummy_proposal::{create_test_proposal_init, create_transaction_batch};
 
     /// Creates a worker pool for tests.
     fn create_test_worker_pool() -> ValidatorWorkerPool {
         ExecutorWorkerPool::<ConcurrentStateReader>::new(1).get()
+    }
+
+    /// Creates a config-backed proposer selector for tests (no L2 lookup), so
+    /// block info validation has a deterministic expected proposer.
+    fn test_proposer_selector(proposer: ContractAddress) -> L2ProposerSelector {
+        let config = ConsensusConfig {
+            my_starknet_version: StarknetVersion::V_0_14_0,
+            my_validator_address: proposer,
+            validator_addresses: vec![proposer],
+            proposer_addresses: vec![proposer],
+            history_depth: 0,
+            l1_gas_price_tolerance: 0.0,
+            l1_gas_price_max_time_gap: 0,
+        };
+        L2ProposerSelector::new(
+            StorageBuilder::in_memory().unwrap(),
+            ChainId::SEPOLIA_TESTNET,
+            config,
+        )
     }
 
     /// Helper function to create a committed parent block in storage
@@ -409,6 +443,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_proposer_selector(ContractAddress::ZERO),
         );
         let height_and_round = HeightAndRound::new(2, 1);
 
@@ -468,7 +503,7 @@ mod tests {
         }
 
         let height_and_round = HeightAndRound::new(2, 1);
-        let proposer_address = p2p_proto::common::Address(Felt::from_hex_str("0x456").unwrap());
+        let proposer_address = p2p_proto::common::Address::default();
         let proposal_init = proto_consensus::ProposalInit {
             height: height_and_round.height(),
             round: height_and_round.round(),
@@ -494,6 +529,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_proposer_selector(ContractAddress::ZERO),
         );
 
         let mut deferred_executions: std::collections::HashMap<HeightAndRound, DeferredExecution> =
@@ -575,7 +611,7 @@ mod tests {
         let worker_pool = create_test_worker_pool();
 
         let height_and_round = HeightAndRound::new(2, 1);
-        let proposer_address = ContractAddress::new_or_panic(Felt::from_hex_str("0x456").unwrap());
+        let proposer_address = ContractAddress::ZERO;
         let proposal_init = create_test_proposal_init(
             chain_id,
             height_and_round.height(),
@@ -593,6 +629,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_proposer_selector(ContractAddress::ZERO),
         );
 
         let mut deferred_executions: std::collections::HashMap<HeightAndRound, DeferredExecution> =
@@ -740,6 +777,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_proposer_selector(ContractAddress::ZERO),
         );
         let height_and_round = HeightAndRound::new(2, 1);
 
@@ -864,6 +902,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_proposer_selector(ContractAddress::ZERO),
         );
         let height_and_round = HeightAndRound::new(2, 1);
 
@@ -918,6 +957,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_proposer_selector(ContractAddress::ZERO),
         );
         let height_and_round = HeightAndRound::new(2, 1);
 
@@ -976,6 +1016,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_proposer_selector(ContractAddress::ZERO),
         );
         let height_and_round = HeightAndRound::new(2, 1);
 

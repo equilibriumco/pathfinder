@@ -64,6 +64,7 @@ use crate::consensus::batch_execution::{
     ProposalCommitmentWithOrigin,
 };
 use crate::consensus::create_empty_block;
+use crate::consensus::fetch_proposers::L2ProposerSelector;
 use crate::SyncMessageToConsensus;
 
 #[cfg(test)]
@@ -135,6 +136,7 @@ pub fn spawn(
     blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
     verify_tree_hashes: bool,
     gas_price_provider: Option<L1GasPriceProvider>,
+    proposer_selector: L2ProposerSelector,
     // Does nothing in production builds. Used for integration testing only.
     inject_failure: Option<InjectFailureConfig>,
 ) -> (
@@ -168,6 +170,7 @@ pub fn spawn(
         compiler_resource_limits,
         blockifier_libfuncs,
         config.my_starknet_version,
+        proposer_selector,
     );
     // Keep track of whether we've already emitted a warning about the
     // event channel size exceeding the limit, to avoid spamming the logs.
@@ -871,6 +874,7 @@ fn execute_deferred_for_next_height<T: TransactionExt>(
                 l2_gas_price_provider.as_ref(),
                 worker_pool,
                 my_starknet_version,
+                batch_execution_manager.expected_proposer(),
             )?;
 
         // Execute deferred transactions first.
@@ -1108,6 +1112,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
                 l2_gas_price_provider.as_ref(),
                 worker_pool,
                 my_starknet_version,
+                batch_execution_manager.expected_proposer(),
             )?;
             validator_cache.insert(
                 height_and_round,
@@ -1301,6 +1306,7 @@ fn defer_or_execute_proposal_fin<T: TransactionExt>(
                         l2_gas_price_provider.as_ref(),
                         worker_pool,
                         my_starknet_version,
+                        batch_execution_manager.expected_proposer(),
                     )?
                 }
                 ValidatorStage::TransactionBatch(stage) => stage,
@@ -1518,6 +1524,7 @@ mod tests {
     use pathfinder_validator::ValidatorWorkerPool;
 
     use super::*;
+    use crate::config::ConsensusConfig;
     use crate::consensus::dummy_proposal::{
         create_with_invalid_l1_handler_transactions,
         ProposalCreationConfig,
@@ -1526,6 +1533,24 @@ mod tests {
     /// Creates a worker pool for tests.
     fn create_test_worker_pool() -> ValidatorWorkerPool {
         ExecutorWorkerPool::<ConcurrentStateReader>::new(1).get()
+    }
+
+    fn test_proposer_selector() -> L2ProposerSelector {
+        let proposer = ContractAddress::ZERO;
+        let config = ConsensusConfig {
+            my_starknet_version: StarknetVersion::V_0_14_0,
+            my_validator_address: proposer,
+            validator_addresses: vec![proposer],
+            proposer_addresses: vec![proposer],
+            history_depth: 0,
+            l1_gas_price_tolerance: 0.0,
+            l1_gas_price_max_time_gap: 0,
+        };
+        L2ProposerSelector::new(
+            StorageBuilder::in_memory().unwrap(),
+            ChainId::SEPOLIA_TESTNET,
+            config,
+        )
     }
 
     /// Requirements to reproduce:
@@ -1543,6 +1568,7 @@ mod tests {
                 ResourceLimits::for_test(),
                 BlockifierLibfuncs::default(),
                 StarknetVersion::V_0_14_0,
+                test_proposer_selector(),
             );
             let dummy_data_dir = PathBuf::new();
 
