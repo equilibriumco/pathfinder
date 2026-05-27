@@ -467,10 +467,17 @@ impl<
                 .collect(),
         };
 
-        // Use the proposer selector to select the proposer
-        let selected_validator =
-            self.proposer_selector
-                .select_proposer(&public_validator_set, height.as_u64(), round);
+        // Malachite's [`malachite_types::Context::select_proposer`] is infallible, so
+        // we cannot propagate an error from here. The proposer set must be
+        // pre-fetched at a fallible boundary when a height is started (see
+        // `consensus_task.rs`), which makes this a cache hit in practice. Reaching
+        // the failure arm therefore indicates a fatal infrastructure error.
+        let selected_validator = self
+            .proposer_selector
+            .select_proposer(&public_validator_set, height.as_u64(), round)
+            .expect(
+                "proposer selection failed: the proposer set must be pre-fetched at StartHeight",
+            );
 
         // Find the corresponding validator in the malachite validator set
         let proposer = validator_set

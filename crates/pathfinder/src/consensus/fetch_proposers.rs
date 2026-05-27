@@ -92,17 +92,17 @@ impl pathfinder_consensus::ProposerSelector<ContractAddress> for L2ProposerSelec
         validator_set: &'a ValidatorSet<ContractAddress>,
         height: u64,
         round: u32,
-    ) -> &'a Validator<ContractAddress> {
-        let proposer_address = self
-            .proposer_address_at(height, round)
-            .expect("Failed to determine proposer");
+    ) -> anyhow::Result<&'a Validator<ContractAddress>> {
+        let proposer_address = self.proposer_address_at(height, round)?;
 
         // Find the proposer in the validator set
         validator_set
             .validators
             .iter()
             .find(|v| v.address == proposer_address)
-            .expect("Proposer must be in validator set")
+            .context(format!(
+                "Selected proposer {proposer_address} not in validator set"
+            ))
     }
 }
 

@@ -13,8 +13,8 @@ impl ProposerSelector<NodeAddress> for FirstValidatorSelector {
         validator_set: &'a ValidatorSet<NodeAddress>,
         _height: u64,
         _round: u32,
-    ) -> &'a Validator<NodeAddress> {
-        &validator_set.validators[0]
+    ) -> anyhow::Result<&'a Validator<NodeAddress>> {
+        Ok(&validator_set.validators[0])
     }
 }
 
@@ -28,9 +28,9 @@ impl ProposerSelector<NodeAddress> for LastValidatorSelector {
         validator_set: &'a ValidatorSet<NodeAddress>,
         _height: u64,
         _round: u32,
-    ) -> &'a Validator<NodeAddress> {
+    ) -> anyhow::Result<&'a Validator<NodeAddress>> {
         let last_index = validator_set.validators.len() - 1;
-        &validator_set.validators[last_index]
+        Ok(&validator_set.validators[last_index])
     }
 }
 
@@ -56,30 +56,30 @@ fn test_proposer_selection_logic_direct() {
 
     // Test first validator selector
     let first_selector = FirstValidatorSelector;
-    let selected = first_selector.select_proposer(&validators, 1, 0);
+    let selected = first_selector.select_proposer(&validators, 1, 0).unwrap();
     assert_eq!(selected.address, validator1);
 
     // Test last validator selector
     let last_selector = LastValidatorSelector;
-    let selected = last_selector.select_proposer(&validators, 1, 0);
+    let selected = last_selector.select_proposer(&validators, 1, 0).unwrap();
     assert_eq!(selected.address, validator3);
 
     // Test round-robin selector
     let round_robin = pathfinder_consensus::RoundRobinProposerSelector;
 
     // Round 0 should select first validator
-    let selected = round_robin.select_proposer(&validators, 1, 0);
+    let selected = round_robin.select_proposer(&validators, 1, 0).unwrap();
     assert_eq!(selected.address, validator1);
 
     // Round 1 should select second validator
-    let selected = round_robin.select_proposer(&validators, 1, 1);
+    let selected = round_robin.select_proposer(&validators, 1, 1).unwrap();
     assert_eq!(selected.address, validator2);
 
     // Round 2 should select third validator
-    let selected = round_robin.select_proposer(&validators, 1, 2);
+    let selected = round_robin.select_proposer(&validators, 1, 2).unwrap();
     assert_eq!(selected.address, validator3);
 
     // Round 3 should wrap around to first validator
-    let selected = round_robin.select_proposer(&validators, 1, 3);
+    let selected = round_robin.select_proposer(&validators, 1, 3).unwrap();
     assert_eq!(selected.address, validator1);
 }

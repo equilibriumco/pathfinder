@@ -77,7 +77,7 @@
 //!         validator_set: &'a ValidatorSet<MyAddress>,
 //!         _height: u64,
 //!         round: u32,
-//!     ) -> &'a Validator<MyAddress> {
+//!     ) -> anyhow::Result<&'a Validator<MyAddress>> {
 //!         // Simple weighted selection based on voting power
 //!         let total_power: u64 = validator_set
 //!             .validators
@@ -90,12 +90,12 @@
 //!         for validator in &validator_set.validators {
 //!             cumulative += validator.voting_power;
 //!             if selection < cumulative {
-//!                 return validator;
+//!                 return Ok(validator);
 //!             }
 //!         }
 //!
 //!         // Fallback to first validator
-//!         &validator_set.validators[0]
+//!         Ok(&validator_set.validators[0])
 //!     }
 //! }
 //!
@@ -1289,9 +1289,9 @@ pub trait ValidatorSetProvider<A> {
 ///         validator_set: &'a ValidatorSet<A>,
 ///         height: u64,
 ///         round: u32,
-///     ) -> &'a Validator<A> {
+///     ) -> anyhow::Result<&'a Validator<A>> {
 ///         let index = round as usize % validator_set.count();
-///         &validator_set.validators[index]
+///         Ok(&validator_set.validators[index])
 ///     }
 /// }
 /// ```
@@ -1308,12 +1308,17 @@ pub trait ProposerSelector<A: ValidatorAddress>: Clone + Send + Sync {
     ///
     /// Returns a reference to the selected validator who should propose
     /// for the given height and round.
+    ///
+    /// Returns an error if the proposer cannot be determined — for example an
+    /// infrastructure failure while reading the proposer set. The consensus
+    /// engine cannot make progress without a proposer, so such failures are
+    /// fatal.
     fn select_proposer<'a>(
         &self,
         validator_set: &'a ValidatorSet<A>,
         height: u64,
         round: u32,
-    ) -> &'a Validator<A>;
+    ) -> anyhow::Result<&'a Validator<A>>;
 }
 
 /// A default proposer selector that uses round-robin selection.
@@ -1330,9 +1335,9 @@ impl<A: ValidatorAddress> ProposerSelector<A> for RoundRobinProposerSelector {
         validator_set: &'a ValidatorSet<A>,
         _height: u64,
         round: u32,
-    ) -> &'a Validator<A> {
+    ) -> anyhow::Result<&'a Validator<A>> {
         let index = round as usize % validator_set.count();
-        &validator_set.validators[index]
+        Ok(&validator_set.validators[index])
     }
 }
 
