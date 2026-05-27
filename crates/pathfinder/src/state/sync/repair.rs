@@ -146,7 +146,9 @@ fn store_repaired_class(
         }
     }
 
-    tx.commit().context("Committing repaired class definition")
+    tx.commit()
+        .context("Committing repaired class definition")
+        .map(|_| ())
 }
 
 #[cfg(test)]
