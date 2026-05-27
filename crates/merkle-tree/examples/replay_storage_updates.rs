@@ -9,6 +9,7 @@ compile_error!(
      replay_storage_updates --features bench-skip-hashing"
 );
 
+use std::io::Write;
 use std::num::NonZeroU32;
 
 use anyhow::Context;
@@ -21,26 +22,34 @@ use pathfinder_common::prelude::*;
 use pathfinder_common::state_update::StateUpdateRef;
 use pathfinder_crypto::Felt;
 use pathfinder_merkle_tree::starknet_state::update_starknet_state;
-use pathfinder_storage::StorageBuilder;
+use pathfinder_storage::{StorageBuilder, TriePruneMode};
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
 
-    let input_database_path = std::env::args()
-        .nth(1)
-        .context("Please provide the input database path as the first argument")?;
-
-    let output_database_path = std::env::args()
-        .nth(2)
-        .context("Please provide the output database path as the second argument")?;
-
-    let measure_from: u64 = std::env::args()
-        .nth(3)
-        .map(|s| s.parse().context("measure_from must be a block number"))
+    let mut args = std::env::args().skip(1);
+    let input_database_path: String = args.next().context("arg 1: input database path")?;
+    let output_database_path: String = args.next().context("arg 2: output database path")?;
+    let csv_output_path: String = args.next().context("arg 3: CSV output path")?;
+    let host_label: String = args
+        .next()
+        .context("arg 4: host label (free-form identifier)")?;
+    let disk_type: String = args.next().context("arg 5: disk type (`ssd` or `hdd`)")?;
+    let measure_from: u64 = args
+        .next()
+        .map(|s| {
+            s.parse()
+                .context("arg 6: measure_from must be a block number")
+        })
         .transpose()?
         .unwrap_or(0);
+
+    anyhow::ensure!(
+        matches!(disk_type.as_str(), "ssd" | "hdd"),
+        "disk_type must be `ssd` or `hdd`",
+    );
 
     let input_storage = StorageBuilder::file(input_database_path.into())
         .migrate()
@@ -49,6 +58,7 @@ fn main() -> anyhow::Result<()> {
         .context("Creating connection pool")?;
 
     let output_storage = StorageBuilder::file(output_database_path.into())
+        .trie_prune_mode(Some(TriePruneMode::Archive))
         .migrate()
         .context("Migrating database")?
         .create_pool(NonZeroU32::new(32).expect("1>0"))
@@ -71,6 +81,45 @@ fn main() -> anyhow::Result<()> {
         .context("Getting latest block number")?
         .context("No blocks found")?;
 
+    let pragmas = output_storage.sqlite_pragma_snapshot()?;
+
+    let config_path = format!("{csv_output_path}.config.json");
+    let branch_sha = option_env!("BENCH_BRANCH_SHA").unwrap_or("unknown");
+
+    let synchronous_str = match pragmas.synchronous {
+        0 => "off",
+        1 => "normal",
+        2 => "full",
+        3 => "extra",
+        _ => "unknown",
+    };
+
+    let trie_prune_mode_str = match output_storage.trie_prune_mode() {
+        TriePruneMode::Archive => "archive".to_string(),
+        TriePruneMode::Prune { num_blocks_kept } => format!("prune({num_blocks_kept})"),
+    };
+
+    let config = serde_json::json!({
+        "branch_sha": branch_sha,
+        "host": host_label,
+        "disk_type": disk_type,
+        "engine": "sqlite",
+        "trie_prune_mode": trie_prune_mode_str,
+        "sqlite_journal_mode": pragmas.journal_mode,
+        "sqlite_synchronous": synchronous_str,
+        "sqlite_cache_size_pages": pragmas.cache_size_pages,
+        "sqlite_mmap_size_bytes": pragmas.mmap_size_bytes,
+        "preload_chunk_blocks": 10_000,
+        "measure_from": measure_from,
+        "input_load_ms_per_chunk": Vec::<u128>::new(),
+    });
+
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).context("Serialize config sidecar")?,
+    )
+    .with_context(|| format!("Write config sidecar to {config_path}"))?;
+
     let mut parent_hash = pathfinder_common::BlockHash::ZERO;
 
     let mut aggregate_state_update = StateUpdate::default();
@@ -79,11 +128,16 @@ fn main() -> anyhow::Result<()> {
     let mut batches_measured: u64 = 0;
     let total_start = std::time::Instant::now();
 
-    println!(
+    let csv_file = std::fs::File::create(&csv_output_path)
+        .with_context(|| format!("Create CSV output file at {csv_output_path}"))?;
+    let mut csv = std::io::BufWriter::new(csv_file);
+
+    writeln!(
+        csv,
         "batch_start,batch_end,trie_ms,commit_ms,contract_updates,system_updates,storage_changes,\
          nonce_updates,class_updates,declared_cairo_classes,declared_sierra_classes,\
          migrated_compiled_classes,state_diff_length"
-    );
+    )?;
 
     for i in 0..=latest_block_number.get() {
         let block_number = BlockNumber::new(i).expect("is valid");
@@ -203,12 +257,13 @@ fn main() -> anyhow::Result<()> {
                     aggregate_state_update.migrated_compiled_classes.len();
                 let state_diff_length = aggregate_state_update.state_diff_length();
 
-                println!(
+                writeln!(
+                    csv,
                     "{batch_start},{},{trie_ms},{commit_ms},{contract_updates},{system_updates},\
                      {storage_changes},{nonce_updates},{class_updates},{declared_cairo_classes},\
                      {declared_sierra_classes},{migrated_compiled_classes},{state_diff_length}",
                     i,
-                );
+                )?;
                 batches_measured += 1;
             }
 
@@ -265,15 +320,18 @@ fn main() -> anyhow::Result<()> {
             let migrated_compiled_classes = aggregate_state_update.migrated_compiled_classes.len();
             let state_diff_length = aggregate_state_update.state_diff_length();
 
-            println!(
+            writeln!(
+                csv,
                 "{batch_start},{},{trie_ms},{commit_ms},{contract_updates},{system_updates},\
                  {storage_changes},{nonce_updates},{class_updates},{declared_cairo_classes},\
                  {declared_sierra_classes},{migrated_compiled_classes},{state_diff_length}",
                 latest_block_number.get(),
-            );
+            )?;
             batches_measured += 1;
         }
     }
+
+    csv.flush().context("Flushing CSV")?;
 
     let total_elapsed = total_start.elapsed();
     eprintln!(

@@ -659,6 +659,10 @@ impl Storage {
         &self.0.database_path
     }
 
+    pub fn trie_prune_mode(&self) -> crate::TriePruneMode {
+        self.0.trie_prune_mode
+    }
+
     pub fn is_migrated(&self) -> Result<bool, StorageError> {
         let mut connection = self.connection()?;
         let tx = connection.transaction()?;
@@ -667,6 +671,28 @@ impl Storage {
 
         Ok(user_version == schema::LATEST_SCHEMA_REVISION as i64)
     }
+
+    /// Reads the four PRAGMAs the bench config sidecar records. Bench-only
+    /// convenience; not for production code.
+    pub fn sqlite_pragma_snapshot(&self) -> anyhow::Result<SqlitePragmaSnapshot> {
+        let mut conn = self.connection()?;
+        let tx = conn.transaction()?;
+        let raw = tx.inner();
+        Ok(SqlitePragmaSnapshot {
+            journal_mode: raw.query_row("PRAGMA journal_mode", [], |r| r.get(0))?,
+            synchronous: raw.query_row("PRAGMA synchronous", [], |r| r.get(0))?,
+            cache_size_pages: raw.query_row("PRAGMA cache_size", [], |r| r.get(0))?,
+            mmap_size_bytes: raw.query_row("PRAGMA mmap_size", [], |r| r.get(0))?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SqlitePragmaSnapshot {
+    pub journal_mode: String,
+    pub synchronous: i64,
+    pub cache_size_pages: i64,
+    pub mmap_size_bytes: i64,
 }
 
 fn setup_journal_mode(

@@ -22,6 +22,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions_sorted = { workspace = true }
+serde_json = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "time", "ansi"] }
 
 [[example]]

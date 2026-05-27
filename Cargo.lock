@@ -8789,6 +8789,7 @@ dependencies = [
  "pretty_assertions_sorted",
  "rand 0.8.6",
  "rayon",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
