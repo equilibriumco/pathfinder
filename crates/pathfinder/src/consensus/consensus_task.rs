@@ -28,6 +28,7 @@ use pathfinder_consensus::{
     ValidatorSetProvider,
 };
 use pathfinder_storage::Storage;
+use pathfinder_validator::proposer::ExpectedProposer;
 use tokio::sync::mpsc;
 
 use super::fetch_proposers::L2ProposerSelector;
@@ -79,7 +80,7 @@ pub fn spawn(
                 // TODO use a dynamic validator set provider, once fetching the validator set from
                 // the staking contract is implemented. Related issue: https://github.com/equilibriumco/pathfinder/issues/2936
                 Arc::new(validator_set_provider.clone()),
-                proposer_selector,
+                proposer_selector.clone(),
                 highest_committed,
             )?;
 
@@ -104,11 +105,12 @@ pub fn spawn(
 
             start_height_if_inactive(
                 &mut consensus,
+                &proposer_selector,
                 next_height,
                 validator_set_provider
                     .get_validator_set(next_height)
                     .context("Failed to get validator set at startup")?,
-            );
+            )?;
 
             // The explicit code block is to prohibit reusing `next_height`
         }
@@ -286,11 +288,12 @@ pub fn spawn(
 
                                 start_height_if_inactive(
                                     &mut consensus,
+                                    &proposer_selector,
                                     next_height,
                                     validator_set_provider
                                         .get_validator_set(next_height)
                                         .context("Failed to get validator set")?,
-                                );
+                                )?;
                             }
                         }
                         ConsensusEvent::Error(error) => {
@@ -344,11 +347,12 @@ pub fn spawn(
 
                             start_height_if_inactive(
                                 &mut consensus,
+                                &proposer_selector,
                                 cmd.height(),
                                 validator_set_provider
                                     .get_validator_set(cmd.height())
                                     .context("Failed to get validator set")?,
-                            );
+                            )?;
                         }
                         _ => {}
                     }
@@ -382,13 +386,23 @@ fn highest_committed(main_storage: &Storage) -> anyhow::Result<Option<u64>> {
 /// Starts consensus for the given height if not already active.
 fn start_height_if_inactive(
     consensus: &mut Consensus<ConsensusValue, ContractAddress, L2ProposerSelector>,
+    proposer_selector: &L2ProposerSelector,
     height: u64,
     validator_set: ValidatorSet<ContractAddress>,
-) {
+) -> anyhow::Result<()> {
     if !consensus.is_height_active(height) {
         tracing::trace!(%height, "🧠 🚀  Starting consensus for");
+        // Pre-fetch the proposer set so the engine's infallible proposer selection
+        // becomes a guaranteed cache hit. This turns an infrastructure failure (storage
+        // error, failed contract call) into a fatal error here rather than a panic deep
+        // inside the consensus state machine. The proposer set is keyed by height, so
+        // round 0 warms it for every round of this height.
+        proposer_selector
+            .expected_proposer(height, 0)
+            .with_context(|| format!("Pre-fetching proposer set for height {height}"))?;
         consensus.handle_command(ConsensusCommand::StartHeight(height, validator_set));
     } else {
         tracing::trace!(%height, "🧠 🤷  Consensus already active for");
     }
+    Ok(())
 }
