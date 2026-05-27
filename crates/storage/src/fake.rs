@@ -65,7 +65,8 @@ pub type UpdateTriesFn = Box<
         bool,
         BlockNumber,
         Storage,
-    ) -> Result<(StorageCommitment, ClassCommitment), StateUpdateError>,
+    )
+        -> Result<(StorageCommitment, ClassCommitment, crate::TrieBreakdown), StateUpdateError>,
 >;
 
 pub struct Config {
@@ -95,7 +96,9 @@ impl Default for Config {
             calculate_transaction_commitment: Box::new(|_, _| Ok(Faker.fake())),
             calculate_receipt_commitment: Box::new(|_| Ok(Faker.fake())),
             calculate_event_commitment: Box::new(|_, _| Ok(Faker.fake())),
-            update_tries: Box::new(|_, _, _, _, _| Ok((Faker.fake(), Faker.fake()))),
+            update_tries: Box::new(|_, _, _, _, _| {
+                Ok((Faker.fake(), Faker.fake(), crate::TrieBreakdown::default()))
+            }),
             occurrence: Default::default(),
         }
     }
@@ -534,7 +537,7 @@ pub mod generate {
             // Required for the tries
             db.insert_state_update(header.header.number, state_update)
                 .unwrap();
-            let (storage_commitment, class_commitment) = update_tries(
+            let (storage_commitment, class_commitment, _trie) = update_tries(
                 &db,
                 state_update.into(),
                 false,

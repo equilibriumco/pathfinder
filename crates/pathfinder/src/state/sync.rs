@@ -1303,7 +1303,7 @@ fn l2_update(
     // parallel contract state updates
     storage: Storage,
 ) -> anyhow::Result<L2Block> {
-    let (storage_commitment, class_commitment) =
+    let (storage_commitment, class_commitment, _trie) =
         update_starknet_state(
             transaction,
             block.state_update().as_ref(),
