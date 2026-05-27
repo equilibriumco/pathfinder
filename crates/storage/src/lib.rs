@@ -42,6 +42,14 @@ pub use transaction::dto::{
     TransactionV3,
 };
 
+/// Timing breakdown for the three trie phases in `update_starknet_state`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TrieBreakdown {
+    pub contract_tries_ms: u128,
+    pub storage_trie_ms: u128,
+    pub class_trie_ms: u128,
+}
+
 /// Sqlite key used for the PRAGMA user version.
 const VERSION_KEY: &str = "user_version";
 

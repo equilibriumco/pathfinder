@@ -96,7 +96,7 @@ pub fn init_db(db_dir: &Path, proposer: Address) -> anyhow::Result<BootDb> {
     let _account = predeploy_contracts(&db_txn, &mut state_update)?;
 
     let block_number = BlockNumber::GENESIS;
-    let (storage_commitment, class_commitment) = update_starknet_state(
+    let (storage_commitment, class_commitment, _trie) = update_starknet_state(
         &db_txn,
         (&state_update).into(),
         true,
@@ -258,7 +258,7 @@ pub fn declare(
 
     let next_block = validator.consensus_finalize0()?;
 
-    let (storage_commitment, class_commitment) = update_starknet_state(
+    let (storage_commitment, class_commitment, _trie) = update_starknet_state(
         &db_txn,
         (&next_block.state_update).into(),
         true,
@@ -548,7 +548,7 @@ pub mod tests {
         block: ConsensusFinalizedL2Block,
         parent_hash: BlockHash,
     ) -> (BlockHeader, Option<ContractAddress>) {
-        let (storage_commitment, class_commitment) = update_starknet_state(
+        let (storage_commitment, class_commitment, _trie) = update_starknet_state(
             &db_txn,
             (&block.state_update).into(),
             true,

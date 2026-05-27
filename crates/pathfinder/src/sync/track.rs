@@ -807,7 +807,7 @@ impl ProcessStage for StoreBlock {
         db.insert_state_update_data(block_number, &state_diff)
             .context("Inserting state update data")?;
 
-        let (storage_commitment, class_commitment) = update_starknet_state(
+        let (storage_commitment, class_commitment, _trie) = update_starknet_state(
             &db,
             (&state_diff).into(),
             self.verify_tree_hashes,
