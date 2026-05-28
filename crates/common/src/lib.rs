@@ -523,8 +523,7 @@ impl StarknetVersion {
 
     pub const V_0_13_2: Self = Self::new(0, 13, 2, 0);
 
-    // TODO: version at which block hash definition changes taken from
-    // Starkware implementation but might yet change
+    // A version at which block hash definition changes.
     pub const V_0_13_4: Self = Self::new(0, 13, 4, 0);
     // A version at which the state commitment formula changed to always use the
     // Poseidon hash, even when `class_commitment` is zero.
