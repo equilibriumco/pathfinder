@@ -12,7 +12,7 @@ use crate::config::ConsensusConfig;
 /// Upper bound on the number of distinct heights whose proposer sets are kept
 /// in memory. Consensus advances monotonically, so when the cache is full we
 /// evict the smallest key, which approximates LRU for the expected workload.
-const MAX_CACHED_HEIGHTS: usize = 32;
+const MAX_CACHED_HEIGHTS: usize = 10;
 
 /// A proposer selector that fetches proposers from config or L2.
 #[derive(Clone)]
