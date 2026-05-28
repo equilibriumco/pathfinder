@@ -256,6 +256,8 @@ impl<
                 }
             };
 
+            Self::assert_allowed_input_types(&input, line!());
+
             if let Err(e) = self.process_input(input) {
                 self.output_queue
                     .push_back(ConsensusEvent::Error(ConsensusError::malachite(e)));
@@ -263,6 +265,26 @@ impl<
         }
 
         self.output_queue.pop_front()
+    }
+
+    /// [`Input::ProposedValue`] is never fed into the engine during live
+    /// operation. It's only used during WAL recovery to replay the proposed
+    /// values, and when that happens, value origin is always set to
+    /// [`malachite_types::ValueOrigin::Consensus`].
+    ///
+    /// See [`crate::internal::wal::convert_wal_entry_to_input`] for more
+    /// details.
+    ///
+    /// Note: This assert is explicitly in the form of a dedicated function to
+    /// ensure that the linked documentation path is actively checked by CI.
+    fn assert_allowed_input_types(input: &Input<MalachiteContext<V, A, P>>, line: u32) {
+        assert!(
+            matches!(
+                input,
+                Input::Vote(_) | Input::Proposal(_) | Input::Propose(_) | Input::StartHeight(_, _)
+            ),
+            "Unexpected consensus input type {input:?} at line {line}"
+        );
     }
 
     fn get_vote_round(entry: &WalEntry<V, A>) -> Option<u32> {
