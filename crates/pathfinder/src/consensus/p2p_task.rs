@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Context;
 use p2p::consensus::{peer_score, Client, Event, EventKind, HeightAndRound};
@@ -43,6 +44,7 @@ use pathfinder_executor::{ConcurrentStateReader, ExecutorWorkerPool};
 use pathfinder_gas_price::{L1GasPriceProvider, L2GasPriceConstants, L2GasPriceProvider};
 use pathfinder_storage::{Storage, Transaction, TransactionBehavior};
 use pathfinder_validator::error::{ProposalError, ProposalHandlingError};
+use pathfinder_validator::proposer::ExpectedProposer;
 use pathfinder_validator::{
     should_defer_validation,
     ProdTransactionMapper,
@@ -134,6 +136,7 @@ pub fn spawn(
     blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
     verify_tree_hashes: bool,
     gas_price_provider: Option<L1GasPriceProvider>,
+    expected_proposer: Arc<dyn ExpectedProposer>,
     // Does nothing in production builds. Used for integration testing only.
     inject_failure: Option<InjectFailureConfig>,
 ) -> (
@@ -167,6 +170,7 @@ pub fn spawn(
         compiler_resource_limits,
         blockifier_libfuncs,
         config.my_starknet_version,
+        expected_proposer,
     );
     // Keep track of whether we've already emitted a warning about the
     // event channel size exceeding the limit, to avoid spamming the logs.
@@ -860,6 +864,7 @@ fn execute_deferred_for_next_height<T: TransactionExt>(
                 l2_gas_price_provider.as_ref(),
                 worker_pool,
                 my_starknet_version,
+                batch_execution_manager.expected_proposer(),
             )?;
 
         // Execute deferred transactions first.
@@ -1097,6 +1102,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
                 l2_gas_price_provider.as_ref(),
                 worker_pool,
                 my_starknet_version,
+                batch_execution_manager.expected_proposer(),
             )?;
             validator_cache.insert(
                 height_and_round,
@@ -1282,6 +1288,7 @@ fn defer_or_execute_proposal_fin<T: TransactionExt>(
                         l2_gas_price_provider.as_ref(),
                         worker_pool,
                         my_starknet_version,
+                        batch_execution_manager.expected_proposer(),
                     )?
                 }
                 ValidatorStage::TransactionBatch(stage) => stage,
@@ -1496,6 +1503,7 @@ mod tests {
     use pathfinder_crypto::Felt;
     use pathfinder_executor::{ConcurrentStateReader, ExecutorWorkerPool};
     use pathfinder_storage::StorageBuilder;
+    use pathfinder_validator::proposer::ConstantProposer;
     use pathfinder_validator::ValidatorWorkerPool;
 
     use super::*;
@@ -1524,6 +1532,7 @@ mod tests {
                 ResourceLimits::for_test(),
                 BlockifierLibfuncs::default(),
                 StarknetVersion::V_0_14_0,
+                Arc::new(ConstantProposer(ContractAddress::ZERO)),
             );
             let dummy_data_dir = PathBuf::new();
 

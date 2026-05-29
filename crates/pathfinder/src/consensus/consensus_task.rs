@@ -40,7 +40,6 @@ use crate::devnet::Account;
 
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(
-    chain_id: pathfinder_common::ChainId,
     config: ConsensusConfig,
     wal_directory: PathBuf,
     tx_to_p2p: mpsc::Sender<P2PTaskEvent>,
@@ -49,6 +48,8 @@ pub fn spawn(
     data_directory: &Path,
     compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
+    proposer_selector: L2ProposerSelector,
+    validator_set_provider: L2ValidatorSetProvider,
     // Does nothing in production builds. Used for integration testing only.
     inject_failure: Option<InjectFailureConfig>,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
@@ -65,13 +66,7 @@ pub fn spawn(
 
         let highest_committed = highest_committed(&storage)
             .context("Failed to read highest committed block at startup")?;
-        // Get the validator address and validator set provider
         let validator_address = config.my_validator_address;
-        let validator_set_provider =
-            L2ValidatorSetProvider::new(storage.clone(), chain_id, config.clone());
-
-        // Get the proposer selector
-        let proposer_selector = L2ProposerSelector::new(storage.clone(), chain_id, config.clone());
 
         let mut consensus =
             Consensus::<ConsensusValue, ContractAddress, L2ProposerSelector>::recover_with_proposal_selector(

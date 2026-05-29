@@ -17,3 +17,13 @@ pub trait ExpectedProposer: Send + Sync {
     /// proposal.
     fn expected_proposer(&self, height: u64, round: u32) -> anyhow::Result<ContractAddress>;
 }
+
+/// An [`ExpectedProposer`] that always resolves to the same proposer,
+/// regardless of height or round.
+pub struct ConstantProposer(pub ContractAddress);
+
+impl ExpectedProposer for ConstantProposer {
+    fn expected_proposer(&self, _height: u64, _round: u32) -> anyhow::Result<ContractAddress> {
+        Ok(self.0)
+    }
+}
