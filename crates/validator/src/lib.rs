@@ -28,6 +28,7 @@ use pathfinder_common::{
     ChainId,
     ConsensusFinalizedBlockHeader,
     ConsensusFinalizedL2Block,
+    ContractAddress,
     DecidedBlocks,
     DeclaredClass,
     EntryPoint,
@@ -74,7 +75,8 @@ use pathfinder_gas_price::{
 pub mod error;
 pub mod proposer;
 
-use crate::error::ProposalHandlingError;
+use crate::error::{ProposalError, ProposalHandlingError};
+use crate::proposer::ExpectedProposer;
 
 /// TODO: Use this type as validation result.
 pub enum ValidationResult {
@@ -172,6 +174,7 @@ impl ValidatorBlockInfoStage {
         l2_gas_price_provider: Option<&L2GasPriceProvider>,
         worker_pool: ValidatorWorkerPool,
         my_starknet_version: StarknetVersion,
+        expected_proposer: &dyn ExpectedProposer,
     ) -> Result<ValidatorTransactionBatchStage, ProposalHandlingError> {
         let Self {
             chain_id,
@@ -179,9 +182,9 @@ impl ValidatorBlockInfoStage {
         } = self;
         let ProposalInit {
             height,
-            round: _,
+            round,
             valid_round: _,
-            proposer: _,
+            proposer,
             timestamp,
             builder,
             l1_da_mode,
@@ -201,6 +204,12 @@ impl ValidatorBlockInfoStage {
         )
         .entered();
 
+        validate_proposer(
+            height,
+            round,
+            ContractAddress(proposer.0),
+            expected_proposer,
+        )?;
         let starknet_version = validate_starknet_version(starknet_version, my_starknet_version)?;
         validate_block_info_timestamp(height, timestamp, &storage, decided_blocks.clone())?;
 
@@ -340,6 +349,29 @@ impl ValidatorBlockInfoStage {
             decided_blocks,
         })
     }
+}
+
+fn validate_proposer(
+    height: u64,
+    round: u32,
+    proposer: ContractAddress,
+    expected_proposer: &dyn ExpectedProposer,
+) -> Result<(), ProposalHandlingError> {
+    // Failing to resolve the expected proposer is an infrastructural problem
+    // (e.g. reading the validator or proposer set).
+    let expected = expected_proposer
+        .expected_proposer(height, round)
+        .map_err(ProposalHandlingError::fatal)?;
+
+    if expected != proposer {
+        return Err(ProposalError::ProposerMismatch {
+            expected,
+            actual: proposer,
+        }
+        .into());
+    }
+
+    Ok(())
 }
 
 fn validate_starknet_version(
@@ -1218,6 +1250,7 @@ mod tests {
 
     use super::*;
     use crate::error::ProposalError;
+    use crate::proposer::ConstantProposer;
 
     /// Creates a worker pool for tests.
     fn create_test_worker_pool() -> ValidatorWorkerPool {
@@ -1531,6 +1564,7 @@ mod tests {
                 None,
                 worker_pool,
                 StarknetVersion::V_0_14_0,
+                &ConstantProposer(ContractAddress::ONE),
             )
             .expect("Failed to validate block info");
 
@@ -1584,6 +1618,56 @@ mod tests {
                 .len(),
             0,
             "Empty proposal should have no declared Sierra classes"
+        );
+    }
+
+    #[test]
+    fn validate_block_info_rejects_unexpected_proposer() {
+        let chain_id = ChainId::SEPOLIA_TESTNET;
+        let storage = StorageBuilder::in_tempdir().unwrap();
+        let worker_pool = create_test_worker_pool();
+
+        let actual = ContractAddress::ONE;
+        let expected = ContractAddress::TWO;
+
+        let proposal_init = p2p_proto::consensus::ProposalInit {
+            height: 0,
+            round: 0,
+            valid_round: None,
+            proposer: p2p_proto::common::Address(actual.0),
+            timestamp: 1000,
+            builder: p2p_proto::common::Address(actual.0),
+            l1_da_mode: p2p_proto::common::L1DataAvailabilityMode::Calldata,
+            l2_gas_price_fri: 0,
+            l1_gas_price_wei: 0,
+            l1_data_gas_price_wei: 0,
+            l1_gas_price_fri: 0,
+            l1_data_gas_price_fri: 0,
+            starknet_version: StarknetVersion::V_0_14_0.to_string(),
+            version_constant_commitment: Default::default(),
+        };
+
+        let validator_block_info = ValidatorBlockInfoStage::new(chain_id, proposal_init).unwrap();
+
+        let err = validator_block_info
+            .validate_block_info(
+                storage,
+                DecidedBlocks::default(),
+                None,
+                None,
+                None,
+                worker_pool,
+                StarknetVersion::V_0_14_0,
+                &ConstantProposer(expected),
+            )
+            .unwrap_err();
+
+        assert_matches!(
+            err,
+            ProposalHandlingError::Recoverable(ProposalError::ProposerMismatch {
+                expected: e,
+                actual: a,
+            }) if e == expected && a == actual
         );
     }
 
@@ -1654,6 +1738,7 @@ mod tests {
             None,
             worker_pool,
             StarknetVersion::V_0_14_0,
+            &ConstantProposer(ContractAddress::ONE),
         );
 
         if let Some(expected_error_message) = expected_error_message {
@@ -1715,6 +1800,7 @@ mod tests {
                         None,
                         worker_pool,
                         StarknetVersion::V_0_14_0,
+                        &ConstantProposer(ContractAddress::ONE),
                     )
                     .is_ok(),
                 "Genesis block timestamp validation should pass even without parent"
@@ -1729,6 +1815,7 @@ mod tests {
                     None,
                     worker_pool,
                     StarknetVersion::V_0_14_0,
+                    &ConstantProposer(ContractAddress::ONE),
                 )
                 .unwrap_err();
             let expected_err_message = format!(

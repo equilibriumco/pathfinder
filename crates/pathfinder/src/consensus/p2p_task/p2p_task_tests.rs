@@ -17,6 +17,7 @@ use p2p_proto::consensus::ProposalPart;
 use pathfinder_common::prelude::*;
 use pathfinder_common::{
     consensus_info,
+    contract_address,
     ChainId,
     ConsensusFinalizedBlockHeader,
     ConsensusFinalizedL2Block,
@@ -26,6 +27,7 @@ use pathfinder_common::{
 use pathfinder_consensus::ConsensusCommand;
 use pathfinder_crypto::Felt;
 use pathfinder_storage::{Storage, StorageBuilder};
+use pathfinder_validator::proposer::ConstantProposer;
 use pathfinder_validator::ValidatorWorkerPool;
 use tokio::sync::{mpsc, watch};
 use tokio::time::error::Elapsed;
@@ -104,6 +106,7 @@ impl TestEnvironment {
             pathfinder_compiler::BlockifierLibfuncs::default(),
             true,
             None,
+            Arc::new(ConstantProposer(contract_address!("0x456"))),
             None,
         );
 

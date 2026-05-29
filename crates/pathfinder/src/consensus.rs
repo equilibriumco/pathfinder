@@ -12,6 +12,7 @@ mod dummy_proposal;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use p2p::consensus::{Event, HeightAndRound};
 use p2p_proto::consensus::ProposalPart;
@@ -48,6 +49,9 @@ pub struct ConsensusTaskHandles {
     pub worker_pool: Option<ValidatorWorkerPool>,
 }
 
+use crate::consensus::fetch_proposers::L2ProposerSelector;
+use crate::consensus::fetch_validators::L2ValidatorSetProvider;
+use crate::consensus::proposer_oracle::ConsensusProposerOracle;
 pub use crate::ConsensusChannels;
 use crate::SyncMessageToConsensus;
 
@@ -90,6 +94,14 @@ pub fn start(
         watch::channel(consensus_info::ConsensusInfo::default());
     let finalized_blocks = HashMap::new();
 
+    let proposer_selector = L2ProposerSelector::new(storage.clone(), chain_id, config.clone());
+    let validator_set_provider =
+        L2ValidatorSetProvider::new(storage.clone(), chain_id, config.clone());
+    let expected_proposer = Arc::new(ConsensusProposerOracle::new(
+        proposer_selector.clone(),
+        validator_set_provider.clone(),
+    ));
+
     let (consensus_p2p_event_processing_handle, worker_pool) = p2p_task::spawn(
         chain_id,
         (&config).into(),
@@ -106,11 +118,11 @@ pub fn start(
         blockifier_libfuncs,
         verify_tree_hashes,
         gas_price_provider,
+        expected_proposer,
         inject_failure_config,
     );
 
     let consensus_engine_handle = consensus_task::spawn(
-        chain_id,
         config,
         wal_directory,
         tx_to_p2p,
@@ -119,6 +131,8 @@ pub fn start(
         data_directory,
         compiler_resource_limits,
         blockifier_libfuncs,
+        proposer_selector,
+        validator_set_provider,
         inject_failure_config,
     );
 

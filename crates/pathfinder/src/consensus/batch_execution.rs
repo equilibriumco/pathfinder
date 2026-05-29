@@ -6,6 +6,7 @@
 //! actually executed by the proposer.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use anyhow::Context;
 use p2p::consensus::HeightAndRound;
@@ -14,6 +15,7 @@ use pathfinder_common::{DecidedBlocks, StarknetVersion};
 use pathfinder_gas_price::{L1GasPriceProvider, L2GasPriceProvider};
 use pathfinder_storage::Storage;
 use pathfinder_validator::error::ProposalHandlingError;
+use pathfinder_validator::proposer::ExpectedProposer;
 use pathfinder_validator::{
     should_defer_validation,
     TransactionExt,
@@ -37,6 +39,8 @@ pub struct BatchExecutionManager {
     compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
     my_starknet_version: StarknetVersion,
+    /// Resolves the expected proposer for block info validation.
+    expected_proposer: Arc<dyn ExpectedProposer>,
 }
 
 impl BatchExecutionManager {
@@ -48,6 +52,7 @@ impl BatchExecutionManager {
         compiler_resource_limits: pathfinder_compiler::ResourceLimits,
         blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
         my_starknet_version: StarknetVersion,
+        expected_proposer: Arc<dyn ExpectedProposer>,
     ) -> Self {
         Self {
             executing: HashSet::new(),
@@ -57,7 +62,14 @@ impl BatchExecutionManager {
             compiler_resource_limits,
             blockifier_libfuncs,
             my_starknet_version,
+            expected_proposer,
         }
+    }
+
+    /// The expected-proposer resolver shared with consensus proposer
+    /// selection, for validating the proposer named in a proposal.
+    pub fn expected_proposer(&self) -> &dyn ExpectedProposer {
+        &*self.expected_proposer
     }
 
     /// Check if execution has started for the given height and round
@@ -132,6 +144,7 @@ impl BatchExecutionManager {
                         self.l2_gas_price_provider.as_ref(),
                         self.worker_pool.clone(),
                         self.my_starknet_version,
+                        &*self.expected_proposer,
                     )?
                 }
                 ValidatorStage::TransactionBatch(stage) => stage,
@@ -324,10 +337,11 @@ mod tests {
 
     use p2p::consensus::HeightAndRound;
     use pathfinder_common::prelude::*;
-    use pathfinder_common::BlockId;
+    use pathfinder_common::{contract_address, felt, BlockId};
     use pathfinder_crypto::Felt;
     use pathfinder_executor::{ConcurrentStateReader, ExecutorWorkerPool};
     use pathfinder_storage::StorageBuilder;
+    use pathfinder_validator::proposer::ConstantProposer;
     use pathfinder_validator::{ProdTransactionMapper, ValidatorBlockInfoStage};
 
     use super::*;
@@ -336,6 +350,13 @@ mod tests {
     /// Creates a worker pool for tests.
     fn create_test_worker_pool() -> ValidatorWorkerPool {
         ExecutorWorkerPool::<ConcurrentStateReader>::new(1).get()
+    }
+
+    /// A constant expected-proposer matching the test proposer used throughout
+    /// these tests (the default `Address` is zero), so block info validation
+    /// always succeeds when reached.
+    fn test_expected_proposer(addr: ContractAddress) -> Arc<dyn ExpectedProposer> {
+        Arc::new(ConstantProposer(addr))
     }
 
     /// Helper function to create a committed parent block in storage
@@ -405,6 +426,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_expected_proposer(ContractAddress::ZERO),
         );
         let height_and_round = HeightAndRound::new(2, 1);
 
@@ -464,7 +486,7 @@ mod tests {
         }
 
         let height_and_round = HeightAndRound::new(2, 1);
-        let proposer_address = p2p_proto::common::Address(Felt::from_hex_str("0x456").unwrap());
+        let proposer_address = p2p_proto::common::Address(felt!("0x456"));
         let proposal_init = proto_consensus::ProposalInit {
             height: height_and_round.height(),
             round: height_and_round.round(),
@@ -490,6 +512,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_expected_proposer(contract_address!("0x456")),
         );
 
         let mut deferred_executions: std::collections::HashMap<HeightAndRound, DeferredExecution> =
@@ -589,6 +612,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_expected_proposer(contract_address!("0x456")),
         );
 
         let mut deferred_executions: std::collections::HashMap<HeightAndRound, DeferredExecution> =
@@ -736,6 +760,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_expected_proposer(ContractAddress::ZERO),
         );
         let height_and_round = HeightAndRound::new(2, 1);
 
@@ -860,6 +885,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_expected_proposer(ContractAddress::ZERO),
         );
         let height_and_round = HeightAndRound::new(2, 1);
 
@@ -914,6 +940,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_expected_proposer(ContractAddress::ZERO),
         );
         let height_and_round = HeightAndRound::new(2, 1);
 
@@ -972,6 +999,7 @@ mod tests {
             pathfinder_compiler::ResourceLimits::for_test(),
             pathfinder_compiler::BlockifierLibfuncs::default(),
             StarknetVersion::V_0_14_0,
+            test_expected_proposer(ContractAddress::ZERO),
         );
         let height_and_round = HeightAndRound::new(2, 1);
 
