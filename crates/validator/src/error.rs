@@ -1,6 +1,7 @@
 //! Error types for proposal handling.
 
 use p2p::consensus::HeightAndRound;
+use pathfinder_common::ContractAddress;
 use pathfinder_storage::StorageError;
 
 use crate::WrongValidatorStageError;
@@ -142,6 +143,14 @@ pub enum ProposalError {
     /// transactions, invalid commitments, hash mismatches, etc.).
     #[error("Validation/execution failed: {message}")]
     ValidationFailed { message: String },
+
+    /// The proposer named in the proposal does not match the expected proposer
+    /// for the proposal's (height, round).
+    #[error("Proposer mismatch: expected {expected}, got {actual}")]
+    ProposerMismatch {
+        expected: ContractAddress,
+        actual: ContractAddress,
+    },
 }
 
 impl From<WrongValidatorStageError> for ProposalError {
