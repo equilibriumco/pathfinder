@@ -9,11 +9,6 @@ use rand::rngs::OsRng;
 
 use crate::config::ConsensusConfig;
 
-/// Upper bound on the number of distinct heights whose proposer sets are kept
-/// in memory. Consensus advances monotonically, so when the cache is full we
-/// evict the smallest key, which approximates LRU for the expected workload.
-const MAX_CACHED_HEIGHTS: usize = 10;
-
 /// A proposer selector that fetches proposers from config or L2.
 #[derive(Clone)]
 pub struct L2ProposerSelector {
@@ -59,7 +54,14 @@ impl L2ProposerSelector {
             return Ok(existing);
         }
         cache.insert(height, fetched.clone());
-        while cache.len() > MAX_CACHED_HEIGHTS {
+
+        // Upper bound on the number of distinct heights whose
+        // proposer sets are kept in memory. Consensus advances
+        // monotonically, so when the cache is full we evict the
+        // smallest key, which approximates LRU for the expected
+        // workload.
+        let max_cached_heights = self.config.history_depth.try_into().unwrap_or(10);
+        while cache.len() > max_cached_heights {
             cache.pop_first();
         }
         Ok(fetched)
@@ -190,7 +192,7 @@ mod tests {
             my_validator_address: proposer,
             validator_addresses: vec![proposer],
             proposer_addresses: vec![proposer],
-            history_depth: 0,
+            history_depth: 10,
             l1_gas_price_tolerance: 0.0,
             l1_gas_price_max_time_gap: 0,
         };
@@ -219,10 +221,11 @@ mod tests {
     fn evicts_oldest_height_when_over_capacity() {
         let selector = selector();
         let zero_first = selector.proposer_set_at(0).unwrap();
-        // Insert MAX_CACHED_HEIGHTS more entries: at the last insertion the
-        // map size hits MAX_CACHED_HEIGHTS + 1 and the smallest key (0) is
+        let max_cached_heights = 10;
+        // Insert max_cached_heights more entries: at the last insertion the
+        // map size hits max_cached_heights + 1 and the smallest key (0) is
         // evicted.
-        for h in 1..=MAX_CACHED_HEIGHTS as u64 {
+        for h in 1..=max_cached_heights as u64 {
             selector.proposer_set_at(h).unwrap();
         }
         let zero_again = selector.proposer_set_at(0).unwrap();
