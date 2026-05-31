@@ -102,8 +102,8 @@ fn migrate_contract_trie(
     rocksdb: &crate::RocksDBInner,
 ) -> anyhow::Result<()> {
     tx.execute_batch(
-        "CREATE TEMP TABLE IF NOT EXISTS idx_to_contract_map (idx INTEGER PRIMARY KEY, contract \
-         BLOB NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS idx_to_contract_map (idx INTEGER PRIMARY KEY, contract BLOB \
+         NOT NULL)",
     )?;
     tx.execute_batch("DELETE FROM idx_to_contract_map")?;
 
@@ -283,7 +283,7 @@ fn migrate_removal_markers(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()>
     migrate_simple_removal_table(tx, "trie_storage_removals", CODEC_CFG)?;
 
     // Contract removals: key_prefix is Some(contract_address), looked up from
-    // the idx_to_contract_map temp table built during contract trie migration.
+    // the idx_to_contract_map table built during contract trie migration.
     migrate_contract_removal_table(tx, CODEC_CFG)?;
 
     Ok(())

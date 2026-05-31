@@ -1065,18 +1065,6 @@ fn migrate_database(
     let amount = schema::LATEST_SCHEMA_REVISION - current_revision;
     tracing::info!(%current_revision, latest_revision=%schema::LATEST_SCHEMA_REVISION, migrations=%amount, "Performing database migrations");
 
-    // Revision 0078 streams a large contract->idx map through a SQLite temp
-    // table. Force temp tables to disk so the migration doesn't OOM on
-    // production databases. The pragma is connection-scoped and this
-    // connection is short-lived, so no impact on the runtime pool.
-    //
-    // Must be set here, not inside revision_0078::migrate: SQLite rejects
-    // `PRAGMA temp_store` changes from within an open transaction, and each
-    // migration runs inside `connection.transaction()` below.
-    if current_revision < 78 {
-        connection.pragma_update(None, "temp_store", "FILE")?;
-    }
-
     // Sequentially apply each missing migration.
     migrations
         .iter()
@@ -1326,28 +1314,6 @@ mod tests {
         let version = schema_version(&conn).unwrap();
         let expected = schema::migrations().len() + schema::BASE_SCHEMA_REVISION;
         assert_eq!(version, expected);
-    }
-
-    /// Revision 0078 creates a SQLite temp table that can grow very large. We
-    /// force `temp_store = FILE` on the migration connection before opening
-    /// the per-migration transactions, because `temp_store` can't be changed
-    /// from within a transaction. This test pins both behaviours: the
-    /// migration must succeed end-to-end, and `temp_store` must be set to FILE
-    /// (= 1) after the run.
-    #[test]
-    fn migrate_database_sets_temp_store_to_file() {
-        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
-        setup_connection(&mut conn, JournalMode::Rollback).unwrap();
-
-        let rocksdb_dir = tempfile::TempDir::new().unwrap();
-        let rocksdb = StorageBuilder::open_rocksdb(rocksdb_dir.path()).unwrap();
-
-        migrate_database(&mut conn, &rocksdb).unwrap();
-
-        let temp_store: i64 = conn
-            .pragma_query_value(None, "temp_store", |row| row.get(0))
-            .unwrap();
-        assert_eq!(temp_store, 1, "temp_store should be FILE (= 1)");
     }
 
     #[test]
