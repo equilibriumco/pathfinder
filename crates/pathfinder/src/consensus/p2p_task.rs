@@ -144,7 +144,7 @@ pub fn spawn(
     let validator_address = config.my_validator_address;
     // Contains transaction batches and proposal finalizations that are
     // waiting for previous block to be committed before they can be executed.
-    let deferred_executions = Arc::new(Mutex::new(HashMap::new()));
+    let mut deferred_executions = HashMap::new();
     // Create worker pool for concurrent transaction execution
     let worker_pool: ValidatorWorkerPool =
         ExecutorWorkerPool::<ConcurrentStateReader>::auto().get();
@@ -273,7 +273,6 @@ pub fn spawn(
                         match event.kind {
                             EventKind::Proposal(height_and_round, proposal_part) => {
                                 let vcache = validator_cache.clone();
-                                let dex = deferred_executions.clone();
                                 let result = handle_incoming_proposal_part::<ProdTransactionMapper>(
                                     chain_id,
                                     height_and_round,
@@ -282,7 +281,7 @@ pub fn spawn(
                                     &mut finalized_blocks,
                                     decided_blocks.clone(),
                                     vcache,
-                                    dex,
+                                    &mut deferred_executions,
                                     main_readonly_storage.clone(),
                                     &mut batch_execution_manager,
                                     &data_directory,
@@ -415,7 +414,7 @@ pub fn spawn(
                                 let success = on_finalized_block_decided(
                                     number,
                                     &validator_cache,
-                                    deferred_executions.clone(),
+                                    &mut deferred_executions,
                                     &mut batch_execution_manager,
                                     main_readonly_storage.clone(),
                                     decided_blocks.clone(),
@@ -649,7 +648,7 @@ pub fn spawn(
                             on_finalized_block_decided(
                                 block_number,
                                 &validator_cache,
-                                deferred_executions.clone(),
+                                &mut deferred_executions,
                                 &mut batch_execution_manager,
                                 main_readonly_storage.clone(),
                                 decided_blocks.clone(),
@@ -776,7 +775,7 @@ fn remove_decided_block(
 fn on_finalized_block_decided(
     height: BlockNumber,
     validator_cache: &ValidatorCache,
-    deferred_executions: Arc<Mutex<HashMap<HeightAndRound, DeferredExecution>>>,
+    deferred_executions: &mut HashMap<HeightAndRound, DeferredExecution>,
     batch_execution_manager: &mut BatchExecutionManager,
     main_db: Storage,
     decided_blocks: DecidedBlocks,
@@ -789,7 +788,7 @@ fn on_finalized_block_decided(
     let exec_success = execute_deferred_for_next_height::<ProdTransactionMapper>(
         height.get(),
         validator_cache.clone(),
-        deferred_executions.clone(),
+        deferred_executions,
         batch_execution_manager,
         main_db,
         finalized_blocks,
@@ -833,7 +832,7 @@ impl ValidatorCache {
 fn execute_deferred_for_next_height<T: TransactionExt>(
     height: u64,
     validator_cache: ValidatorCache,
-    deferred_executions: Arc<Mutex<HashMap<HeightAndRound, DeferredExecution>>>,
+    deferred_executions: &mut HashMap<HeightAndRound, DeferredExecution>,
     batch_execution_manager: &mut BatchExecutionManager,
     main_db: Storage,
     finalized_blocks: &mut HashMap<HeightAndRound, ConsensusFinalizedL2Block>,
@@ -845,11 +844,9 @@ fn execute_deferred_for_next_height<T: TransactionExt>(
 ) -> Result<Option<(HeightAndRound, ProposalCommitmentWithOrigin)>, ProposalHandlingError> {
     // Retrieve and execute any deferred transactions or proposal finalizations
     // for the next height, if any. Sort by (height, round) in ascending order.
-    let deferred = {
-        let mut dex = deferred_executions.lock().unwrap();
-        dex.extract_if(|hnr, _| hnr.height() == height + 1)
-            .collect::<BTreeMap<_, _>>()
-    };
+    let deferred = deferred_executions
+        .extract_if(|hnr, _| hnr.height() == height + 1)
+        .collect::<BTreeMap<_, _>>();
 
     // Execute deferred transactions and proposal finalization only for the last
     // stored deferred round in the height, because if there are any deferred
@@ -1051,7 +1048,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
     finalized_blocks: &mut HashMap<HeightAndRound, ConsensusFinalizedL2Block>,
     decided_blocks: DecidedBlocks,
     mut validator_cache: ValidatorCache,
-    deferred_executions: Arc<Mutex<HashMap<HeightAndRound, DeferredExecution>>>,
+    deferred_executions: &mut HashMap<HeightAndRound, DeferredExecution>,
     main_readonly_storage: Storage,
     batch_execution_manager: &mut BatchExecutionManager,
     data_directory: &Path,
@@ -1128,7 +1125,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
                 validator_stage,
                 main_readonly_storage.clone(),
                 decided_blocks.clone(),
-                &mut deferred_executions.lock().unwrap(),
+                deferred_executions,
             )?;
             validator_cache.insert(height_and_round, next_stage);
 
@@ -1244,7 +1241,7 @@ fn defer_or_execute_proposal_fin<T: TransactionExt>(
     valid_round: Option<u32>,
     executed_transaction_count: u64,
     main_db: Storage,
-    deferred_executions: Arc<Mutex<HashMap<HeightAndRound, DeferredExecution>>>,
+    deferred_executions: &mut HashMap<HeightAndRound, DeferredExecution>,
     batch_execution_manager: &mut BatchExecutionManager,
     decided_blocks: DecidedBlocks,
     finalized_blocks: &mut HashMap<HeightAndRound, ConsensusFinalizedL2Block>,
@@ -1274,7 +1271,6 @@ fn defer_or_execute_proposal_fin<T: TransactionExt>(
             "🖧  ⚙️ consensus finalize for height and round {height_and_round} is deferred"
         );
 
-        let mut deferred_executions = deferred_executions.lock().unwrap();
         let deferred = deferred_executions.entry(height_and_round).or_default();
         deferred.commitment = Some(commitment);
         deferred.executed_transaction_count = Some(executed_transaction_count);
@@ -1283,10 +1279,7 @@ fn defer_or_execute_proposal_fin<T: TransactionExt>(
         // The proposal can be finalized now, because the previous
         // block is committed. First execute any deferred transactions
         // for the height and round, if any, then finalize the proposal.
-        let deferred = {
-            let mut dex = deferred_executions.lock().unwrap();
-            dex.remove(&height_and_round)
-        };
+        let deferred = deferred_executions.remove(&height_and_round);
         let deferred_txns_len = deferred.as_ref().map_or(0, |d| d.transactions.len());
 
         let validator = if let Some(deferred) = deferred {
@@ -1548,8 +1541,8 @@ mod tests {
 
             let mut incoming_proposals = HashMap::new();
             let mut finalized_blocks = HashMap::new();
+            let mut deferred_executions = HashMap::new();
             let validator_cache = ValidatorCache::new();
-            let deferred_executions = Arc::new(Mutex::new(HashMap::new()));
 
             let mut db_conn = main_storage.connection().unwrap();
 
@@ -1585,7 +1578,7 @@ mod tests {
                             &mut finalized_blocks,
                             DecidedBlocks::default(),
                             validator_cache.clone(),
-                            deferred_executions.clone(),
+                            &mut deferred_executions,
                             main_storage.clone(),
                             &mut batch_execution_manager,
                             &dummy_data_dir,
