@@ -12,7 +12,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use p2p::consensus::{peer_score, Client, Event, EventKind, HeightAndRound};
@@ -187,7 +186,7 @@ pub fn spawn(
             .context("Creating database connection")?;
         let gossip_handler = GossipHandler::new(validator_address, GossipRetryConfig::default());
 
-        let validator_cache = ValidatorCache::new();
+        let mut validator_cache = ValidatorCache::new();
         let mut incoming_proposals = HashMap::new();
         let mut own_proposal_parts = HashMap::new();
         let decided_blocks = DecidedBlocks::default();
@@ -272,7 +271,6 @@ pub fn spawn(
 
                         match event.kind {
                             EventKind::Proposal(height_and_round, proposal_part) => {
-                                let vcache = validator_cache.clone();
                                 let result = handle_incoming_proposal_part::<ProdTransactionMapper>(
                                     chain_id,
                                     height_and_round,
@@ -280,7 +278,7 @@ pub fn spawn(
                                     &mut incoming_proposals,
                                     &mut finalized_blocks,
                                     decided_blocks.clone(),
-                                    vcache,
+                                    &mut validator_cache,
                                     &mut deferred_executions,
                                     readonly_storage.clone(),
                                     &mut batch_execution_manager,
@@ -413,7 +411,7 @@ pub fn spawn(
                                 // Note: a committed block is always a decided block too
                                 let success = on_finalized_block_decided(
                                     number,
-                                    &validator_cache,
+                                    &mut validator_cache,
                                     &mut deferred_executions,
                                     &mut batch_execution_manager,
                                     readonly_storage.clone(),
@@ -647,7 +645,7 @@ pub fn spawn(
                             // A committed block is always a decided block too
                             on_finalized_block_decided(
                                 block_number,
-                                &validator_cache,
+                                &mut validator_cache,
                                 &mut deferred_executions,
                                 &mut batch_execution_manager,
                                 readonly_storage.clone(),
@@ -774,7 +772,7 @@ fn remove_decided_block(
 #[allow(clippy::too_many_arguments)]
 fn on_finalized_block_decided(
     height: BlockNumber,
-    validator_cache: &ValidatorCache,
+    validator_cache: &mut ValidatorCache,
     deferred_executions: &mut HashMap<HeightAndRound, DeferredExecution>,
     batch_execution_manager: &mut BatchExecutionManager,
     storage: Storage,
@@ -787,7 +785,7 @@ fn on_finalized_block_decided(
 ) -> Result<ComputationSuccess, anyhow::Error> {
     let exec_success = execute_deferred_for_next_height::<ProdTransactionMapper>(
         height.get(),
-        validator_cache.clone(),
+        validator_cache,
         deferred_executions,
         batch_execution_manager,
         storage,
@@ -807,22 +805,19 @@ fn on_finalized_block_decided(
     Ok(success)
 }
 
-#[derive(Clone)]
-struct ValidatorCache(Arc<Mutex<HashMap<HeightAndRound, ValidatorStage>>>);
+struct ValidatorCache(HashMap<HeightAndRound, ValidatorStage>);
 
 impl ValidatorCache {
     fn new() -> Self {
-        Self(Arc::new(Mutex::new(HashMap::new())))
+        Self(HashMap::new())
     }
 
-    fn insert(&self, hnr: HeightAndRound, stage: ValidatorStage) {
-        let mut cache = self.0.lock().unwrap();
-        cache.insert(hnr, stage);
+    fn insert(&mut self, hnr: HeightAndRound, stage: ValidatorStage) {
+        self.0.insert(hnr, stage);
     }
 
-    fn remove(&self, hnr: &HeightAndRound) -> Result<ValidatorStage, ProposalHandlingError> {
-        let mut cache = self.0.lock().unwrap();
-        cache.remove(hnr).ok_or_else(|| {
+    fn remove(&mut self, hnr: &HeightAndRound) -> Result<ValidatorStage, ProposalHandlingError> {
+        self.0.remove(hnr).ok_or_else(|| {
             ProposalHandlingError::Recoverable(ProposalError::ValidatorStageNotFound(*hnr))
         })
     }
@@ -831,7 +826,7 @@ impl ValidatorCache {
 #[allow(clippy::too_many_arguments)]
 fn execute_deferred_for_next_height<T: TransactionExt>(
     height: u64,
-    validator_cache: ValidatorCache,
+    validator_cache: &mut ValidatorCache,
     deferred_executions: &mut HashMap<HeightAndRound, DeferredExecution>,
     batch_execution_manager: &mut BatchExecutionManager,
     storage: Storage,
@@ -1047,7 +1042,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
     incoming_proposals: &mut HashMap<HeightAndRound, ProposalPartsValidator>,
     finalized_blocks: &mut HashMap<HeightAndRound, ConsensusFinalizedL2Block>,
     decided_blocks: DecidedBlocks,
-    mut validator_cache: ValidatorCache,
+    validator_cache: &mut ValidatorCache,
     deferred_executions: &mut HashMap<HeightAndRound, DeferredExecution>,
     readonly_storage: Storage,
     batch_execution_manager: &mut BatchExecutionManager,
@@ -1214,7 +1209,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
                 batch_execution_manager,
                 decided_blocks,
                 finalized_blocks,
-                &mut validator_cache,
+                validator_cache,
                 gas_price_provider.clone(),
                 l2_gas_price_provider.clone(),
                 worker_pool,
@@ -1495,9 +1490,9 @@ fn update_info_watch(
 
 #[cfg(test)]
 mod tests {
-
     use std::num::NonZeroUsize;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use pathfinder_common::{BlockHash, ConsensusFinalizedL2Block, StateCommitment};
     use pathfinder_compiler::{BlockifierLibfuncs, ResourceLimits};
@@ -1538,7 +1533,7 @@ mod tests {
             let mut incoming_proposals = HashMap::new();
             let mut finalized_blocks = HashMap::new();
             let mut deferred_executions = HashMap::new();
-            let validator_cache = ValidatorCache::new();
+            let mut validator_cache = ValidatorCache::new();
 
             let mut db_conn = storage.connection().unwrap();
 
@@ -1573,7 +1568,7 @@ mod tests {
                             &mut incoming_proposals,
                             &mut finalized_blocks,
                             DecidedBlocks::default(),
-                            validator_cache.clone(),
+                            &mut validator_cache,
                             &mut deferred_executions,
                             storage.clone(),
                             &mut batch_execution_manager,
