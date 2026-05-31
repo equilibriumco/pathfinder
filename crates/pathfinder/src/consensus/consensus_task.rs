@@ -45,7 +45,7 @@ pub fn spawn(
     wal_directory: PathBuf,
     tx_to_p2p: mpsc::Sender<P2PTaskEvent>,
     mut rx_from_p2p: mpsc::Receiver<ConsensusTaskEvent>,
-    main_storage: Storage,
+    storage: Storage,
     data_directory: &Path,
     compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
@@ -55,24 +55,23 @@ pub fn spawn(
     let data_directory = data_directory.to_path_buf();
 
     util::task::spawn(async move {
-        let main_storage_clone = main_storage.clone();
+        let storage_clone = storage.clone();
         let account = util::task::spawn_blocking(move |_| {
-            let mut db_conn = main_storage_clone.connection()?;
+            let mut db_conn = storage_clone.connection()?;
             let db_txn = db_conn.transaction()?;
             Account::from_storage(&db_txn)
         })
         .await??;
 
-        let highest_committed = highest_committed(&main_storage)
+        let highest_committed = highest_committed(&storage)
             .context("Failed to read highest committed block at startup")?;
         // Get the validator address and validator set provider
         let validator_address = config.my_validator_address;
         let validator_set_provider =
-            L2ValidatorSetProvider::new(main_storage.clone(), chain_id, config.clone());
+            L2ValidatorSetProvider::new(storage.clone(), chain_id, config.clone());
 
         // Get the proposer selector
-        let proposer_selector =
-            L2ProposerSelector::new(main_storage.clone(), chain_id, config.clone());
+        let proposer_selector = L2ProposerSelector::new(storage.clone(), chain_id, config.clone());
 
         let mut consensus =
             Consensus::<ConsensusValue, ContractAddress, L2ProposerSelector>::recover_with_proposal_selector(
@@ -90,7 +89,7 @@ pub fn spawn(
             // Compute the next height to work on using all available information:
             // - max_active_height: highest incomplete/active height being tracked
             // - last_decided_height: highest decided height (even if not actively tracked)
-            // - highest_committed + 1: next height after what's been committed to main DB
+            // - highest_committed + 1: next height after what's been committed to DB
             let next_height = [
                 consensus.max_active_height().unwrap_or(0),
                 consensus.last_decided_height().unwrap_or(0),
@@ -153,7 +152,7 @@ pub fn spawn(
 
                             dummy_proposal::wait_for_parent_committed(
                                 height,
-                                main_storage.clone(),
+                                storage.clone(),
                                 Duration::from_millis(50),
                             )
                             .await
@@ -164,7 +163,7 @@ pub fn spawn(
                                 round.into(),
                                 &account,
                                 validator_address,
-                                main_storage.clone(),
+                                storage.clone(),
                                 compiler_resource_limits,
                                 blockifier_libfuncs,
                             ) {
@@ -367,9 +366,9 @@ pub fn spawn(
     })
 }
 
-/// Reads the highest committed block number from main storage.
-fn highest_committed(main_storage: &Storage) -> anyhow::Result<Option<u64>> {
-    let mut db_conn = main_storage
+/// Reads the highest committed block number from storage.
+fn highest_committed(storage: &Storage) -> anyhow::Result<Option<u64>> {
+    let mut db_conn = storage
         .connection()
         .context("Failed to create database connection for reading highest committed block")?;
     let db_txn = db_conn

@@ -128,7 +128,7 @@ pub fn spawn(
     mut rx_from_consensus: mpsc::Receiver<P2PTaskEvent>,
     mut rx_from_sync: mpsc::Receiver<SyncMessageToConsensus>,
     info_watch_tx: watch::Sender<consensus_info::ConsensusInfo>,
-    main_storage: Storage,
+    storage: Storage,
     mut finalized_blocks: HashMap<HeightAndRound, ConsensusFinalizedL2Block>,
     data_directory: &Path,
     compiler_resource_limits: pathfinder_compiler::ResourceLimits,
@@ -154,7 +154,7 @@ pub fn spawn(
 
     let l2_gas_price_provider = gas_price_provider.as_ref().map(|_| {
         let provider = L2GasPriceProvider::new();
-        if let Err(e) = seed_l2_provider_from_db(&provider, &main_storage) {
+        if let Err(e) = seed_l2_provider_from_db(&provider, &storage) {
             tracing::warn!("Failed to seed L2 gas price provider from DB: {e}");
         }
         provider
@@ -181,10 +181,10 @@ pub fn spawn(
     let data_directory = data_directory.to_path_buf();
 
     let jh = util::task::spawn(async move {
-        let main_readonly_storage = main_storage.clone();
-        let mut main_db_conn = main_storage
+        let readonly_storage = storage.clone();
+        let mut db_conn = storage
             .connection()
-            .context("Creating main database connection")?;
+            .context("Creating database connection")?;
         let gossip_handler = GossipHandler::new(validator_address, GossipRetryConfig::default());
 
         let validator_cache = ValidatorCache::new();
@@ -238,9 +238,9 @@ pub fn spawn(
 
             let success = tokio::task::block_in_place(|| {
                 tracing::debug!("creating DB txs");
-                let mut main_db_tx = main_db_conn
+                let mut db_tx = db_conn
                     .transaction_with_behavior(TransactionBehavior::Immediate)
-                    .context("Create main database transaction")?;
+                    .context("Create database transaction")?;
 
                 let success = match p2p_task_event {
                     P2PTaskEvent::P2PEvent(event) => {
@@ -257,9 +257,9 @@ pub fn spawn(
                         //
                         // This call may yield unreliable results if history_depth is too small and
                         // the currently decided upon and finalized block has not been committed by
-                        // the sync task yet, because we're only checking the main DB here.
+                        // the sync task yet, because we're only checking the DB here.
                         if is_outdated_p2p_event(
-                            &main_db_tx,
+                            &db_tx,
                             &event.kind,
                             config.history_depth,
                             &incoming_proposals,
@@ -282,7 +282,7 @@ pub fn spawn(
                                     decided_blocks.clone(),
                                     vcache,
                                     &mut deferred_executions,
-                                    main_readonly_storage.clone(),
+                                    readonly_storage.clone(),
                                     &mut batch_execution_manager,
                                     &data_directory,
                                     gas_price_provider.clone(),
@@ -416,7 +416,7 @@ pub fn spawn(
                                     &validator_cache,
                                     &mut deferred_executions,
                                     &mut batch_execution_manager,
-                                    main_readonly_storage.clone(),
+                                    readonly_storage.clone(),
                                     decided_blocks.clone(),
                                     &mut finalized_blocks,
                                     gas_price_provider.clone(),
@@ -432,11 +432,11 @@ pub fn spawn(
 
                                 let starknet_version = block.header.starknet_version;
                                 let state_commitment = update_starknet_state(
-                                    &main_db_tx,
+                                    &db_tx,
                                     block.state_update.as_ref(),
                                     verify_tree_hashes,
                                     block.header.number,
-                                    main_readonly_storage.clone(),
+                                    readonly_storage.clone(),
                                 )
                                 .context("Updating Starknet state")
                                 .map(|(storage, class)| {
@@ -444,8 +444,8 @@ pub fn spawn(
                                 });
 
                                 // Do not commit this.
-                                drop(main_db_tx);
-                                main_db_tx = main_db_conn
+                                drop(db_tx);
+                                db_tx = db_conn
                                     .transaction_with_behavior(TransactionBehavior::Immediate)
                                     .context("Create database transaction")?;
 
@@ -544,7 +544,7 @@ pub fn spawn(
                     },
                     // Consensus has reached a positive decision on this proposal so the proposal's
                     // execution needs to be finalized and the resulting block has to be committed
-                    // to the main database.
+                    // to the database.
                     P2PTaskEvent::MarkBlockAsDecidedAndCleanUp(height_and_round, value) => {
                         tracing::info!(
                             "🖧  💾 {validator_address} Marking block at {height_and_round} as \
@@ -579,7 +579,7 @@ pub fn spawn(
                         );
 
                         // Remove all finalized blocks for previous rounds at this height
-                        // because they will not be committed to the main DB.
+                        // because they will not be committed to the DB.
                         finalized_blocks.retain(|hnr, _| hnr.height() != height_and_round.height());
 
                         tracing::debug!(
@@ -634,14 +634,14 @@ pub fn spawn(
                         // consensus for some nodes due to low network latency and their consensus
                         // engines not notifying those nodes internally fast enough that the
                         // executed proposal has been decided upon. In such case we can check if the
-                        // finalized block has already been committed to the main DB by the fgw sync
-                        // task without waiting for a commit confirmation which had already arrived
-                        // in the past.
+                        // finalized block has already been committed to the DB by the fgw sync task
+                        // without waiting for a commit confirmation which had already arrived in
+                        // the past.
                         let block_number = BlockNumber::new(height_and_round.height())
                             .context("height exceeds i64::MAX")?;
 
                         let is_already_committed =
-                            main_db_tx.block_exists(BlockId::Number(block_number))?;
+                            db_tx.block_exists(BlockId::Number(block_number))?;
 
                         let success = if decided_block_present || is_already_committed {
                             // A committed block is always a decided block too
@@ -650,7 +650,7 @@ pub fn spawn(
                                 &validator_cache,
                                 &mut deferred_executions,
                                 &mut batch_execution_manager,
-                                main_readonly_storage.clone(),
+                                readonly_storage.clone(),
                                 decided_blocks.clone(),
                                 &mut finalized_blocks,
                                 gas_price_provider.clone(),
@@ -691,7 +691,7 @@ pub fn spawn(
                     }
                 }?;
 
-                main_db_tx.commit()?;
+                db_tx.commit()?;
                 tracing::debug!("DB txs committed");
                 Ok(success)
             })?;
@@ -777,7 +777,7 @@ fn on_finalized_block_decided(
     validator_cache: &ValidatorCache,
     deferred_executions: &mut HashMap<HeightAndRound, DeferredExecution>,
     batch_execution_manager: &mut BatchExecutionManager,
-    main_db: Storage,
+    storage: Storage,
     decided_blocks: DecidedBlocks,
     finalized_blocks: &mut HashMap<HeightAndRound, ConsensusFinalizedL2Block>,
     gas_price_provider: Option<L1GasPriceProvider>,
@@ -790,7 +790,7 @@ fn on_finalized_block_decided(
         validator_cache.clone(),
         deferred_executions,
         batch_execution_manager,
-        main_db,
+        storage,
         finalized_blocks,
         decided_blocks,
         gas_price_provider,
@@ -834,7 +834,7 @@ fn execute_deferred_for_next_height<T: TransactionExt>(
     validator_cache: ValidatorCache,
     deferred_executions: &mut HashMap<HeightAndRound, DeferredExecution>,
     batch_execution_manager: &mut BatchExecutionManager,
-    main_db: Storage,
+    storage: Storage,
     finalized_blocks: &mut HashMap<HeightAndRound, ConsensusFinalizedL2Block>,
     decided_blocks: DecidedBlocks,
     gas_price_provider: Option<L1GasPriceProvider>,
@@ -861,7 +861,7 @@ fn execute_deferred_for_next_height<T: TransactionExt>(
             .try_into_block_info_stage()
             .map_err(|e| ProposalHandlingError::Recoverable(e.into()))?
             .validate_block_info(
-                main_db,
+                storage,
                 decided_blocks,
                 gas_price_provider,
                 None, // TODO: Add L1ToFriValidator when oracle is available
@@ -946,7 +946,7 @@ fn is_outdated_p2p_event(
 
     // Check the consensus database for the latest finalized height, which
     // represents blocks that consensus has decided upon (even if not yet
-    // committed to main DB).
+    // committed to DB).
     let latest_finalized = incoming_proposals.keys().map(|hnr| hnr.height()).max();
 
     if let Some(latest_finalized) = latest_finalized {
@@ -960,7 +960,7 @@ fn is_outdated_p2p_event(
             return Ok(true);
         }
     } else {
-        // Fallback to main database if no finalized blocks in consensus cache yet
+        // Fallback to database if no finalized blocks in consensus cache yet
         let latest_committed = db_tx
             .block_number(BlockId::Latest)
             .context("Failed to query latest committed block for outdated event check")?;
@@ -1049,7 +1049,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
     decided_blocks: DecidedBlocks,
     mut validator_cache: ValidatorCache,
     deferred_executions: &mut HashMap<HeightAndRound, DeferredExecution>,
-    main_readonly_storage: Storage,
+    readonly_storage: Storage,
     batch_execution_manager: &mut BatchExecutionManager,
     data_directory: &Path,
     gas_price_provider: Option<L1GasPriceProvider>,
@@ -1076,7 +1076,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
         (ValidationResult::Accepted, ProposalPart::Init(init)) => {
             let validator = ValidatorBlockInfoStage::new(chain_id, init)?;
             let defer = {
-                let mut db_conn = main_readonly_storage.connection().context(
+                let mut db_conn = readonly_storage.connection().context(
                     "Creating database connection for deferral check in block info validation",
                 )?;
                 let db_tx = db_conn.transaction().context(
@@ -1098,7 +1098,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
             }
 
             let new_validator = validator.validate_block_info(
-                main_readonly_storage,
+                readonly_storage,
                 decided_blocks,
                 gas_price_provider,
                 None, // TODO: Add L1ToFriValidator when oracle is available
@@ -1123,7 +1123,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
                 height_and_round,
                 tx_batch,
                 validator_stage,
-                main_readonly_storage.clone(),
+                readonly_storage.clone(),
                 decided_blocks.clone(),
                 deferred_executions,
             )?;
@@ -1209,7 +1209,7 @@ fn handle_incoming_proposal_part<T: TransactionExt>(
                 proposer_address,
                 valid_round,
                 executed_transaction_count,
-                main_readonly_storage.clone(),
+                readonly_storage.clone(),
                 deferred_executions,
                 batch_execution_manager,
                 decided_blocks,
@@ -1240,7 +1240,7 @@ fn defer_or_execute_proposal_fin<T: TransactionExt>(
     proposer_address: ContractAddress,
     valid_round: Option<u32>,
     executed_transaction_count: u64,
-    main_db: Storage,
+    storage: Storage,
     deferred_executions: &mut HashMap<HeightAndRound, DeferredExecution>,
     batch_execution_manager: &mut BatchExecutionManager,
     decided_blocks: DecidedBlocks,
@@ -1257,14 +1257,10 @@ fn defer_or_execute_proposal_fin<T: TransactionExt>(
         pol_round: valid_round.map(Round::new).unwrap_or(Round::nil()),
     };
 
-    let mut main_db_conn = main_db.connection()?;
-    let main_db_tx = main_db_conn.transaction()?;
+    let mut db_conn = storage.connection()?;
+    let db_tx = db_conn.transaction()?;
 
-    if should_defer_validation(
-        height_and_round.height(),
-        decided_blocks.clone(),
-        &main_db_tx,
-    )? {
+    if should_defer_validation(height_and_round.height(), decided_blocks.clone(), &db_tx)? {
         // The proposal cannot be finalized yet, because the previous
         // block is not committed yet. Defer its finalization.
         tracing::debug!(
@@ -1287,7 +1283,7 @@ fn defer_or_execute_proposal_fin<T: TransactionExt>(
             let mut validator = match validator_stage {
                 ValidatorStage::BlockInfo(stage) => {
                     stage.validate_block_info(
-                        main_db.clone(),
+                        storage.clone(),
                         decided_blocks,
                         gas_price_provider,
                         None, // TODO: Add L1ToFriValidator when oracle is available
@@ -1527,7 +1523,7 @@ mod tests {
     #[test]
     fn regression_rollback_to_nonzero_batch_from_h10_onwards_clears_system_contract_0x1() {
         let worker_pool = {
-            let main_storage = StorageBuilder::in_tempdir().unwrap();
+            let storage = StorageBuilder::in_tempdir().unwrap();
             let worker_pool = create_test_worker_pool();
             let mut batch_execution_manager = BatchExecutionManager::new(
                 None,
@@ -1544,7 +1540,7 @@ mod tests {
             let mut deferred_executions = HashMap::new();
             let validator_cache = ValidatorCache::new();
 
-            let mut db_conn = main_storage.connection().unwrap();
+            let mut db_conn = storage.connection().unwrap();
 
             for h in 0..20 {
                 let db_txn = db_conn.transaction().unwrap();
@@ -1553,7 +1549,7 @@ mod tests {
                     h,
                     Round::new(0),
                     ContractAddress::ZERO,
-                    main_storage.clone(),
+                    storage.clone(),
                     ResourceLimits::for_test(),
                     BlockifierLibfuncs::default(),
                     // The smallest config that reproduced the issue until it was fixed
@@ -1579,7 +1575,7 @@ mod tests {
                             DecidedBlocks::default(),
                             validator_cache.clone(),
                             &mut deferred_executions,
-                            main_storage.clone(),
+                            storage.clone(),
                             &mut batch_execution_manager,
                             &dummy_data_dir,
                             None,
@@ -1599,7 +1595,7 @@ mod tests {
                 }
 
                 // Commit block at `h`, otherwise h+1 will be deferred
-                let main_db_tx = db_conn.transaction().unwrap();
+                let db_tx = db_conn.transaction().unwrap();
                 let ConsensusFinalizedL2Block {
                     header,
                     state_update,
@@ -1612,11 +1608,11 @@ mod tests {
                     |_| BlockHash(Felt::from_u64(h)),
                 );
 
-                main_db_tx.insert_block_header(&header).unwrap();
-                main_db_tx
+                db_tx.insert_block_header(&header).unwrap();
+                db_tx
                     .insert_state_update_data(header.number, &state_update)
                     .unwrap();
-                main_db_tx.commit().unwrap();
+                db_tx.commit().unwrap();
             }
 
             worker_pool.clone()
