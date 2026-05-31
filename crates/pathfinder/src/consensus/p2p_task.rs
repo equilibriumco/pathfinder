@@ -837,18 +837,15 @@ fn execute_deferred_for_next_height<T: TransactionExt>(
     worker_pool: ValidatorWorkerPool,
     my_starknet_version: StarknetVersion,
 ) -> Result<Option<(HeightAndRound, ProposalCommitmentWithOrigin)>, ProposalHandlingError> {
-    // Retrieve and execute any deferred transactions or proposal finalizations
-    // for the next height, if any. Sort by (height, round) in ascending order.
+    // Retrieve deferred transactions or proposal finalizations for the next
+    // height. Lower rounds are intentionally dropped as outdated.
     let deferred = deferred_executions
         .extract_if(|hnr, _| hnr.height() == height + 1)
-        .collect::<BTreeMap<_, _>>();
+        .max_by_key(|(hnr, _)| *hnr);
 
     // Execute deferred transactions and proposal finalization only for the last
-    // stored deferred round in the height, because if there are any deferred
-    // transactions or proposal finalization for lower rounds, they are already
-    // outdated and can be discarded. `deferred_executions` is sorted by (height,
-    // round) in ascending order, so we can just take the last entry.
-    if let Some((hnr, deferred)) = deferred.into_iter().next_back() {
+    // stored deferred round in the height, because lower rounds are outdated.
+    if let Some((hnr, deferred)) = deferred {
         tracing::debug!("🖧  ⚙️ executing deferred proposal for height and round {hnr}");
 
         let validator_stage = validator_cache.remove(&hnr)?;
