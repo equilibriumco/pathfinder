@@ -385,6 +385,12 @@ impl StateUpdate {
             .extend(other.declared_cairo_classes.iter().copied());
         self.declared_sierra_classes
             .extend(other.declared_sierra_classes.iter().map(|(k, v)| (*k, *v)));
+        self.migrated_compiled_classes.extend(
+            other
+                .migrated_compiled_classes
+                .iter()
+                .map(|(k, v)| (*k, *v)),
+        );
 
         self
     }
