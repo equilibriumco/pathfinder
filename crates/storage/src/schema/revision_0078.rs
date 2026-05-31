@@ -107,32 +107,7 @@ fn migrate_contract_trie(
     )?;
     tx.execute_batch("DELETE FROM idx_to_contract_map")?;
 
-    let max_idx: Option<u64> = tx
-        .prepare("SELECT MAX(idx) FROM trie_contracts")?
-        .query_row([], |row| row.get(0))?;
-
-    let Some(max_idx) = max_idx else {
-        return Ok(());
-    };
-
-    // Prune-mode databases can have a very high max_idx with comparatively few
-    // surviving rows (the table was originally insert-only and rows were deleted
-    // by id). We can't use density as a corruption signal — bound bitset memory
-    // directly instead. 2 GiB allows max_idx up to ~1.7e10, well past any
-    // realistic chain.
-    let num_words = max_idx
-        .checked_add(1)
-        .context("max_idx overflow in bitset size calculation")?
-        .div_ceil(64);
-    let bitset_bytes = num_words.checked_mul(8).context("bitset size overflow")?;
-    const MAX_BITSET_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-    anyhow::ensure!(
-        bitset_bytes <= MAX_BITSET_BYTES,
-        "trie_contracts max idx ({max_idx}) would require a {bitset_bytes}-byte bitset, exceeding \
-         the {MAX_BITSET_BYTES}-byte cap; database may be corrupt"
-    );
-
-    let mut migrated = MigrationBitset::new(max_idx)?;
+    let mut migrated = roaring::RoaringTreemap::new();
 
     let number_of_contract_roots: usize = tx
         .prepare("SELECT COUNT(*) FROM contract_roots")?
@@ -184,7 +159,7 @@ fn migrate_contract_trie(
 
 fn walk_tree(
     tx: &rusqlite::Transaction<'_>,
-    migrated: &mut MigrationBitset,
+    migrated: &mut roaring::RoaringTreemap,
     contract_address: &[u8; 32],
     node_idx: u64,
     rocksdb: &crate::RocksDBInner,
@@ -193,7 +168,7 @@ fn walk_tree(
 ) -> anyhow::Result<()> {
     const CODEC_CFG: bincode::config::Configuration = bincode::config::standard();
 
-    if migrated.is_set(node_idx) {
+    if migrated.contains(node_idx) {
         return Ok(());
     }
 
@@ -266,7 +241,7 @@ fn walk_tree(
         insert.execute(rusqlite::params![node_idx, contract_address.as_slice()])?;
     }
 
-    migrated.set(node_idx);
+    migrated.insert(node_idx);
 
     Ok(())
 }
@@ -458,36 +433,6 @@ fn migrate_contract_removal_table(
         );
     }
     Ok(())
-}
-
-struct MigrationBitset {
-    bits: Vec<u64>,
-}
-
-impl MigrationBitset {
-    fn new(max_idx: u64) -> anyhow::Result<Self> {
-        let num_bits = max_idx
-            .checked_add(1)
-            .context("max_idx overflow in MigrationBitset")?;
-        let num_words = num_bits.div_ceil(64) as usize;
-        Ok(Self {
-            bits: vec![0u64; num_words],
-        })
-    }
-
-    fn is_set(&self, idx: u64) -> bool {
-        let word = (idx / 64) as usize;
-        let bit = idx % 64;
-        self.bits.get(word).is_some_and(|w| w & (1 << bit) != 0)
-    }
-
-    fn set(&mut self, idx: u64) {
-        let word = (idx / 64) as usize;
-        let bit = idx % 64;
-        if let Some(w) = self.bits.get_mut(word) {
-            *w |= 1 << bit;
-        }
-    }
 }
 
 fn contract_state_hashes_key(block_number: u64, contract_address: &[u8; 32]) -> [u8; 40] {

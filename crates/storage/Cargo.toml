@@ -33,6 +33,7 @@ r2d2 = { workspace = true }
 r2d2_sqlite = { workspace = true }
 rand = { workspace = true }
 rayon = { workspace = true }
+roaring = { workspace = true }
 rusqlite = { workspace = true, features = ["bundled", "array", "hooks"] }
 rust-rocksdb = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
