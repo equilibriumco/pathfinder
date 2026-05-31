@@ -77,24 +77,20 @@ impl BatchExecutionManager {
         height_and_round: HeightAndRound,
         transactions: Vec<proto_consensus::Transaction>,
         validator_stage: ValidatorStage,
-        main_db: Storage,
+        storage: Storage,
         decided_blocks: DecidedBlocks,
         deferred_executions: &mut HashMap<HeightAndRound, DeferredExecution>,
     ) -> Result<ValidatorStage, ProposalHandlingError> {
-        let mut main_db_conn = main_db
+        let mut db_conn = storage
             .connection()
             .context("Creating database connection for batch execution with deferral")
             .map_err(ProposalHandlingError::Fatal)?;
-        let main_db_tx = main_db_conn
+        let db_tx = db_conn
             .transaction()
             .context("Creating database transaction for batch execution with deferral")
             .map_err(ProposalHandlingError::Fatal)?;
         // Check if execution should be deferred
-        if should_defer_validation(
-            height_and_round.height(),
-            decided_blocks.clone(),
-            &main_db_tx,
-        )? {
+        if should_defer_validation(height_and_round.height(), decided_blocks.clone(), &db_tx)? {
             tracing::debug!(
                 "🖧  ⚙️ transaction batch execution for height and round {height_and_round} is \
                  deferred"
@@ -129,7 +125,7 @@ impl BatchExecutionManager {
             match validator_stage {
                 ValidatorStage::BlockInfo(stage) => {
                     stage.validate_block_info(
-                        main_db.clone(),
+                        storage.clone(),
                         decided_blocks,
                         self.gas_price_provider.clone(),
                         None, // TODO: Add L1ToFriValidator when oracle is available

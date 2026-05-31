@@ -164,7 +164,7 @@ impl ValidatorBlockInfoStage {
     #[allow(clippy::too_many_arguments)]
     pub fn validate_block_info(
         self,
-        main_storage: Storage,
+        storage: Storage,
         decided_blocks: DecidedBlocks,
         gas_price_provider: Option<L1GasPriceProvider>,
         l1_to_fri_validator: Option<&L1ToFriValidator>,
@@ -201,7 +201,7 @@ impl ValidatorBlockInfoStage {
         .entered();
 
         let starknet_version = validate_starknet_version(starknet_version, my_starknet_version)?;
-        validate_block_info_timestamp(height, timestamp, &main_storage, decided_blocks.clone())?;
+        validate_block_info_timestamp(height, timestamp, &storage, decided_blocks.clone())?;
 
         // Validate L1 gas prices if a provider is available
         if let Some(ref provider) = gas_price_provider {
@@ -252,7 +252,7 @@ impl ValidatorBlockInfoStage {
             events: Vec::new(),
             executor: None,
             worker_pool,
-            main_storage,
+            storage,
             declared_classes: Vec::new(),
             decided_blocks,
         })
@@ -264,7 +264,7 @@ impl ValidatorBlockInfoStage {
     /// Used only for testing and dummy proposal creation.
     pub fn skip_validation(
         self,
-        main_storage: Storage,
+        storage: Storage,
         worker_pool: ValidatorWorkerPool,
         decided_blocks: DecidedBlocks,
     ) -> Result<ValidatorTransactionBatchStage, ProposalHandlingError> {
@@ -334,7 +334,7 @@ impl ValidatorBlockInfoStage {
             events: Vec::new(),
             executor: None,
             worker_pool,
-            main_storage,
+            storage,
             declared_classes: Vec::new(),
             decided_blocks,
         })
@@ -364,7 +364,7 @@ fn validate_starknet_version(
 fn validate_block_info_timestamp(
     height: u64,
     proposal_timestamp: u64,
-    main_storage: &Storage,
+    storage: &Storage,
     decided_blocks: DecidedBlocks,
 ) -> Result<(), ProposalHandlingError> {
     let Some(parent_height) = height.checked_sub(1) else {
@@ -382,7 +382,7 @@ fn validate_block_info_timestamp(
     let parent_timestamp = match decided_parent_timestamp {
         Some(ts) => ts,
         None => {
-            let mut db_conn = main_storage
+            let mut db_conn = storage
                 .connection()
                 .context("Creating database connection for timestamp validation")
                 .map_err(ProposalHandlingError::fatal)?;
@@ -525,7 +525,7 @@ pub struct ValidatorTransactionBatchStage {
     executor: Option<ConcurrentBlockExecutor>,
     worker_pool: ValidatorWorkerPool,
     /// Storage for creating new connections
-    main_storage: Storage,
+    storage: Storage,
     /// Accumulated declared classes across batches. Only non-reverted
     /// declarations are included.
     declared_classes: Vec<DeclaredClass>,
@@ -604,7 +604,7 @@ impl ValidatorTransactionBatchStage {
                     self.block_info,
                     ETH_FEE_TOKEN_ADDRESS,
                     STRK_FEE_TOKEN_ADDRESS,
-                    self.main_storage.connection().map_err(|e| {
+                    self.storage.connection().map_err(|e| {
                         ProposalHandlingError::fatal(
                             anyhow::Error::from(e).context("Creating database connection"),
                         )
@@ -776,8 +776,8 @@ impl ValidatorTransactionBatchStage {
 
     /// Finalizes the block, producing a header with all commitments except
     /// the state commitment and block hash, which are computed in the sync task
-    /// just before the block is committed into main storage. Also verifies that
-    /// the computed proposal commitment matches the expected one.
+    /// just before the block is committed into storage. Also verifies that the
+    /// computed proposal commitment matches the expected one.
     pub fn consensus_finalize(
         self,
         expected_proposal_commitment: ProposalCommitment,
@@ -1493,7 +1493,7 @@ mod tests {
     /// an empty state diff.
     #[test]
     fn test_empty_proposal_finalization() {
-        let main_storage = StorageBuilder::in_tempdir().expect("Failed to create temp database");
+        let storage = StorageBuilder::in_tempdir().expect("Failed to create temp database");
         let chain_id = ChainId::SEPOLIA_TESTNET;
         let worker_pool = create_test_worker_pool();
 
@@ -1523,7 +1523,7 @@ mod tests {
 
         let validator_transaction_batch = validator_block_info
             .validate_block_info(
-                main_storage.clone(),
+                storage.clone(),
                 DecidedBlocks::default(),
                 None,
                 None,

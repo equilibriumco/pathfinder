@@ -38,7 +38,7 @@ use crate::SyncMessageToConsensus;
 /// Helper struct to setup and manage the test environment (databases,
 /// channels, mock client)
 struct TestEnvironment {
-    main_storage: Storage,
+    storage: Storage,
     p2p_client_receiver: mpsc::UnboundedReceiver<p2p::core::Command<p2p::consensus::Command>>,
     p2p_tx: mpsc::UnboundedSender<Event>,
     tx_to_p2p: mpsc::Sender<P2PTaskEvent>,
@@ -67,7 +67,7 @@ impl TestEnvironment {
         finalized_blocks: HashMap<HeightAndRound, ConsensusFinalizedL2Block>,
     ) -> Self {
         // Initialize temp pathfinder and consensus databases
-        let main_storage = StorageBuilder::in_tempdir().expect("Failed to create temp database");
+        let storage = StorageBuilder::in_tempdir().expect("Failed to create temp database");
 
         // Mock channels for p2p communication
         let (p2p_tx, p2p_rx) = mpsc::unbounded_channel();
@@ -96,7 +96,7 @@ impl TestEnvironment {
             rx_from_consensus,
             rx_from_sync,
             info_watch_tx,
-            main_storage.clone(),
+            storage.clone(),
             finalized_blocks,
             // Only used for failure injection, which does not happen in these tests
             &PathBuf::default(),
@@ -108,7 +108,7 @@ impl TestEnvironment {
         );
 
         Self {
-            main_storage,
+            storage,
             p2p_client_receiver: client_receiver,
             p2p_tx,
             tx_to_p2p,
@@ -122,7 +122,7 @@ impl TestEnvironment {
 
     fn create_committed_block(&self, height: u64) {
         let block_id_felt = Felt::from(height);
-        let mut db_conn = self.main_storage.connection().unwrap();
+        let mut db_conn = self.storage.connection().unwrap();
         let db_tx = db_conn.transaction().unwrap();
 
         let header = BlockHeader::builder()

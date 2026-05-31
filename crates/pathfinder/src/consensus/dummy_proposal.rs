@@ -31,10 +31,10 @@ use crate::devnet::{self, strictly_increasing_timestamp, Account};
 
 // TODO consider waiting for the parent block to land in the decided blocks
 /// Blocks consensus tasks's processing loop until the parent block of height is
-/// committed in main storage without blocking the async runtime.
+/// committed in storage without blocking the async runtime.
 pub(crate) async fn wait_for_parent_committed(
     height: u64,
-    main_storage: Storage,
+    storage: Storage,
     poll_interval: Duration,
 ) -> anyhow::Result<()> {
     let parent_number = height.checked_sub(1);
@@ -53,10 +53,10 @@ pub(crate) async fn wait_for_parent_committed(
                 }
 
                 {
-                    let mut main_db_conn = main_storage.connection()?;
-                    let main_db_txn = main_db_conn.transaction()?;
+                    let mut db_conn = storage.connection()?;
+                    let db_txn = db_conn.transaction()?;
 
-                    if main_db_txn
+                    if db_txn
                         .block_exists(BlockId::Number(BlockNumber::new_or_panic(parent_number)))?
                     {
                         break;
@@ -90,19 +90,19 @@ pub(crate) async fn wait_for_parent_committed(
 const EMPTY_PROPOSAL_PROBABILITY: f64 = 0.25;
 
 /// Creates a dummy proposal for the given height and round, filling it with
-/// realistic transactions based on the state of the main storage DB, if it is
-/// bootstrapped, or with invalid L1 handler transactions otherwise.
+/// realistic transactions based on the state of the DB, if it is bootstrapped,
+/// or with invalid L1 handler transactions otherwise.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn create(
     height: u64,
     round: Round,
     account: &Account,
     proposer: ContractAddress,
-    main_storage: Storage,
+    storage: Storage,
     compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
 ) -> anyhow::Result<(Vec<ProposalPart>, ConsensusFinalizedL2Block)> {
-    let mut db_conn = main_storage.connection()?;
+    let mut db_conn = storage.connection()?;
     let db_txn = db_conn.transaction()?;
 
     if devnet::devnet_genesis_exists(&db_txn)? {
@@ -112,7 +112,7 @@ pub(crate) fn create(
             round,
             account,
             proposer,
-            main_storage,
+            storage,
             compiler_resource_limits,
             blockifier_libfuncs,
         )
@@ -122,7 +122,7 @@ pub(crate) fn create(
             height,
             round,
             proposer,
-            main_storage,
+            storage,
             compiler_resource_limits,
             blockifier_libfuncs,
             None,
@@ -143,7 +143,7 @@ pub(crate) fn create_from_bootstrapped_devnet_db(
     round: Round,
     account: &Account,
     proposer: ContractAddress,
-    main_storage: Storage,
+    storage: Storage,
     compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
 ) -> anyhow::Result<(Vec<ProposalPart>, ConsensusFinalizedL2Block)> {
@@ -255,7 +255,7 @@ pub(crate) fn create_from_bootstrapped_devnet_db(
         round,
         Address(proposer.0),
         latest_timestamp,
-        main_storage.clone(),
+        storage.clone(),
         worker_pool.clone(),
     )?;
     validator.execute_batch::<ProdTransactionMapper>(
@@ -294,7 +294,7 @@ pub(crate) fn create_with_invalid_l1_handler_transactions(
     height: u64,
     round: Round,
     proposer: ContractAddress,
-    main_storage: Storage,
+    storage: Storage,
     compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
     config: Option<ProposalCreationConfig>,
@@ -362,7 +362,7 @@ pub(crate) fn create_with_invalid_l1_handler_transactions(
     let validator = ValidatorBlockInfoStage::new(ChainId::SEPOLIA_TESTNET, proposal_init)?;
     let worker_pool = ExecutorWorkerPool::<ConcurrentStateReader>::new(1).get();
     let mut validator =
-        validator.skip_validation(main_storage, worker_pool.clone(), DecidedBlocks::default())?;
+        validator.skip_validation(storage, worker_pool.clone(), DecidedBlocks::default())?;
 
     let num_executed_txns = if empty_proposal {
         0
