@@ -39,6 +39,8 @@ fn fetch_class_payloads(
     tx: &Transaction<'_>,
     last_block: BlockNumber,
 ) -> anyhow::Result<Option<ClassPayloads>> {
+    tracing::info!(%last_block, "Scanning input DB for class definition payloads");
+    let scan_start = std::time::Instant::now();
     let mut cairo: Option<SerializedOpaqueClassDefinition> = None;
     let mut sierra: Option<SerializedOpaqueClassDefinition> = None;
     let mut casm: Option<SerializedCasmDefinition> = None;
@@ -46,6 +48,15 @@ fn fetch_class_payloads(
     for b in 0..=last_block.get() {
         if cairo.is_some() && sierra.is_some() && casm.is_some() {
             break;
+        }
+        if b > 0 && b % 10_000 == 0 {
+            tracing::info!(
+                block = b,
+                cairo_found = cairo.is_some(),
+                sierra_found = sierra.is_some(),
+                casm_found = casm.is_some(),
+                "Still scanning for class payloads",
+            );
         }
         let block = BlockNumber::new(b).expect("valid");
         let su = tx
@@ -56,6 +67,11 @@ fn fetch_class_payloads(
             for class_hash in &su.declared_cairo_classes {
                 if let Some(def) = tx.class_definition(*class_hash)? {
                     if !def.as_slice().is_empty() {
+                        tracing::info!(
+                            block = b,
+                            bytes = def.as_slice().len(),
+                            "Found Cairo class payload"
+                        );
                         cairo = Some(def);
                         break;
                     }
@@ -68,6 +84,11 @@ fn fetch_class_payloads(
             if sierra.is_none() {
                 if let Some(def) = tx.class_definition(class_hash)? {
                     if !def.as_slice().is_empty() {
+                        tracing::info!(
+                            block = b,
+                            bytes = def.as_slice().len(),
+                            "Found Sierra class payload"
+                        );
                         sierra = Some(def);
                     }
                 }
@@ -75,6 +96,11 @@ fn fetch_class_payloads(
             if casm.is_none() {
                 if let Some(ca) = tx.casm_definition(class_hash)? {
                     if !ca.as_slice().is_empty() {
+                        tracing::info!(
+                            block = b,
+                            bytes = ca.as_slice().len(),
+                            "Found CASM payload"
+                        );
                         casm = Some(ca);
                     }
                 }
@@ -85,13 +111,20 @@ fn fetch_class_payloads(
         }
     }
 
+    let scan_ms = scan_start.elapsed().as_millis();
     match (cairo, sierra, casm) {
-        (Some(cairo), Some(sierra), Some(casm)) => Ok(Some(ClassPayloads {
-            cairo,
-            sierra,
-            casm,
-        })),
-        _ => Ok(None),
+        (Some(cairo), Some(sierra), Some(casm)) => {
+            tracing::info!(%scan_ms, "Class payload scan complete");
+            Ok(Some(ClassPayloads {
+                cairo,
+                sierra,
+                casm,
+            }))
+        }
+        _ => {
+            tracing::info!(%scan_ms, "Class payload scan finished without finding all payloads");
+            Ok(None)
+        }
     }
 }
 
@@ -232,6 +265,14 @@ fn main() -> anyhow::Result<()> {
     anyhow::ensure!(!sierra_bytes.is_empty(), "sierra_bytes empty");
     anyhow::ensure!(!casm_bytes.is_empty(), "casm_bytes empty");
 
+    tracing::info!(
+        source = class_payload_source,
+        cairo_bytes = cairo_bytes.len(),
+        sierra_bytes = sierra_bytes.len(),
+        casm_bytes = casm_bytes.len(),
+        "Class definition payloads ready",
+    );
+
     let bytes = std::fs::read(&config_path)?;
     let mut config: serde_json::Value = serde_json::from_slice(&bytes)?;
     config["class_payload_source"] = serde_json::json!(class_payload_source);
@@ -273,6 +314,7 @@ fn main() -> anyhow::Result<()> {
         let chunk_end = (chunk_start + PRELOAD_CHUNK_BLOCKS - 1).min(last_block);
 
         // 1. Preload the chunk in one bulk read pass.
+        tracing::info!(chunk_start, chunk_end, "Preloading chunk from input DB");
         let preload_start = std::time::Instant::now();
         let mut chunk: Vec<(BlockNumber, StateUpdate)> =
             Vec::with_capacity((chunk_end - chunk_start + 1) as usize);
@@ -285,6 +327,7 @@ fn main() -> anyhow::Result<()> {
             chunk.push((block_number, state_update));
         }
         let preload_ms = preload_start.elapsed().as_millis();
+        tracing::info!(chunk_start, chunk_end, %preload_ms, "Preloaded chunk from input DB");
         append_input_load_ms(&config_path, preload_ms)?;
 
         // 2. Per-block processing.
