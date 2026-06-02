@@ -2797,6 +2797,100 @@ mod tests {
             }
         }
 
+        /// Two-transaction delta with mixed slot states:
+        ///   - slot 0: fully executed (tx + receipt + state diff)
+        ///   - slot 1: mid-flight (tx only; receipt and state diff `null`)
+        ///
+        /// The three arrays must stay aligned by index.
+        #[test]
+        fn delta_with_aligned_receipts_and_state_diffs() {
+            let json = serde_json::json!({
+                "changed": true,
+                "known_block_identifier": "id-2",
+                "transactions": [
+                    {
+                        "type": "INVOKE_FUNCTION",
+                        "version": "0x1",
+                        "transaction_hash": "0x111",
+                        "sender_address": "0xa",
+                        "calldata": [],
+                        "max_fee": "0x0",
+                        "signature": [],
+                        "nonce": "0x1"
+                    },
+                    {
+                        "type": "INVOKE_FUNCTION",
+                        "version": "0x1",
+                        "transaction_hash": "0x222",
+                        "sender_address": "0xb",
+                        "calldata": [],
+                        "max_fee": "0x0",
+                        "signature": [],
+                        "nonce": "0x2"
+                    }
+                ],
+                "transaction_receipts": [
+                    {
+                        "execution_status": "SUCCEEDED",
+                        "transaction_index": 0,
+                        "transaction_hash": "0x111",
+                        "l2_to_l1_messages": [],
+                        "events": [],
+                        "execution_resources": {
+                            "n_steps": 10,
+                            "builtin_instance_counter": {},
+                            "n_memory_holes": 0
+                        },
+                        "actual_fee": "0x1"
+                    },
+                    null
+                ],
+                "transaction_state_diffs": [
+                    {
+                        "storage_diffs": {
+                            "0xa": [{"key": "0x1", "value": "0x42"}]
+                        },
+                        "deployed_contracts": [],
+                        "old_declared_contracts": [],
+                        "declared_classes": [],
+                        "nonces": {},
+                        "replaced_classes": []
+                    },
+                    null
+                ]
+            });
+
+            let wire: PreConfirmedPollResponseWire = serde_json::from_value(json).unwrap();
+            let response = PreConfirmedPollResponse::try_from(wire).unwrap();
+
+            match response {
+                PreConfirmedPollResponse::Delta {
+                    identifier,
+                    new_transactions,
+                    new_receipts,
+                    new_state_diffs,
+                } => {
+                    assert_eq!(identifier, "id-2");
+                    assert_eq!(new_transactions.len(), 2);
+                    assert_eq!(new_receipts.len(), 2);
+                    assert_eq!(new_state_diffs.len(), 2);
+
+                    // Slot 0: tx, receipt, and state diff all populated.
+                    assert_eq!(new_transactions[0].hash, TransactionHash(felt!("0x111")));
+                    let (receipt, _events) = new_receipts[0].as_ref().expect("receipt for slot 0");
+                    assert_eq!(receipt.transaction_hash, TransactionHash(felt!("0x111")));
+                    let sd = new_state_diffs[0].as_ref().expect("state diff for slot 0");
+                    assert!(!sd.storage_diffs.is_empty());
+
+                    // Slot 1: tx present, receipt and state diff still null.
+                    assert_eq!(new_transactions[1].hash, TransactionHash(felt!("0x222")));
+                    assert!(new_receipts[1].is_none());
+                    assert!(new_state_diffs[1].is_none());
+                }
+                other => panic!("expected Delta, got {other:?}"),
+            }
+        }
+
         #[test]
         fn full_new_style() {
             let mut json = minimal_block_json();
