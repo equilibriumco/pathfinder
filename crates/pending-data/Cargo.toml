@@ -13,4 +13,4 @@ starknet-gateway-types = { path = "../gateway-types" }
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

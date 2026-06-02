@@ -435,6 +435,7 @@ mod tests {
         assert_eq!(cache.subscriber_count(), 0);
     }
 
+    #[tokio::test(start_paused = true)]
     async fn is_idle_after_inactivity_window() {
         let cache = PendingDataCache::new().with_inactivity_timeout(Duration::from_secs(1));
 
