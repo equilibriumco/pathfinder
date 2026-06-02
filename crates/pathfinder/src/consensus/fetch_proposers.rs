@@ -1,5 +1,4 @@
-use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use pathfinder_common::{ChainId, ContractAddress};
 use pathfinder_consensus::{PublicKey, SigningKey, Validator, ValidatorSet};
@@ -8,6 +7,7 @@ use pathfinder_storage::Storage;
 use rand::rngs::OsRng;
 
 use crate::config::ConsensusConfig;
+use crate::consensus::validator_cache::ValidatorCache;
 
 /// A proposer selector that fetches proposers from config or L2.
 #[derive(Clone)]
@@ -18,7 +18,7 @@ pub struct L2ProposerSelector {
     /// Memoized proposer sets keyed by height. `select_proposer` is invoked
     /// multiple times per height (once per round, once per incoming proposal),
     /// and the underlying L2 lookup is expensive, so we cache the result.
-    cache: Arc<RwLock<BTreeMap<u64, Arc<ValidatorSet<ContractAddress>>>>>,
+    cache: ValidatorCache,
 }
 
 impl L2ProposerSelector {
@@ -27,7 +27,7 @@ impl L2ProposerSelector {
             storage,
             chain_id,
             config,
-            cache: Arc::new(RwLock::new(BTreeMap::new())),
+            cache: ValidatorCache::default(),
         }
     }
 
@@ -37,34 +37,15 @@ impl L2ProposerSelector {
         &self,
         height: u64,
     ) -> Result<Arc<ValidatorSet<ContractAddress>>, anyhow::Error> {
-        if let Some(set) = self.cache.read().unwrap().get(&height).cloned() {
-            return Ok(set);
-        }
-
-        let fetched = Arc::new(fetch_proposers(
-            &self.storage,
-            self.chain_id,
-            height,
-            &self.config,
-        )?);
-
-        let mut cache = self.cache.write().unwrap();
-        // Another thread may have inserted between our read and write locks.
-        if let Some(existing) = cache.get(&height).cloned() {
-            return Ok(existing);
-        }
-        cache.insert(height, fetched.clone());
-
-        // Upper bound on the number of distinct heights whose
-        // proposer sets are kept in memory. Consensus advances
-        // monotonically, so when the cache is full we evict the
-        // smallest key, which approximates LRU for the expected
-        // workload.
+        // Upper bound on the number of distinct heights whose proposer sets
+        // are kept in memory. Consensus advances monotonically, so when the
+        // cache is full we evict the smallest key, which approximates LRU
+        // for the expected workload.
         let max_cached_heights = self.config.history_depth.try_into().unwrap_or(10);
-        while cache.len() > max_cached_heights {
-            cache.pop_first();
-        }
-        Ok(fetched)
+        self.cache
+            .get_or_insert_with(height, max_cached_heights, || {
+                fetch_proposers(&self.storage, self.chain_id, height, &self.config)
+            })
     }
 }
 
@@ -174,61 +155,4 @@ fn fetch_proposers_from_l2(
         })
         .collect::<Vec<Validator<ContractAddress>>>();
     Ok(ValidatorSet::new(proposers))
-}
-
-#[cfg(test)]
-mod tests {
-    use pathfinder_common::macro_prelude::*;
-    use pathfinder_common::StarknetVersion;
-    use pathfinder_storage::StorageBuilder;
-
-    use super::*;
-
-    fn selector() -> L2ProposerSelector {
-        let storage = StorageBuilder::in_memory().unwrap();
-        let proposer = contract_address!("0x1");
-        let config = ConsensusConfig {
-            my_starknet_version: StarknetVersion::default(),
-            my_validator_address: proposer,
-            validator_addresses: vec![proposer],
-            proposer_addresses: vec![proposer],
-            history_depth: 10,
-            l1_gas_price_tolerance: 0.0,
-            l1_gas_price_max_time_gap: 0,
-        };
-        L2ProposerSelector::new(storage, ChainId::SEPOLIA_TESTNET, config)
-    }
-
-    #[test]
-    fn repeat_lookup_at_same_height_hits_cache() {
-        let selector = selector();
-        let first = selector.proposer_set_at(42).unwrap();
-        let second = selector.proposer_set_at(42).unwrap();
-        // Same allocation proves the second call was served from the cache,
-        // not refetched.
-        assert!(Arc::ptr_eq(&first, &second));
-    }
-
-    #[test]
-    fn distinct_heights_get_distinct_entries() {
-        let selector = selector();
-        let a = selector.proposer_set_at(1).unwrap();
-        let b = selector.proposer_set_at(2).unwrap();
-        assert!(!Arc::ptr_eq(&a, &b));
-    }
-
-    #[test]
-    fn evicts_oldest_height_when_over_capacity() {
-        let selector = selector();
-        let zero_first = selector.proposer_set_at(0).unwrap();
-        let max_cached_heights = 10;
-        // Insert max_cached_heights more entries: at the last insertion the
-        // map size hits max_cached_heights + 1 and the smallest key (0) is
-        // evicted.
-        for h in 1..=max_cached_heights as u64 {
-            selector.proposer_set_at(h).unwrap();
-        }
-        let zero_again = selector.proposer_set_at(0).unwrap();
-        assert!(!Arc::ptr_eq(&zero_first, &zero_again));
-    }
 }

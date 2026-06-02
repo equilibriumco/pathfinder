@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use pathfinder_common::{ChainId, ContractAddress};
 use pathfinder_consensus::{PublicKey, SigningKey, Validator, ValidatorSet};
 use pathfinder_consensus_fetcher as consensus_fetcher;
@@ -5,12 +7,17 @@ use pathfinder_storage::Storage;
 use rand::rngs::OsRng;
 
 use crate::config::ConsensusConfig;
+use crate::consensus::validator_cache::ValidatorCache;
 
 #[derive(Clone)]
 pub struct L2ValidatorSetProvider {
     storage: Storage,
     chain_id: ChainId,
     config: ConsensusConfig,
+    /// Memoized validator sets keyed by height. Consensus repeatedly requests
+    /// validator sets while processing a height, and the underlying L2 lookup
+    /// is expensive, so we cache the result.
+    cache: ValidatorCache,
 }
 
 impl L2ValidatorSetProvider {
@@ -19,16 +26,32 @@ impl L2ValidatorSetProvider {
             storage,
             chain_id,
             config,
+            cache: ValidatorCache::default(),
         }
+    }
+
+    /// Returns the validator set for `height`, fetching from L2 only on a cache
+    /// miss.
+    fn validator_set_at(
+        &self,
+        height: u64,
+    ) -> Result<Arc<ValidatorSet<ContractAddress>>, anyhow::Error> {
+        // Upper bound on the number of distinct heights whose validator sets
+        // are kept in memory. Consensus advances monotonically, so when the
+        // cache is full we evict the smallest key, which approximates LRU for
+        // the expected workload.
+        let max_cached_heights = self.config.history_depth.try_into().unwrap_or(10);
+        self.cache
+            .get_or_insert_with(height, max_cached_heights, || {
+                fetch_validators(&self.storage, self.chain_id, height, &self.config)
+            })
     }
 }
 
 impl pathfinder_consensus::ValidatorSetProvider<ContractAddress> for L2ValidatorSetProvider {
-    fn get_validator_set(
-        &self,
-        height: u64,
-    ) -> Result<ValidatorSet<ContractAddress>, anyhow::Error> {
-        fetch_validators(&self.storage, self.chain_id, height, &self.config)
+    fn get_validator_set(&self, height: u64) -> anyhow::Result<ValidatorSet<ContractAddress>> {
+        self.validator_set_at(height)
+            .map(|vset| vset.as_ref().clone())
     }
 }
 
