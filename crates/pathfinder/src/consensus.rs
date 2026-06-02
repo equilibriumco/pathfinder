@@ -7,6 +7,7 @@ mod integration_testing;
 mod p2p_task;
 mod proposal_validator;
 mod proposer_oracle;
+mod validator_cache;
 
 mod dummy_proposal;
 
