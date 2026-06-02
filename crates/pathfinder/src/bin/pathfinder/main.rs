@@ -248,7 +248,9 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
     let mut term_signal = signal(SignalKind::terminate())?;
     let mut int_signal = signal(SignalKind::interrupt())?;
 
-    let pending_data_cache = Arc::new(PendingDataCache::new());
+    let pending_data_cache = Arc::new(
+        PendingDataCache::new().with_inactivity_timeout(config.pre_confirmed_idle_timeout),
+    );
 
     let rpc_config = pathfinder_rpc::context::RpcConfig {
         request_max_size: config.rpc_request_max_size,
@@ -821,7 +823,6 @@ fn start_feeder_gateway_sync(
         head_poll_interval: config.poll_interval,
         l1_poll_interval: config.l1_poll_interval,
         pending_data_cache,
-        pre_confirmed_idle_timeout: config.pre_confirmed_idle_timeout,
         submitted_tx_tracker,
         block_validation_mode: state::l2::BlockValidationMode::Strict,
         notifications,
@@ -863,7 +864,6 @@ fn start_consensus_aware_fgw_sync(
         head_poll_interval: config.poll_interval,
         l1_poll_interval: config.l1_poll_interval,
         pending_data_cache,
-        pre_confirmed_idle_timeout: config.pre_confirmed_idle_timeout,
         submitted_tx_tracker,
         block_validation_mode: state::l2::BlockValidationMode::Strict,
         notifications,

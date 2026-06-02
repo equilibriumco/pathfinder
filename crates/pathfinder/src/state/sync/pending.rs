@@ -119,27 +119,24 @@ impl State {
 /// Emits new pending data events while the current block is close to the latest
 /// block.
 ///
-/// Suspends polling after `inactivity_timeout` elapses without the cache
-/// being read, and resumes on the next read.
+/// Suspends polling once the cache reports itself idle and resumes on the
+/// next read.
 pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
     tx_event: tokio::sync::mpsc::Sender<SyncEvent>,
     sequencer: S,
     poll_interval: std::time::Duration,
     cache: Arc<PendingDataCache>,
-    inactivity_timeout: std::time::Duration,
     latest: watch::Receiver<(BlockNumber, BlockHash)>,
     current: watch::Receiver<(BlockNumber, BlockHash)>,
 ) {
     let mut state = State::default();
-    let mut last_active = Instant::now();
 
     loop {
         // Suspend if idle.
-        if last_active.elapsed() >= inactivity_timeout && cache.subscriber_count() == 0 {
+        if cache.is_idle() && cache.subscriber_count() == 0 {
             tracing::debug!("Pre-confirmed polling idle; waiting for cache reads");
-            cache.mark_idle();
+            cache.mark_stale();
             cache.wait_for_read().await;
-            last_active = Instant::now();
         }
 
         let t_fetch = Instant::now();
@@ -153,9 +150,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                 latest = %latest_number.get(), current = %current_number,
                 "Not in sync yet; skipping pre-confirmed block download"
             );
-            if wait_for_next_poll(t_fetch + poll_interval, &cache).await {
-                last_active = Instant::now();
-            }
+            wait_for_next_poll(t_fetch + poll_interval, &cache).await;
             continue;
         }
 
@@ -173,9 +168,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             Ok(r) => r,
             Err(err) => {
                 tracing::debug!(%err, "Failed to fetch pre-confirmed block");
-                if wait_for_next_poll(t_fetch + poll_interval, &cache).await {
-                    last_active = Instant::now();
-                }
+                wait_for_next_poll(t_fetch + poll_interval, &cache).await;
                 continue;
             }
         };
@@ -197,9 +190,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                     current = %state.block_number,
                     "Pre-confirmed resolved to a lower height than tracked; skipping poll"
                 );
-                if wait_for_next_poll(t_fetch + poll_interval, &cache).await {
-                    last_active = Instant::now();
-                }
+                wait_for_next_poll(t_fetch + poll_interval, &cache).await;
                 continue;
             }
 
@@ -267,18 +258,15 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
         }
 
         // Wait for the next tick.
-        if wait_for_next_poll(t_fetch + poll_interval, &cache).await {
-            last_active = Instant::now();
-        }
+        wait_for_next_poll(t_fetch + poll_interval, &cache).await;
     }
 }
 
-/// Sleeps until `deadline`, returning early if the cache is read. Returns
-/// `true` when woken by a read, `false` when the deadline elapsed.
-async fn wait_for_next_poll(deadline: Instant, cache: &PendingDataCache) -> bool {
+/// Sleeps until `deadline`, returning early if the cache is read.
+async fn wait_for_next_poll(deadline: Instant, cache: &PendingDataCache) {
     tokio::select! {
-        _ = tokio::time::sleep_until(deadline) => false,
-        _ = cache.wait_for_read() => true,
+        _ = tokio::time::sleep_until(deadline) => {}
+        _ = cache.wait_for_read() => {}
     }
 }
 
@@ -579,7 +567,6 @@ mod tests {
                 sequencer,
                 std::time::Duration::ZERO,
                 Arc::new(PendingDataCache::new()),
-                std::time::Duration::from_secs(60),
                 latest,
                 current,
             )
@@ -678,7 +665,6 @@ mod tests {
                 sequencer,
                 std::time::Duration::ZERO,
                 Arc::new(PendingDataCache::new()),
-                std::time::Duration::from_secs(60),
                 rx_latest,
                 rx_current,
             )
@@ -835,7 +821,6 @@ mod tests {
                 sequencer,
                 std::time::Duration::ZERO,
                 Arc::new(PendingDataCache::new()),
-                std::time::Duration::from_secs(60),
                 rx_latest,
                 rx_current,
             )
@@ -1131,7 +1116,6 @@ mod tests {
                 sequencer,
                 std::time::Duration::ZERO,
                 Arc::new(PendingDataCache::new()),
-                std::time::Duration::from_secs(60),
                 rx_latest,
                 rx_current,
             )
@@ -1253,7 +1237,6 @@ mod tests {
                 sequencer,
                 std::time::Duration::ZERO,
                 Arc::new(PendingDataCache::new()),
-                std::time::Duration::from_secs(60),
                 latest,
                 current,
             )
@@ -1335,23 +1318,15 @@ mod tests {
         let (_, latest) = watch::channel((latest_block_number, latest_hash));
         let (_, current) = watch::channel((latest_block_number, latest_hash));
 
-        let cache = Arc::new(PendingDataCache::new());
+        let cache = Arc::new(PendingDataCache::new().with_inactivity_timeout(IDLE_TIMEOUT));
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
         let sequencer = Arc::new(sequencer);
         let _jh = tokio::spawn({
             let cache = cache.clone();
             async move {
-                super::poll_pre_confirmed(
-                    tx,
-                    sequencer,
-                    POLL_INTERVAL,
-                    cache,
-                    IDLE_TIMEOUT,
-                    latest,
-                    current,
-                )
-                .await
+                super::poll_pre_confirmed(tx, sequencer, POLL_INTERVAL, cache, latest, current)
+                    .await
             }
         });
 
