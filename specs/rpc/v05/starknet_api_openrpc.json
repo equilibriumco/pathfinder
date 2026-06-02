@@ -3204,7 +3204,7 @@
                 "properties": {
                     "gas_consumed": {
                         "title": "Gas consumed",
-                        "description": "The Ethereum gas cost of the transaction (see https://docs.starknet.io/documentation/architecture_and_concepts/Network_Architecture/fee-mechanism/ for more info)",
+                        "description": "The Ethereum gas cost of the transaction (see https://docs.starknet.io/learn/protocol/fees for more info)",
                         "$ref": "#/components/schemas/NUM_AS_HEX"
                     },
                     "gas_price": {

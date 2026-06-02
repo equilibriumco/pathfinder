@@ -133,7 +133,7 @@ pub fn header_from_gateway_block(
 /// Verify the block hash value.
 ///
 /// The method to compute the block hash is documented
-/// [here](https://docs.starknet.io/architecture-and-concepts/network-architecture/block-structure/#block-hash).
+/// [here](https://docs.starknet.io/learn/protocol/blocks#block-hash).
 ///
 /// Unfortunately that'a not-fully-correct description, since the transaction
 /// commitment Merkle tree is not constructed directly with the transaction
@@ -683,7 +683,7 @@ pub fn calculate_event_commitment(
 
 /// Calculate the hash of a pre-v0.13.2 Starknet event.
 ///
-/// See the [documentation](https://docs.starknet.io/documentation/architecture_and_concepts/Smart_Contracts/starknet-events/#event_hash)
+/// See the [documentation](https://docs.starknet.io/learn/protocol/blocks#event-hash)
 /// for details.
 fn calculate_event_hash_pre_0_13_2(event: &Event) -> Felt {
     let mut keys_hash = HashChain::default();
