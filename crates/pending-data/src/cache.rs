@@ -15,7 +15,7 @@ struct Freshness {
 /// Shared pre-confirmed data cache with freshness tracking.
 ///
 /// Holds the latest [`PendingData`] and a small amount of freshness state.
-/// - Writes via [`Self::store`] / [`Self::refresh`] / [`Self::mark_idle`].
+/// - Writes via [`Self::store`] / [`Self::refresh`] / [`Self::mark_stale`].
 /// - Reads via [`Self::read`] (blocks if stale, then returns fresh data) and
 ///   [`Self::subscribe`] for streaming.
 pub struct PendingDataCache {
@@ -25,17 +25,17 @@ pub struct PendingDataCache {
     freshness_tx: watch::Sender<Freshness>,
     last_read: Mutex<Instant>,
     cold_start_timeout: Duration,
+    inactivity_timeout: Duration,
 }
 
 impl PendingDataCache {
     /// Default maximum time a cold-start read will block before erroring.
     pub const DEFAULT_COLD_START_TIMEOUT: Duration = Duration::from_secs(5);
+    /// Default window of read inactivity after which [`Self::is_idle`] reports
+    /// the cache as idle.
+    pub const DEFAULT_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
 
     pub fn new() -> Self {
-        Self::with_cold_start_timeout(Self::DEFAULT_COLD_START_TIMEOUT)
-    }
-
-    pub fn with_cold_start_timeout(cold_start_timeout: Duration) -> Self {
         let (data_tx, data_rx) = watch::channel(PendingData::default());
         let (freshness_tx, _) = watch::channel(Freshness::default());
         Self {
@@ -44,8 +44,19 @@ impl PendingDataCache {
             on_read: Arc::new(Notify::new()),
             freshness_tx,
             last_read: Mutex::new(Instant::now()),
-            cold_start_timeout,
+            cold_start_timeout: Self::DEFAULT_COLD_START_TIMEOUT,
+            inactivity_timeout: Self::DEFAULT_INACTIVITY_TIMEOUT,
         }
+    }
+
+    pub fn with_cold_start_timeout(mut self, timeout: Duration) -> Self {
+        self.cold_start_timeout = timeout;
+        self
+    }
+
+    pub fn with_inactivity_timeout(mut self, timeout: Duration) -> Self {
+        self.inactivity_timeout = timeout;
+        self
     }
 
     /// Writes fresh data into the cache and marks it fresh.
@@ -61,7 +72,7 @@ impl PendingDataCache {
 
     /// Marks the cache stale; subsequent [`Self::read`] calls block until
     /// the next [`Self::store`] / [`Self::refresh`] or a timeout elapses.
-    pub fn mark_idle(&self) {
+    pub fn mark_stale(&self) {
         self.freshness_tx.send_if_modified(|f| {
             if !f.stale {
                 f.stale = true;
@@ -107,9 +118,9 @@ impl PendingDataCache {
             .saturating_sub(1)
     }
 
-    /// `true` when the cache has not been read for at least `timeout`.
-    pub fn is_idle(&self, timeout: Duration) -> bool {
-        self.last_read.lock().unwrap().elapsed() >= timeout
+    /// `true` when no reads have happened within the inactivity window.
+    pub fn is_idle(&self) -> bool {
+        self.last_read.lock().unwrap().elapsed() >= self.inactivity_timeout
     }
 
     /// Fires the read signal and stamps the last-read time. Both move together
@@ -240,10 +251,9 @@ mod tests {
 
     #[tokio::test]
     async fn idle_cache_blocks_read_until_store() {
-        let cache = Arc::new(PendingDataCache::with_cold_start_timeout(
-            Duration::from_secs(5),
-        ));
-        cache.mark_idle();
+        let cache =
+            Arc::new(PendingDataCache::new().with_cold_start_timeout(Duration::from_secs(5)));
+        cache.mark_stale();
 
         let reader_cache = cache.clone();
         let reader = tokio::spawn(async move { reader_cache.read().await });
@@ -264,12 +274,11 @@ mod tests {
 
     #[tokio::test]
     async fn idle_cache_blocks_read_until_refresh() {
-        let cache = Arc::new(PendingDataCache::with_cold_start_timeout(
-            Duration::from_secs(5),
-        ));
+        let cache =
+            Arc::new(PendingDataCache::new().with_cold_start_timeout(Duration::from_secs(5)));
         let initial = sample_data(99);
         cache.store(initial.clone());
-        cache.mark_idle();
+        cache.mark_stale();
 
         let reader_cache = cache.clone();
         let reader = tokio::spawn(async move { reader_cache.read().await });
@@ -289,10 +298,9 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_cold_reads_share_one_refresh() {
-        let cache = Arc::new(PendingDataCache::with_cold_start_timeout(
-            Duration::from_secs(5),
-        ));
-        cache.mark_idle();
+        let cache =
+            Arc::new(PendingDataCache::new().with_cold_start_timeout(Duration::from_secs(5)));
+        cache.mark_stale();
 
         let readers: Vec<_> = (0..10)
             .map(|_| {
@@ -317,8 +325,8 @@ mod tests {
 
     #[tokio::test]
     async fn cold_read_times_out_when_no_refresh() {
-        let cache = PendingDataCache::with_cold_start_timeout(Duration::from_millis(40));
-        cache.mark_idle();
+        let cache = PendingDataCache::new().with_cold_start_timeout(Duration::from_millis(40));
+        cache.mark_stale();
 
         let result = cache.read().await;
         assert!(result.is_err());
@@ -327,8 +335,8 @@ mod tests {
 
     #[tokio::test]
     async fn store_after_idle_clears_stale() {
-        let cache = PendingDataCache::with_cold_start_timeout(Duration::from_millis(50));
-        cache.mark_idle();
+        let cache = PendingDataCache::new().with_cold_start_timeout(Duration::from_millis(50));
+        cache.mark_stale();
         cache.store(sample_data(1));
 
         timeout(Duration::from_millis(20), cache.read())
@@ -339,8 +347,8 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_after_idle_clears_stale() {
-        let cache = PendingDataCache::with_cold_start_timeout(Duration::from_millis(50));
-        cache.mark_idle();
+        let cache = PendingDataCache::new().with_cold_start_timeout(Duration::from_millis(50));
+        cache.mark_stale();
         cache.refresh();
 
         timeout(Duration::from_millis(20), cache.read())
@@ -350,13 +358,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_mark_idle_is_idempotent() {
-        let cache = Arc::new(PendingDataCache::with_cold_start_timeout(
-            Duration::from_secs(5),
-        ));
-        cache.mark_idle();
-        cache.mark_idle();
-        cache.mark_idle();
+    async fn repeated_mark_stale_is_idempotent() {
+        let cache =
+            Arc::new(PendingDataCache::new().with_cold_start_timeout(Duration::from_secs(5)));
+        cache.mark_stale();
+        cache.mark_stale();
+        cache.mark_stale();
 
         let reader_cache = cache.clone();
         let reader = tokio::spawn(async move { reader_cache.read().await });
@@ -389,7 +396,7 @@ mod tests {
     #[tokio::test]
     async fn try_read_returns_none_when_stale() {
         let cache = PendingDataCache::new();
-        cache.mark_idle();
+        cache.mark_stale();
         assert!(cache.try_read().is_none());
     }
 
