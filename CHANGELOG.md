@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The limit for bytecode size in compilation is now defaulting to 81920 bytes and configurable with the new `--max-bytecode-size` CLI option.
 - Committed-block sync now fetches block, state update, and signature in a single feeder-gateway request. Requires a feeder gateway that supports `includeSignature` on `get_state_update`.
 - RPC request size and timeout limits are now configurable with `--rpc.request-max-size` and `--rpc.request-timeout` CLI options.
+- `CANDIDATE` transaction status in deprecated and will never be returned by gateway or pathfinder. Using it as a filter in `subscribeNewTransactions` will fall back to `PRE_CONFIRMED` with a warning.
 
 ## [0.22.3] - 2026-04-20
 

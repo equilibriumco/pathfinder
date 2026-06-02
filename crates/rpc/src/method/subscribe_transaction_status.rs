@@ -42,7 +42,6 @@ pub enum Notification {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FinalityStatus {
     Received,
-    Candidate,
     PreConfirmed,
     AcceptedOnL2,
     AcceptedOnL1,
@@ -85,7 +84,6 @@ impl crate::dto::SerializeForVersion for Notification {
                     "finality_status",
                     &match self.finality_status {
                         FinalityStatus::Received => "RECEIVED",
-                        FinalityStatus::Candidate => "CANDIDATE",
                         FinalityStatus::PreConfirmed => "PRE_CONFIRMED",
                         FinalityStatus::AcceptedOnL2 => "ACCEPTED_ON_L2",
                         FinalityStatus::AcceptedOnL1 => "ACCEPTED_ON_L1",
@@ -412,16 +410,7 @@ fn pending_data_cache_status(
 
     let block_number = pending_data.pre_confirmed_block_number();
     let pending_block = pending_data.pending_block();
-    let PendingBlocks {
-        pre_confirmed,
-        candidate_transactions,
-        ..
-    } = pending_block.as_ref();
-
-    let is_candidate = candidate_transactions.iter().any(|tx| tx.hash == tx_hash);
-    if is_candidate {
-        return Some((block_number, FinalityStatus::Candidate, None));
-    }
+    let PendingBlocks { pre_confirmed, .. } = pending_block.as_ref();
 
     let status_in_pre_confirmed = find_tx_receipt(&pre_confirmed.transaction_receipts, tx_hash)
         .map(|r| r.execution_status.clone());
@@ -493,7 +482,7 @@ impl FinalityStatus {
     pub fn as_num(&self) -> u8 {
         match self {
             FinalityStatus::Received => 0,
-            FinalityStatus::Candidate => 1,
+            // 1 was historically used for CANDIDATE transactions
             FinalityStatus::PreConfirmed => 2,
             FinalityStatus::AcceptedOnL2 => 3,
             FinalityStatus::AcceptedOnL1 => 4,
@@ -945,6 +934,13 @@ mod tests {
                                 hash: TransactionHash(Felt::from_u64(2)),
                                 variant: Default::default(),
                             }],
+                            transaction_receipts: vec![Some((
+                                Receipt {
+                                    transaction_hash: TransactionHash(Felt::from_u64(2)),
+                                    ..Default::default()
+                                },
+                                vec![],
+                            ))],
                             ..Default::default()
                         }
                         .into(),
@@ -970,8 +966,6 @@ mod tests {
                                 hash: TARGET_TX_HASH,
                                 variant: Default::default(),
                             }],
-                            // The fact that the receipt is present for this transaction means that
-                            // it belongs to the pre-confirmed block.
                             transaction_receipts: vec![Some((
                                 Receipt {
                                     transaction_hash: TARGET_TX_HASH,
@@ -1052,6 +1046,13 @@ mod tests {
                                 hash: TransactionHash(Felt::from_u64(2)),
                                 variant: Default::default(),
                             }],
+                            transaction_receipts: vec![Some((
+                                Receipt {
+                                    transaction_hash: TransactionHash(Felt::from_u64(2)),
+                                    ..Default::default()
+                                },
+                                vec![],
+                            ))],
                             ..Default::default()
                         }
                         .into(),
@@ -1077,8 +1078,6 @@ mod tests {
                                 hash: TARGET_TX_HASH,
                                 variant: Default::default(),
                             }],
-                            // The fact that the receipt is present for this transaction means that
-                            // it belongs to the pre-confirmed block.
                             transaction_receipts: vec![Some((
                                 Receipt {
                                     transaction_hash: TARGET_TX_HASH,
@@ -1191,106 +1190,6 @@ mod tests {
                     }
                     .into(),
                 ),
-                TestEvent::Message(serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "starknet_subscriptionTransactionStatus",
-                    "params": {
-                        "result": {
-                            "transaction_hash": "0x1",
-                            "status": {
-                                "finality_status": "ACCEPTED_ON_L2",
-                                "execution_status": "SUCCEEDED"
-                            }
-                        },
-                        "subscription_id": subscription_id
-                    }
-                })),
-            ]
-        })
-        .await;
-    }
-
-    #[tokio::test]
-    async fn transaction_found_in_candidate_transactions() {
-        test_transaction_status_streaming(|subscription_id| {
-            vec![
-                TestEvent::Pending(
-                    PendingData::try_from_pre_confirmed_block(
-                        PreConfirmedBlock {
-                            transactions: vec![Transaction {
-                                hash: TransactionHash(Felt::from_u64(2)),
-                                variant: Default::default(),
-                            }],
-                            ..Default::default()
-                        }
-                        .into(),
-                        BlockNumber::GENESIS + 1,
-                    )
-                    .unwrap(),
-                ),
-                TestEvent::L2Block(
-                    L2Block {
-                        header: BlockHeader {
-                            number: BlockNumber::GENESIS + 1,
-                            hash: BlockHash(Felt::from_u64(1)),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }
-                    .into(),
-                ),
-                TestEvent::Pending(
-                    PendingData::try_from_pre_confirmed_block(
-                        PreConfirmedBlock {
-                            transactions: vec![Transaction {
-                                hash: TARGET_TX_HASH,
-                                variant: Default::default(),
-                            }],
-                            // The fact that the receipt is missing for this transaction means that
-                            // it belongs to the candidate transactions.
-                            transaction_receipts: vec![None],
-                            ..Default::default()
-                        }
-                        .into(),
-                        BlockNumber::GENESIS + 2,
-                    )
-                    .unwrap(),
-                ),
-                TestEvent::L2Block(
-                    L2Block {
-                        header: BlockHeader {
-                            number: BlockNumber::GENESIS + 2,
-                            hash: BlockHash(Felt::from_u64(2)),
-                            ..Default::default()
-                        },
-                        transactions_and_receipts: vec![(
-                            Transaction {
-                                hash: TARGET_TX_HASH,
-                                ..Default::default()
-                            },
-                            Receipt {
-                                transaction_hash: TARGET_TX_HASH,
-                                ..Default::default()
-                            },
-                        )],
-                        events: vec![vec![]],
-                        ..Default::default()
-                    }
-                    .into(),
-                ),
-                TestEvent::Message(serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "starknet_subscriptionTransactionStatus",
-                    "params": {
-                        "result": {
-                            "transaction_hash": "0x1",
-                            "status": {
-                                "finality_status": "CANDIDATE",
-                            }
-                        },
-                        "subscription_id": subscription_id
-                    }
-                })),
                 TestEvent::Message(serde_json::json!({
                     "jsonrpc": "2.0",
                     "method": "starknet_subscriptionTransactionStatus",

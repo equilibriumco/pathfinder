@@ -524,7 +524,6 @@ mod tests {
                         l1_da_mode: L1DataAvailabilityMode::Blob.into(),
                     },
                     pre_latest: None,
-                    candidate_transactions: vec![],
                 },
                 state_update,
                 aggregated_state_update,
