@@ -13,7 +13,7 @@ use crate::tree::MerkleTree;
 /// single starknet block i.e. each block a new event / transaction
 /// tree is formed from an empty one.
 ///
-/// More information about these commitments can be found in the Starknet [documentation](https://docs.starknet.io/architecture-and-concepts/network-architecture/block-structure/#block_header_fields).
+/// More information about these commitments can be found in the Starknet [documentation](https://docs.starknet.io/learn/protocol/blocks#block-header-fields).
 pub struct TransactionOrEventTree<H: FeltHash> {
     tree: MerkleTree<H, 64>,
 }

@@ -8,7 +8,7 @@ import "proto/sync/common.proto";
 // Note: commitments may change to be for the previous blocks like comet/tendermint
 // hash of block header sent to L1
 message SignedBlockHeader {
-    starknet.common.Hash block_hash = 1; //  For the structure of the block hash, see https://docs.starknet.io/documentation/architecture_and_concepts/Network_Architecture/header/#block_hash
+    starknet.common.Hash block_hash = 1; //  For the structure of the block hash, see https://docs.starknet.io/learn/protocol/blocks#block-hash
     starknet.common.Hash parent_hash = 2;
     uint64 number = 3; // This can be deduced from context. We can consider removing this field.
     uint64 time = 4; // Encoded in Unix time.
