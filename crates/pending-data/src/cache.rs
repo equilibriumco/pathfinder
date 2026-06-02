@@ -1,7 +1,8 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::{watch, Notify};
+use tokio::time::Instant;
 
 use crate::data::PendingData;
 
@@ -22,6 +23,7 @@ pub struct PendingDataCache {
     data_rx: watch::Receiver<PendingData>,
     on_read: Arc<Notify>,
     freshness_tx: watch::Sender<Freshness>,
+    last_read: Mutex<Instant>,
     cold_start_timeout: Duration,
 }
 
@@ -41,6 +43,7 @@ impl PendingDataCache {
             data_rx,
             on_read: Arc::new(Notify::new()),
             freshness_tx,
+            last_read: Mutex::new(Instant::now()),
             cold_start_timeout,
         }
     }
@@ -76,7 +79,7 @@ impl PendingDataCache {
     /// Returns the latest cached data. Blocks while the cache is stale,
     /// up to the configured cold-start timeout. Always fires the read signal.
     pub async fn read(&self) -> anyhow::Result<PendingData> {
-        self.on_read.notify_one();
+        self.signal_read();
         self.wait_for_fresh_data().await?;
         Ok(self.data_rx.borrow().clone())
     }
@@ -84,7 +87,7 @@ impl PendingDataCache {
     /// Returns the latest cached data if it is fresh, `None` otherwise.
     /// Fast path (non-blocking). Always fires the read signal.
     pub fn try_read(&self) -> Option<PendingData> {
-        self.on_read.notify_one();
+        self.signal_read();
         if self.freshness_tx.borrow().stale {
             return None;
         }
@@ -93,7 +96,7 @@ impl PendingDataCache {
 
     /// A fresh `watch::Receiver` for awaiting changes directly.
     pub fn subscribe(&self) -> watch::Receiver<PendingData> {
-        self.on_read.notify_one();
+        self.signal_read();
         self.data_rx.clone()
     }
 
@@ -102,6 +105,18 @@ impl PendingDataCache {
             .receiver_count()
             // Exclude the cache's own internal receiver from the count.
             .saturating_sub(1)
+    }
+
+    /// `true` when the cache has not been read for at least `timeout`.
+    pub fn is_idle(&self, timeout: Duration) -> bool {
+        self.last_read.lock().unwrap().elapsed() >= timeout
+    }
+
+    /// Fires the read signal and stamps the last-read time. Both move together
+    /// so suspend decisions observe a single, consistent notion of "last read".
+    fn signal_read(&self) {
+        self.on_read.notify_one();
+        *self.last_read.lock().unwrap() = Instant::now();
     }
 
     fn bump_freshness(&self) {
