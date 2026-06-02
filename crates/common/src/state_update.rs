@@ -612,7 +612,7 @@ mod state_diff_commitment {
 
     /// Compute the state diff commitment used in block commitment signatures.
     ///
-    /// How to compute the value is documented in the [Starknet documentation](https://docs.starknet.io/architecture-and-concepts/network-architecture/block-structure/#state_diff_hash).
+    /// How to compute the value is documented in the [Starknet documentation](https://docs.starknet.io/learn/protocol/blocks#state-diff-commitment).
     pub fn compute(
         contract_updates: &HashMap<ContractAddress, ContractUpdate>,
         system_contract_updates: &HashMap<ContractAddress, SystemContractUpdate>,

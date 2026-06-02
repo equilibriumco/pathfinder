@@ -83,7 +83,7 @@ impl EntryPoint {
     /// Returns a new EntryPoint which has been truncated to fit from Keccak256
     /// digest of input.
     ///
-    /// See: <https://docs.starknet.io/documentation/architecture_and_concepts/Smart_Contracts/contract-classes/>
+    /// See: <https://docs.starknet.io/learn/protocol/state#the-class-trie>
     pub fn hashed(input: &[u8]) -> Self {
         use sha3::Digest;
         EntryPoint(truncated_keccak(<[u8; 32]>::from(sha3::Keccak256::digest(
@@ -701,7 +701,7 @@ pub fn truncated_keccak(mut plain: [u8; 32]) -> Felt {
 
 /// Calculate class commitment tree leaf hash value.
 ///
-/// See: <https://docs.starknet.io/documentation/starknet_versions/upcoming_versions/#state_commitment>
+/// See: <https://docs.starknet.io/learn/protocol/state#state-commitment>
 pub fn calculate_class_commitment_leaf_hash(
     compiled_class_hash: CasmHash,
 ) -> ClassCommitmentLeafHash {

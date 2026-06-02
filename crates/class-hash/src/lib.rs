@@ -53,7 +53,7 @@
 //! and includes extensive test vectors to ensure hash computation matches the
 //! network's expectations.
 //!
-//! See the [official Starknet documentation](https://docs.starknet.io/architecture-and-concepts/smart-contracts/class-hash/)
+//! See the [official Starknet documentation](https://docs.starknet.io/learn/protocol/cryptography#blake2s)
 //! for more details on class hash computation.
 
 use anyhow::{Context, Error, Result};
@@ -327,7 +327,7 @@ impl<'a> PreparedCairoContractDefinition<'a> {
 /// documentation][starknet-doc], but it's text explanations are much more
 /// complex than the actual implementation in `HashChain`.
 ///
-/// [starknet-doc]: https://docs.starknet.io/architecture-and-concepts/smart-contracts/class-hash/
+/// [starknet-doc]: https://docs.starknet.io/learn/protocol/cryptography#blake2s
 /// [cairo-compute]: https://github.com/starkware-libs/cairo-lang/blob/64a7f6aed9757d3d8d6c28bd972df73272b0cb0a/src/starkware/starknet/core/os/contract_hash.py
 /// [cairo-contract]: https://github.com/starkware-libs/cairo-lang/blob/64a7f6aed9757d3d8d6c28bd972df73272b0cb0a/src/starkware/starknet/core/os/contracts.cairo#L76-L118
 /// [py-sortkeys]: https://github.com/starkware-libs/cairo-lang/blob/64a7f6aed9757d3d8d6c28bd972df73272b0cb0a/src/starkware/starknet/core/os/contract_hash.py#L58-L71
@@ -550,7 +550,7 @@ pub fn prepare_json_contract_definition(
 /// Instead, ABI is handled as a string and all other relevant parts of the
 /// class definition are transformed into Felts and hashed using Poseidon.
 ///
-/// [starknet-doc]: https://docs.starknet.io/architecture-and-concepts/smart-contracts/class-hash/
+/// [starknet-doc]: https://docs.starknet.io/learn/protocol/cryptography#blake2s
 /// [cairo-compute]: https://github.com/starkware-libs/cairo-lang/blob/12ca9e91bbdc8a423c63280949c7e34382792067/src/starkware/starknet/core/os/contract_class/contract_class.cairo#L42
 pub fn compute_sierra_class_hash(
     contract_definition: json::SierraContractDefinition<'_>,
