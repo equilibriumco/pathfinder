@@ -131,15 +131,13 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
     current: watch::Receiver<(BlockNumber, BlockHash)>,
 ) {
     let mut state = State::default();
-    let mut last_active = Instant::now();
 
     loop {
         // Suspend if idle.
-        if last_active.elapsed() >= inactivity_timeout && cache.subscriber_count() == 0 {
+        if cache.is_idle(inactivity_timeout) && cache.subscriber_count() == 0 {
             tracing::debug!("Pre-confirmed polling idle; waiting for cache reads");
             cache.mark_idle();
             cache.wait_for_read().await;
-            last_active = Instant::now();
         }
 
         let t_fetch = Instant::now();
@@ -153,9 +151,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                 latest = %latest_number.get(), current = %current_number,
                 "Not in sync yet; skipping pre-confirmed block download"
             );
-            if wait_for_next_poll(t_fetch + poll_interval, &cache).await {
-                last_active = Instant::now();
-            }
+            wait_for_next_poll(t_fetch + poll_interval, &cache).await;
             continue;
         }
 
@@ -173,9 +169,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             Ok(r) => r,
             Err(err) => {
                 tracing::debug!(%err, "Failed to fetch pre-confirmed block");
-                if wait_for_next_poll(t_fetch + poll_interval, &cache).await {
-                    last_active = Instant::now();
-                }
+                wait_for_next_poll(t_fetch + poll_interval, &cache).await;
                 continue;
             }
         };
@@ -197,9 +191,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                     current = %state.block_number,
                     "Pre-confirmed resolved to a lower height than tracked; skipping poll"
                 );
-                if wait_for_next_poll(t_fetch + poll_interval, &cache).await {
-                    last_active = Instant::now();
-                }
+                wait_for_next_poll(t_fetch + poll_interval, &cache).await;
                 continue;
             }
 
@@ -267,18 +259,15 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
         }
 
         // Wait for the next tick.
-        if wait_for_next_poll(t_fetch + poll_interval, &cache).await {
-            last_active = Instant::now();
-        }
+        wait_for_next_poll(t_fetch + poll_interval, &cache).await;
     }
 }
 
-/// Sleeps until `deadline`, returning early if the cache is read. Returns
-/// `true` when woken by a read, `false` when the deadline elapsed.
-async fn wait_for_next_poll(deadline: Instant, cache: &PendingDataCache) -> bool {
+/// Sleeps until `deadline`, returning early if the cache is read.
+async fn wait_for_next_poll(deadline: Instant, cache: &PendingDataCache) {
     tokio::select! {
-        _ = tokio::time::sleep_until(deadline) => false,
-        _ = cache.wait_for_read() => true,
+        _ = tokio::time::sleep_until(deadline) => {}
+        _ = cache.wait_for_read() => {}
     }
 }
 
