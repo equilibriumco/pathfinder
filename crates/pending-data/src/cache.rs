@@ -435,6 +435,35 @@ mod tests {
         assert_eq!(cache.subscriber_count(), 0);
     }
 
+    async fn is_idle_after_inactivity_window() {
+        let cache = PendingDataCache::new().with_inactivity_timeout(Duration::from_secs(1));
+
+        // Fresh cache is not yet idle.
+        assert!(!cache.is_idle());
+
+        // Becomes idle once the inactivity window elapses with no reads.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(cache.is_idle());
+
+        // `try_read` resets the window.
+        assert!(cache.try_read().is_some());
+        assert!(!cache.is_idle());
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(cache.is_idle());
+
+        // `subscribe` resets the window.
+        let _rx = cache.subscribe();
+        assert!(!cache.is_idle());
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(cache.is_idle());
+
+        // `read` resets the window.
+        let _ = cache.read().await.unwrap();
+        assert!(!cache.is_idle());
+    }
+
     #[tokio::test]
     async fn subscribe_wakes_wait_for_read() {
         let cache = Arc::new(PendingDataCache::new());
