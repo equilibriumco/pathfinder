@@ -1268,7 +1268,7 @@ mod tests {
             .with_storage(storage)
             .with_notifications(notifications)
             .with_pending_data_cache(pending_data_cache.clone())
-            .with_websockets(WebsocketContext::new(WebsocketHistory::Unlimited));
+            .with_websockets(WebsocketContext::new(WebsocketHistory::Unlimited, 1024));
         match version {
             RpcVersion::V06 => (v06::register_routes().build(ctx), pending_data_cache),
             RpcVersion::V07 => (v07::register_routes().build(ctx), pending_data_cache),

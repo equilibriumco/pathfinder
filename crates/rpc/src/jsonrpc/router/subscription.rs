@@ -54,6 +54,10 @@ impl Subscriptions {
         self.subscriptions.contains_key(subscription_id)
     }
 
+    pub fn len(&self) -> usize {
+        self.subscriptions.len()
+    }
+
     pub fn insert(
         &self,
         subscription_id: SubscriptionId,
@@ -729,6 +733,22 @@ async fn handle_request(
 
     let params = serde_json::to_value(rpc_request.params)
         .map_err(|e| RpcResponse::invalid_params(req_id.clone(), e.to_string(), state.version))?;
+
+    let max_subscriptions = state
+        .context
+        .websocket
+        .as_ref()
+        .map(|ws_cfg| ws_cfg.max_subscriptions)
+        .ok_or_else(|| {
+            // handle_request should be called only when WS is enabled
+            RpcResponse::internal_error(req_id.clone(), "WS disabled".to_string(), state.version)
+        })?;
+    if subscriptions.len() >= max_subscriptions {
+        return Err(RpcResponse::invalid_request(
+            "Too many subscriptions".to_string(),
+            state.version,
+        ));
+    }
 
     // Start the subscription.
     let router = state.clone();
@@ -1460,7 +1480,7 @@ mod tests {
             .with_storage(storage)
             .with_notifications(notifications)
             .with_pending_data_cache(pending_data_cache.clone())
-            .with_websockets(WebsocketContext::new(websocket_history));
+            .with_websockets(WebsocketContext::new(websocket_history, 1024));
 
         RpcRouter::builder(crate::RpcVersion::V08)
             .register("test", endpoint)

@@ -512,7 +512,7 @@ mod tests {
                 }
             }
 
-            let ws_ctx = WebsocketContext::new(WebsocketHistory::Unlimited);
+            let ws_ctx = WebsocketContext::new(WebsocketHistory::Unlimited, 1024);
             RpcRouter::builder(RpcVersion::default())
                 .register("subtract", subtract)
                 .register("sum", sum)
@@ -693,7 +693,7 @@ mod tests {
                 "Success"
             }
 
-            let ws_ctx = WebsocketContext::new(WebsocketHistory::Unlimited);
+            let ws_ctx = WebsocketContext::new(WebsocketHistory::Unlimited, 1024);
             RpcRouter::builder(Default::default())
                 .register("panic", always_panic)
                 .register("success", always_success)

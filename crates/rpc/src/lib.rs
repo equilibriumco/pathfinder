@@ -1603,6 +1603,7 @@ mod tests {
         if api.has_websocket() {
             context = context.with_websockets(context::WebsocketContext::new(
                 WebsocketHistory::Unlimited,
+                1024,
             ));
         }
         let (_jh, addr) = RpcServer::new(addr, context, RpcVersion::V07)

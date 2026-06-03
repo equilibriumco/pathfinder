@@ -288,7 +288,10 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
     );
 
     let context = if config.websocket.enabled {
-        context.with_websockets(WebsocketContext::new(config.websocket.max_history.into()))
+        context.with_websockets(WebsocketContext::new(
+            config.websocket.max_history.into(),
+            config.websocket.max_subscriptions.get(),
+        ))
     } else {
         context
     };
