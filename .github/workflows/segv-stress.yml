@@ -1,0 +1,74 @@
+name: SIGSEGV stress (temporary)
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_ref:
+        description: "Ref to build & test"
+        required: false
+        default: ""
+      iterations:
+        description: "Full-suite runs per shard"
+        required: false
+        default: "15"
+
+concurrency:
+  group: "segv-stress @ ${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  stress:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    env:
+      CARGO_TERM_COLOR: always
+      MLIR_SYS_190_PREFIX: "/usr/lib/llvm-19"
+      LLVM_SYS_191_PREFIX: "/usr/lib/llvm-19"
+      TABLEGEN_190_PREFIX: "/usr/lib/llvm-19"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.build_ref }}
+      - uses: ./.github/actions/free-disk-space
+      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: taiki-e/install-action@nextest
+      - uses: gerlero/add-apt-repository@v1
+        with:
+          uri: http://apt.llvm.org/noble/
+          suite: llvm-toolchain-noble-19
+          key: https://apt.llvm.org/llvm-snapshot.gpg.key
+      - uses: gerlero/apt-install@v1
+        with:
+          packages: build-essential llvm-19 llvm-19-dev llvm-19-runtime clang-19 clang-tools-19 lld-19 libpolly-19-dev libmlir-19-dev mlir-19-tools
+      - name: Build pathfinder binary (some integration tests shell out to it)
+        run: cargo build --release -p pathfinder --bin pathfinder -F p2p
+      - name: Compile all-features test binaries
+        run: cargo nextest run --cargo-profile ci-dev --all-targets --all-features --workspace --locked --no-run
+      - name: Stress loop
+        run: |
+          set -u
+          iterations="${{ github.event.inputs.iterations }}"
+          crashes=0
+          for i in $(seq 1 "$iterations"); do
+            echo "::group::shard ${{ matrix.shard }} — iteration $i/$iterations"
+            # --retries 0 so a SIGSEGV is never masked by a passing retry.
+            out=$(timeout 10m cargo nextest run --cargo-profile ci-dev --no-fail-fast \
+                  --all-targets --all-features --workspace --locked \
+                  -E 'not test(/^test::consensus_[34]_nodes/)' --retries 0 2>&1) || true
+            echo "$out" | tail -30
+            if printf '%s\n' "$out" | grep -qE 'aborted with signal|SIGSEGV|SIGABRT'; then
+              crashes=$((crashes + 1))
+              echo "*** teardown crash reproduced on iteration $i ***"
+              printf '%s\n' "$out" | grep -E 'SEGV|signal|abort' | head -20
+            fi
+            echo "::endgroup::"
+          done
+          echo "==== shard ${{ matrix.shard }}: $crashes/$iterations iterations crashed ===="
+          [ "$crashes" -eq 0 ] || exit 1
