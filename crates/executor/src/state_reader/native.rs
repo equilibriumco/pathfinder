@@ -30,8 +30,26 @@ type Cache = Mutex<SizedCache<ClassHash, CacheItem>>;
 
 #[derive(Clone)]
 pub struct NativeClassCache {
+    inner: Arc<Inner>,
+}
+
+/// Owns the class cache and the background compiler thread. The thread is shut
+/// down and joined when the last native class cache is dropped.
+struct Inner {
     cache: Arc<Cache>,
-    compiler_tx: std::sync::mpsc::Sender<CompilerInput>,
+    compiler_tx: Option<std::sync::mpsc::Sender<CompilerInput>>,
+    compiler_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        // Close the channel to force the compiler thread out of its loop.
+        drop(self.compiler_tx.take());
+        // Now wait for the compiler thread to end.
+        if let Some(thread) = self.compiler_thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 impl NativeClassCache {
@@ -40,7 +58,7 @@ impl NativeClassCache {
 
         let cache = Arc::new(Mutex::new(SizedCache::with_size(cache_size.get())));
 
-        util::task::spawn_std({
+        let compiler_handle = util::task::spawn_std({
             let cache = Arc::clone(&cache);
             move |cancellation_token| {
                 compiler_thread(cache, rx, cancellation_token, optimization_level.into())
@@ -48,8 +66,11 @@ impl NativeClassCache {
         });
 
         NativeClassCache {
-            cache,
-            compiler_tx: tx,
+            inner: Arc::new(Inner {
+                cache,
+                compiler_tx: Some(tx),
+                compiler_thread: Some(compiler_handle),
+            }),
         }
     }
 
@@ -60,7 +81,7 @@ impl NativeClassCache {
         class_definition: SerializedOpaqueClassDefinition,
         casm_definition: SerializedCasmDefinition,
     ) -> Option<NativeCompiledClassV1> {
-        let mut locked = self.cache.lock().unwrap();
+        let mut locked = self.inner.cache.lock().unwrap();
 
         match locked.cache_get(&class_hash) {
             Some(CacheItem::CompiledClass(cached_class)) => {
@@ -77,12 +98,17 @@ impl NativeClassCache {
                 tracing::trace!(%class_hash, "Native class cache miss (compiling)");
                 metrics::counter!("native_class_cache_miss_total").increment(1);
                 locked.cache_set(class_hash, CacheItem::CompilationPending);
-                let _ = self.compiler_tx.send(CompilerInput {
-                    class_hash,
-                    sierra_version,
-                    class_definition,
-                    casm_definition,
-                });
+                let _ = self
+                    .inner
+                    .compiler_tx
+                    .as_ref()
+                    .expect("compiler channel is open")
+                    .send(CompilerInput {
+                        class_hash,
+                        sierra_version,
+                        class_definition,
+                        casm_definition,
+                    });
                 metrics::gauge!(NATIVE_CLASS_COMPILATION_QUEUED_TOTAL_METRIC_NAME).increment(1.0);
                 None
             }
