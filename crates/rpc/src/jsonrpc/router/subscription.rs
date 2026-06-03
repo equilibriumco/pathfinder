@@ -7,6 +7,8 @@ use axum::extract::ws::{close_code, CloseFrame, Message, Utf8Bytes, WebSocket};
 use dashmap::DashMap;
 use futures::{SinkExt, StreamExt};
 use pathfinder_common::BlockNumber;
+use pathfinder_serde::AsBoundedVec;
+use serde::de::DeserializeSeed as _;
 use serde_json::value::RawValue;
 use tokio::sync::{mpsc, RwLock};
 use tracing::Instrument;
@@ -581,7 +583,11 @@ pub fn handle_json_rpc_socket(
                 }
             } else {
                 // Batch request.
-                let requests = match serde_json::from_str::<Vec<&RawValue>>(request) {
+                let as_bounded_vec =
+                    AsBoundedVec::<&RawValue>::new(state.context.config.batch_size_limit.get());
+                let requests = match as_bounded_vec
+                    .deserialize(&mut serde_json::Deserializer::from_str(request))
+                {
                     Ok(requests) => requests,
                     Err(e) => {
                         if let Err(e) = ws_tx

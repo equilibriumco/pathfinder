@@ -4,6 +4,8 @@ use std::future::Future;
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
+use pathfinder_serde::AsBoundedVec;
+use serde::de::DeserializeSeed as _;
 use serde_json::value::RawValue;
 use tracing::Instrument;
 
@@ -67,12 +69,16 @@ pub async fn handle_json_rpc_body(
             ));
         }
 
-        let requests = match serde_json::from_str::<Vec<&RawValue>>(body) {
-            Ok(requests) => requests,
-            Err(e) => {
-                return Err(RpcRequestError::ParseError(e.to_string()));
-            }
-        };
+        let as_bounded_vec =
+            AsBoundedVec::<&RawValue>::new(state.context.config.batch_size_limit.get());
+
+        let requests =
+            match as_bounded_vec.deserialize(&mut serde_json::Deserializer::from_str(body)) {
+                Ok(requests) => requests,
+                Err(e) => {
+                    return Err(RpcRequestError::ParseError(e.to_string()));
+                }
+            };
 
         if requests.is_empty() {
             return Err(RpcRequestError::InvalidRequest(

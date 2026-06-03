@@ -69,6 +69,7 @@ impl EthContractAddresses {
 pub struct RpcConfig {
     pub request_max_size: NonZeroUsize,
     pub request_timeout: Duration,
+    pub batch_size_limit: NonZeroUsize,
     pub batch_concurrency_limit: NonZeroUsize,
     pub disable_batch_requests: bool,
     pub get_events_event_filter_block_range_limit: NonZeroUsize,
@@ -252,6 +253,7 @@ impl RpcContext {
         let config = RpcConfig {
             request_max_size: NonZeroUsize::new(10 * 1024 * 1024).unwrap(),
             request_timeout: Duration::from_secs(120),
+            batch_size_limit: NonZeroUsize::new(100).unwrap(),
             batch_concurrency_limit: NonZeroUsize::new(8).unwrap(),
             disable_batch_requests: false,
             get_events_event_filter_block_range_limit: NonZeroUsize::new(1000).unwrap(),

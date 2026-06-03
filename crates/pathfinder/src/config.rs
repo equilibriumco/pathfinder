@@ -351,6 +351,14 @@ This should only be enabled for debugging purposes as it adds substantial proces
     verify_tree_node_data: bool,
 
     #[arg(
+        long = "rpc.batch-size-limit",
+        long_help = "Sets the maximum number of elements in a request batch.",
+        env = "PATHFINDER_RPC_BATCH_SIZE_LIMIT",
+        default_value = "100"
+    )]
+    rpc_batch_size_limit: NonZeroUsize,
+
+    #[arg(
         long = "rpc.batch-concurrency-limit",
         long_help = "Sets the concurrency limit for request batch processing. May lower the \
                      latency for large batches. ⚠ While the response order is eventually \
@@ -1128,6 +1136,7 @@ pub struct Config {
     pub preconfirmed_p2p: P2PPreconfirmedConfig,
     pub debug: DebugConfig,
     pub verify_tree_hashes: bool,
+    pub rpc_batch_size_limit: NonZeroUsize,
     pub rpc_batch_concurrency_limit: NonZeroUsize,
     pub disable_batch_requests: bool,
     pub is_sync_enabled: bool,
@@ -1431,6 +1440,7 @@ impl Config {
             preconfirmed_p2p: P2PPreconfirmedConfig::parse_or_exit(args.p2p_preconfirmed),
             debug: DebugConfig::parse(args.debug),
             verify_tree_hashes: args.verify_tree_node_data,
+            rpc_batch_size_limit: args.rpc_batch_size_limit,
             rpc_batch_concurrency_limit: args.rpc_batch_concurrency_limit,
             disable_batch_requests: args.disable_batch_requests,
             is_sync_enabled: args.is_sync_enabled,
