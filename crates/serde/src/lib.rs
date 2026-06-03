@@ -2,11 +2,14 @@
 //! data.
 
 use std::borrow::Cow;
+use std::fmt;
+use std::marker::PhantomData;
 
 use pathfinder_common::prelude::*;
 use pathfinder_crypto::{Felt, HexParseError};
 use primitive_types::{H160, H256, U256};
-use serde::de::Visitor;
+use serde::de::{self, DeserializeSeed, SeqAccess, Visitor};
+use serde::Deserialize;
 use serde_with::{serde_conv, DeserializeAs, SerializeAs};
 
 serde_conv!(
@@ -460,6 +463,73 @@ pub fn extract_program_and_entry_points_by_type(
     ))
 }
 
+pub struct AsBoundedVec<T> {
+    pub max_len: usize,
+    _marker: PhantomData<T>,
+}
+
+impl<T> AsBoundedVec<T> {
+    pub fn new(max_len: usize) -> Self {
+        Self {
+            max_len,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'de, T> DeserializeSeed<'de> for AsBoundedVec<T>
+where
+    T: Deserialize<'de>,
+{
+    type Value = Vec<T>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Vec<T>, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        struct BoundedVecVisitor<T> {
+            max_len: usize,
+            _marker: PhantomData<T>,
+        }
+
+        impl<'de, T> Visitor<'de> for BoundedVecVisitor<T>
+        where
+            T: Deserialize<'de>,
+        {
+            type Value = Vec<T>;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "an array with at most {} elements", self.max_len)
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Vec<T>, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut vec = Vec::new();
+
+                while let Some(item) = seq.next_element::<T>()? {
+                    if vec.len() >= self.max_len {
+                        return Err(de::Error::custom(format!(
+                            "array exceeds maximum length {}",
+                            self.max_len
+                        )));
+                    }
+
+                    vec.push(item);
+                }
+
+                Ok(vec)
+            }
+        }
+
+        deserializer.deserialize_seq(BoundedVecVisitor {
+            max_len: self.max_len,
+            _marker: PhantomData,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use assert_matches::assert_matches;
@@ -663,5 +733,26 @@ mod tests {
                 assert!(e.is_data(), "{e:?}");
             });
         }
+    }
+
+    #[test]
+    fn as_bounded_vec_accepts_items_up_to_the_limit() {
+        let json = r#"[1,2]"#;
+        let seed = AsBoundedVec::<u32>::new(2);
+        let mut de = serde_json::Deserializer::from_str(json);
+        assert_eq!(seed.deserialize(&mut de).unwrap(), vec![1, 2]);
+    }
+
+    #[test]
+    fn as_bounded_vec_rejects_too_many_items() {
+        let json = r#"[1,2,3]"#;
+        let seed = AsBoundedVec::<u32>::new(2);
+        let mut de = serde_json::Deserializer::from_str(json);
+        let error = seed.deserialize(&mut de).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "array exceeds maximum length 2 at line 1 column 7"
+        );
     }
 }
