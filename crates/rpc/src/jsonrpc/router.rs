@@ -682,8 +682,7 @@ mod tests {
         /// Builds the spec router with a custom maximum batch size.
         fn spec_router_with_batch_limit(limit: usize) -> RpcRouter {
             let mut router = spec_router();
-            router.context.config.batch_size_limit =
-                std::num::NonZeroUsize::new(limit).unwrap();
+            router.context.config.batch_size_limit = std::num::NonZeroUsize::new(limit).unwrap();
             router
         }
 
@@ -716,8 +715,7 @@ mod tests {
             let response =
                 serve_and_query(spec_router_with_batch_limit(LIMIT), at_limit.clone()).await;
             assert_eq!(response, expected);
-            let response =
-                serve_and_query_ws(spec_router_with_batch_limit(LIMIT), at_limit).await;
+            let response = serve_and_query_ws(spec_router_with_batch_limit(LIMIT), at_limit).await;
             assert_eq!(response, expected);
 
             // A batch with one request over the limit is rejected.
@@ -729,9 +727,7 @@ mod tests {
                 assert_eq!(error["code"], json!(-32700));
                 assert_eq!(error["message"], json!("Parse error"));
                 let reason = error["data"]["reason"].as_str().unwrap();
-                assert!(
-                    reason.starts_with(&format!("array exceeds maximum length {LIMIT}"))
-                );
+                assert!(reason.starts_with(&format!("array exceeds maximum length {LIMIT}")));
             };
 
             assert_rejected(
