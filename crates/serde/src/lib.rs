@@ -498,7 +498,7 @@ where
         {
             type Value = Vec<T>;
 
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(f, "an array with at most {} elements", self.max_len)
             }
 
