@@ -678,6 +678,69 @@ mod tests {
             let res: serde_json::Value = serde_json::from_str(&response).unwrap();
             assert_eq!(res, expected);
         }
+
+        /// Builds the spec router with a custom maximum batch size.
+        fn spec_router_with_batch_limit(limit: usize) -> RpcRouter {
+            let mut router = spec_router();
+            router.context.config.batch_size_limit =
+                std::num::NonZeroUsize::new(limit).unwrap();
+            router
+        }
+
+        #[tokio::test]
+        async fn batch_size_limit_is_enforced() {
+            const LIMIT: usize = 2;
+
+            let request = |count: usize| {
+                Value::Array(
+                    (0..count)
+                        .map(|id| {
+                            json!({
+                                "jsonrpc": "2.0",
+                                "method": "subtract",
+                                "params": [42, 23],
+                                "id": id,
+                            })
+                        })
+                        .collect(),
+                )
+            };
+
+            // A batch at the limit succeeds.
+            let at_limit = request(LIMIT);
+            let expected = Value::Array(
+                (0..LIMIT)
+                    .map(|id| json!({"jsonrpc": "2.0", "result": 19, "id": id}))
+                    .collect(),
+            );
+            let response =
+                serve_and_query(spec_router_with_batch_limit(LIMIT), at_limit.clone()).await;
+            assert_eq!(response, expected);
+            let response =
+                serve_and_query_ws(spec_router_with_batch_limit(LIMIT), at_limit).await;
+            assert_eq!(response, expected);
+
+            // A batch with one request over the limit is rejected.
+            let over_limit = request(LIMIT + 1);
+            let assert_rejected = |response: Value| {
+                let error = &response["error"];
+                assert_eq!(response["jsonrpc"], json!("2.0"));
+                assert_eq!(response["id"], Value::Null);
+                assert_eq!(error["code"], json!(-32700));
+                assert_eq!(error["message"], json!("Parse error"));
+                let reason = error["data"]["reason"].as_str().unwrap();
+                assert!(
+                    reason.starts_with(&format!("array exceeds maximum length {LIMIT}"))
+                );
+            };
+
+            assert_rejected(
+                serve_and_query(spec_router_with_batch_limit(LIMIT), over_limit.clone()).await,
+            );
+            assert_rejected(
+                serve_and_query_ws(spec_router_with_batch_limit(LIMIT), over_limit).await,
+            );
+        }
     }
 
     mod panic_handling {
