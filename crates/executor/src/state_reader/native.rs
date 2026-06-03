@@ -189,8 +189,6 @@ fn sierra_class_as_native(
         ))
     })?;
 
-    let mut class_path = std::env::temp_dir();
-    class_path.push(format!("native_class_{}", input.class_hash));
     let version_id = cairo_lang_starknet_classes::compiler_version::VersionId {
         major: input.sierra_version.major as usize,
         minor: input.sierra_version.minor as usize,
