@@ -1490,6 +1490,13 @@ pub struct WebsocketConfig {
         env = "PATHFINDER_WEBSOCKET_MAX_HISTORY"
     )]
     pub max_history: WebsocketHistory,
+    #[arg(
+        long = "rpc.websocket.max-subscriptions",
+        long_help = "Sets the limit for the number of subscriptions per connection.",
+        default_value = "1024",
+        env = "PATHFINDER_WEBSOCKET_MAX_SUBSCRIPTIONS"
+    )]
+    pub max_subscriptions: NonZeroUsize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

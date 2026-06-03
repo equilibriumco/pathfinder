@@ -39,10 +39,14 @@ pub enum WebsocketHistory {
 #[derive(Clone)]
 pub struct WebsocketContext {
     pub max_history: WebsocketHistory,
+    pub max_subscriptions: usize,
 }
 
 impl WebsocketContext {
-    pub fn new(max_history: WebsocketHistory) -> Self {
-        Self { max_history }
+    pub fn new(max_history: WebsocketHistory, max_subscriptions: usize) -> Self {
+        Self {
+            max_history,
+            max_subscriptions,
+        }
     }
 }
