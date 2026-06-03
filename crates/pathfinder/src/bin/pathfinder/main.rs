@@ -255,6 +255,7 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
     let rpc_config = pathfinder_rpc::context::RpcConfig {
         request_max_size: config.rpc_request_max_size,
         request_timeout: config.rpc_request_timeout,
+        batch_size_limit: config.rpc_batch_size_limit,
         batch_concurrency_limit: config.rpc_batch_concurrency_limit,
         disable_batch_requests: config.disable_batch_requests,
         get_events_event_filter_block_range_limit: config.get_events_event_filter_block_range_limit,
