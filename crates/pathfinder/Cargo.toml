@@ -32,7 +32,6 @@ flate2 = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
 http = { workspace = true }
 ipnet = { workspace = true }
-jemallocator = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 num-bigint = { workspace = true }
@@ -73,6 +72,7 @@ starknet-gateway-types = { path = "../gateway-types" }
 starknet_api = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+tikv-jemallocator = { workspace = true }
 time = { workspace = true, features = ["macros"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
 tokio-stream = { workspace = true, features = ["sync"] }
