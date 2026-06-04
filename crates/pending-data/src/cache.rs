@@ -6,18 +6,33 @@ use tokio::time::Instant;
 
 use crate::data::PendingData;
 
+/// Status of the cached pending data.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Status {
+    /// The data is current.
+    #[default]
+    Fresh,
+    /// The data may be out of date.
+    Stale,
+    /// Fresh data cannot be produced right now; the string carries the reason.
+    Unavailable(&'static str),
+}
+
+/// The cache's freshness: its current [`Status`] plus a publish counter.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Freshness {
-    stale: bool,
-    refresh_count: u64,
+    status: Status,
+    /// Monotonic count of publishes (`store` / `mark_fresh`).
+    publish_seq: u64,
 }
 
 /// Shared pre-confirmed data cache with freshness tracking.
 ///
 /// Holds the latest [`PendingData`] and a small amount of freshness state.
-/// - Writes via [`Self::store`] / [`Self::refresh`] / [`Self::mark_stale`].
-/// - Reads via [`Self::read`] (blocks if stale, then returns fresh data) and
-///   [`Self::subscribe`] for streaming.
+/// - Writes via [`Self::store`] / [`Self::mark_fresh`] / [`Self::mark_stale`] /
+///   [`Self::mark_unavailable`].
+/// - Reads via [`Self::read`] (returns fresh data, blocks while stale, fails
+///   fast while unavailable) and [`Self::subscribe`] for streaming.
 pub struct PendingDataCache {
     data_tx: watch::Sender<PendingData>,
     data_rx: watch::Receiver<PendingData>,
@@ -70,15 +85,29 @@ impl PendingDataCache {
         self.bump_freshness();
     }
 
-    /// Marks the cache stale; subsequent [`Self::read`] calls block until
-    /// the next [`Self::store`] / [`Self::refresh`] or a timeout elapses.
+    /// Marks the cache stale; subsequent [`Self::read`] calls block until the
+    /// next [`Self::store`] / [`Self::mark_fresh`] or a timeout elapses. Only
+    /// moves `Fresh → Stale` — it never downgrades `Unavailable`.
     pub fn mark_stale(&self) {
         self.freshness_tx.send_if_modified(|f| {
-            if !f.stale {
-                f.stale = true;
-                return true;
+            if matches!(f.status, Status::Fresh) {
+                f.status = Status::Stale;
+                true
+            } else {
+                false
             }
-            false
+        });
+    }
+
+    /// Marks the cache unavailable; reads fail fast with `reason` until the
+    /// next [`Self::store`] / [`Self::mark_fresh`].
+    pub fn mark_unavailable(&self, reason: &'static str) {
+        self.freshness_tx.send_if_modified(|f| match f.status {
+            Status::Unavailable(existing) if existing == reason => false,
+            _ => {
+                f.status = Status::Unavailable(reason);
+                true
+            }
         });
     }
 
@@ -87,8 +116,9 @@ impl PendingDataCache {
         self.on_read.notified().await;
     }
 
-    /// Returns the latest cached data. Blocks while the cache is stale,
-    /// up to the configured cold-start timeout. Always fires the read signal.
+    /// Returns the latest cached data. Returns immediately when fresh, fails
+    /// fast with the reason when unavailable, and blocks while stale (up to the
+    /// configured cold-start timeout). Always fires the read signal.
     pub async fn read(&self) -> anyhow::Result<PendingData> {
         self.signal_read();
         self.wait_for_fresh_data().await?;
@@ -99,10 +129,10 @@ impl PendingDataCache {
     /// Fast path (non-blocking). Always fires the read signal.
     pub fn try_read(&self) -> Option<PendingData> {
         self.signal_read();
-        if self.freshness_tx.borrow().stale {
-            return None;
+        match self.freshness_tx.borrow().status {
+            Status::Fresh => Some(self.data_rx.borrow().clone()),
+            Status::Stale | Status::Unavailable(_) => None,
         }
-        Some(self.data_rx.borrow().clone())
     }
 
     /// A fresh `watch::Receiver` for awaiting changes directly.
@@ -132,14 +162,14 @@ impl PendingDataCache {
 
     fn bump_freshness(&self) {
         self.freshness_tx.send_modify(|f| {
-            f.stale = false;
-            f.refresh_count = f.refresh_count.wrapping_add(1);
+            f.status = Status::Fresh;
+            f.publish_seq = f.publish_seq.wrapping_add(1);
         });
     }
 
     async fn wait_for_fresh_data(&self) -> anyhow::Result<()> {
         let snapshot = *self.freshness_tx.borrow();
-        if !snapshot.stale {
+        if matches!(snapshot.status, Status::Fresh) {
             return Ok(());
         }
 
@@ -147,18 +177,29 @@ impl PendingDataCache {
         let _ = rx.borrow_and_update();
 
         let result = tokio::time::timeout(self.cold_start_timeout, async {
-            while rx.borrow().refresh_count == snapshot.refresh_count {
+            loop {
+                let current = *rx.borrow();
+
+                // Unavailable now. Fail fast with the reason.
+                if let Status::Unavailable(reason) = current.status {
+                    return Err(anyhow::anyhow!("pre-confirmed data unavailable: {reason}"));
+                }
+
+                // A publish landed. The data is fresh, serve it.
+                if current.publish_seq != snapshot.publish_seq {
+                    return Ok(());
+                }
+
+                // Still stale. Park until the next change, or bail if the producer is gone.
                 if rx.changed().await.is_err() {
                     return Err(anyhow::anyhow!("producer disconnected"));
                 }
             }
-            Ok(())
         })
         .await;
 
         match result {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(e),
+            Ok(r) => r,
             Err(_) => Err(anyhow::anyhow!(
                 "cold-start read timed out after {:?}",
                 self.cold_start_timeout
@@ -273,7 +314,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn idle_cache_blocks_read_until_refresh() {
+    async fn idle_cache_blocks_read_until_mark_fresh() {
         let cache =
             Arc::new(PendingDataCache::new().with_cold_start_timeout(Duration::from_secs(5)));
         let initial = sample_data(99);
@@ -290,14 +331,14 @@ mod tests {
 
         let got = timeout(Duration::from_millis(100), reader)
             .await
-            .expect("reader should unblock on refresh")
+            .expect("reader should unblock when marked fresh")
             .unwrap()
             .unwrap();
         assert_eq!(got, initial);
     }
 
     #[tokio::test]
-    async fn concurrent_cold_reads_share_one_refresh() {
+    async fn concurrent_cold_reads_share_one_publish() {
         let cache =
             Arc::new(PendingDataCache::new().with_cold_start_timeout(Duration::from_secs(5)));
         cache.mark_stale();
@@ -324,7 +365,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cold_read_times_out_when_no_refresh() {
+    async fn cold_read_times_out_when_no_publish() {
         let cache = PendingDataCache::new().with_cold_start_timeout(Duration::from_millis(40));
         cache.mark_stale();
 
@@ -398,6 +439,111 @@ mod tests {
         let cache = PendingDataCache::new();
         cache.mark_stale();
         assert!(cache.try_read().is_none());
+    }
+
+    #[tokio::test]
+    async fn read_fails_fast_when_unavailable() {
+        // Default cold-start timeout is 5s; if the read blocked, the 50ms
+        // outer timeout would trip. Returning an error promptly proves the
+        // Unavailable arm short-circuits.
+        let cache = PendingDataCache::new();
+        cache.mark_unavailable("syncing");
+
+        let err = timeout(Duration::from_millis(50), cache.read())
+            .await
+            .expect("read should return promptly, not block on cold-start")
+            .unwrap_err();
+        assert!(err.to_string().contains("syncing"));
+    }
+
+    #[tokio::test]
+    async fn store_clears_unavailable() {
+        let cache = PendingDataCache::new();
+        cache.mark_unavailable("syncing");
+
+        let expected = sample_data(7);
+        cache.store(expected.clone());
+
+        let got = timeout(Duration::from_millis(20), cache.read())
+            .await
+            .expect("read should be immediate once fresh")
+            .unwrap();
+        assert_eq!(got, expected);
+    }
+
+    #[tokio::test]
+    async fn mark_stale_does_not_downgrade_unavailable() {
+        // Unavailable is the stickier state: an idle-suspend mark_stale() must
+        // not turn it into a blocking Stale read.
+        let cache = PendingDataCache::new();
+        cache.mark_unavailable("syncing");
+        cache.mark_stale();
+
+        let err = timeout(Duration::from_millis(50), cache.read())
+            .await
+            .expect("read should still fail fast")
+            .unwrap_err();
+        assert!(err.to_string().contains("syncing"));
+    }
+
+    #[tokio::test]
+    async fn mark_unavailable_wakes_blocked_stale_reader() {
+        // A reader blocked on a Stale cache must wake the moment the producer
+        // flips to Unavailable, instead of riding out the 5s cold-start timeout.
+        let cache =
+            Arc::new(PendingDataCache::new().with_cold_start_timeout(Duration::from_secs(5)));
+        cache.mark_stale();
+
+        let reader_cache = cache.clone();
+        let reader = tokio::spawn(async move { reader_cache.read().await });
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(!reader.is_finished(), "reader should block while stale");
+
+        cache.mark_unavailable("gateway error");
+
+        let err = timeout(Duration::from_millis(100), reader)
+            .await
+            .expect("reader should wake well before the 5s timeout")
+            .unwrap()
+            .unwrap_err();
+        assert!(err.to_string().contains("gateway error"));
+    }
+
+    #[tokio::test]
+    async fn try_read_returns_none_when_unavailable() {
+        let cache = PendingDataCache::new();
+        cache.mark_unavailable("syncing");
+        assert!(cache.try_read().is_none());
+    }
+
+    #[tokio::test]
+    async fn blocked_read_wakes_on_publish_even_if_restaled() {
+        // A publish immediately followed by re-staling (Stale → Fresh → Stale)
+        // must still release a blocked read. `freshness` looks unchanged at both
+        // ends, so the wake relies on the bumped publish counter alone.
+        let cache =
+            Arc::new(PendingDataCache::new().with_cold_start_timeout(Duration::from_secs(5)));
+        cache.mark_stale();
+
+        let reader_cache = cache.clone();
+        let reader = tokio::spawn(async move { reader_cache.read().await });
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(!reader.is_finished(), "reader should block while stale");
+
+        // No await between these two, so the reader observes only the coalesced
+        // final state: Stale, with the publish counter already bumped.
+        let expected = sample_data(7);
+        cache.store(expected.clone());
+        cache.mark_stale();
+
+        let got = timeout(Duration::from_millis(100), reader)
+            .await
+            .expect("reader should wake on the publish, not time out")
+            .unwrap()
+            .unwrap();
+        assert_eq!(got, expected);
     }
 
     #[tokio::test]
