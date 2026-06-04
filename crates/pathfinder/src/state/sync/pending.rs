@@ -1114,16 +1114,23 @@ mod tests {
         let (_, rx_current) = watch::channel((latest_block_number, our_latest_hash));
 
         let sequencer = Arc::new(sequencer);
-        let _jh = tokio::spawn(async move {
-            super::poll_pre_confirmed(
-                tx,
-                sequencer,
-                std::time::Duration::ZERO,
-                Arc::new(PendingDataCache::new()),
-                rx_latest,
-                rx_current,
-            )
-            .await
+        // Pre-stale the cache so the lower-height branch's `mark_fresh()` is
+        // observable: without it the cache would stay stale.
+        let cache = Arc::new(PendingDataCache::new());
+        cache.mark_stale();
+        let _jh = tokio::spawn({
+            let cache = cache.clone();
+            async move {
+                super::poll_pre_confirmed(
+                    tx,
+                    sequencer,
+                    std::time::Duration::ZERO,
+                    cache,
+                    rx_latest,
+                    rx_current,
+                )
+                .await
+            }
         });
 
         let first = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
@@ -1140,6 +1147,90 @@ mod tests {
             result.is_err(),
             "No event should be emitted for a backwards-resolved height"
         );
+
+        // The lower-height skip keeps the cache serviceable via `mark_fresh()`,
+        // rather than marking it unavailable.
+        assert!(
+            cache.try_read().is_some(),
+            "lower-height skip should mark the cache fresh, not leave it stale or unavailable"
+        );
+    }
+
+    /// While catching up to head, the loop marks the cache unavailable so reads
+    /// fail fast with "syncing" instead of blocking on the cold-start
+    /// timeout.
+    #[tokio::test(start_paused = true)]
+    async fn syncing_marks_cache_unavailable() {
+        // latest far ahead of current: the catch-up branch runs and never
+        // fetches, so an expectation-free mock gateway is fine.
+        let sequencer = Arc::new(MockGatewayApi::new());
+        let hash = block_hash!("0xabcd");
+        let (_tx_latest, latest) = watch::channel((BlockNumber::new_or_panic(100), hash));
+        let (_tx_current, current) = watch::channel((BlockNumber::new_or_panic(0), hash));
+
+        let cache = Arc::new(PendingDataCache::new());
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let _jh = tokio::spawn({
+            let cache = cache.clone();
+            async move {
+                super::poll_pre_confirmed(
+                    tx,
+                    sequencer,
+                    std::time::Duration::from_secs(1),
+                    cache,
+                    latest,
+                    current,
+                )
+                .await
+            }
+        });
+
+        // Hand the loop a turn to reach the catch-up branch (virtual time).
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let err = cache.read().await.unwrap_err();
+        assert!(err.to_string().contains("syncing"), "got: {err}");
+    }
+
+    /// A failed pre-confirmed fetch marks the cache unavailable with
+    /// "gateway error", so reads fail fast rather than blocking.
+    #[tokio::test(start_paused = true)]
+    async fn gateway_error_marks_cache_unavailable() {
+        use starknet_gateway_types::error::SequencerError;
+
+        // In sync (latest == current) so the loop reaches the fetch, which fails.
+        let mut sequencer = MockGatewayApi::new();
+        sequencer
+            .expect_preconfirmed_block()
+            .returning(|_, _, _| Err(SequencerError::InvalidResponse("boom".into())));
+        let sequencer = Arc::new(sequencer);
+
+        let hash = block_hash!("0xabcd");
+        let number = BlockNumber::new_or_panic(10);
+        let (_tx_latest, latest) = watch::channel((number, hash));
+        let (_tx_current, current) = watch::channel((number, hash));
+
+        let cache = Arc::new(PendingDataCache::new());
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let _jh = tokio::spawn({
+            let cache = cache.clone();
+            async move {
+                super::poll_pre_confirmed(
+                    tx,
+                    sequencer,
+                    std::time::Duration::from_secs(1),
+                    cache,
+                    latest,
+                    current,
+                )
+                .await
+            }
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let err = cache.read().await.unwrap_err();
+        assert!(err.to_string().contains("gateway error"), "got: {err}");
     }
 
     /// When the chain advances past the pre-confirmed block we're tracking,
