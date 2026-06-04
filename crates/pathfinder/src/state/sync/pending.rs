@@ -150,6 +150,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                 latest = %latest_number.get(), current = %current_number,
                 "Not in sync yet; skipping pre-confirmed block download"
             );
+            cache.mark_unavailable("syncing");
             wait_for_next_poll(t_fetch + poll_interval, &cache).await;
             continue;
         }
@@ -168,6 +169,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             Ok(r) => r,
             Err(err) => {
                 tracing::debug!(%err, "Failed to fetch pre-confirmed block");
+                cache.mark_unavailable("gateway error");
                 wait_for_next_poll(t_fetch + poll_interval, &cache).await;
                 continue;
             }
@@ -190,6 +192,8 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                     current = %state.block_number,
                     "Pre-confirmed resolved to a lower height than tracked; skipping poll"
                 );
+                // We assume this is just a hiccup and trust our tracked block
+                cache.mark_fresh();
                 wait_for_next_poll(t_fetch + poll_interval, &cache).await;
                 continue;
             }
