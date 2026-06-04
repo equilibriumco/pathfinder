@@ -81,8 +81,7 @@ pub async fn get_transaction_by_block_id_and_index(
             BlockId::PreConfirmed => {
                 let result = context
                     .pending_data
-                    .get(&db_tx, rpc_version)
-                    .context("Querying pending dat")?
+                    .get(&db_tx, rpc_version)?
                     .pre_confirmed_transactions()
                     .get(index)
                     .cloned()

@@ -27,6 +27,8 @@ impl From<anyhow::Error> for CallError {
     }
 }
 
+crate::error::impl_from_pending_read_error!(CallError);
+
 impl From<pathfinder_executor::CallError> for CallError {
     fn from(value: pathfinder_executor::CallError) -> Self {
         use pathfinder_executor::CallError::*;
@@ -136,10 +138,7 @@ pub async fn call(
 
         let (header, pending) = match input.block_id {
             BlockId::PreConfirmed => {
-                let pending = context
-                    .pending_data
-                    .get(&db_tx, rpc_version)
-                    .context("Querying pending data")?;
+                let pending = context.pending_data.get(&db_tx, rpc_version)?;
 
                 (
                     pending.pre_confirmed_header(),

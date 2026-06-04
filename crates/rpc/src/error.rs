@@ -394,6 +394,25 @@ fn error_stack_frames_to_json(frames: &[pathfinder_executor::Frame]) -> serde_js
         })
 }
 
+/// Generates `From<ReadError>` for the pending cache read error.
+/// `Unavailable` maps to our `Custom` rpc error, and everything else to
+/// `Internal` to avoid leaking internal details.
+macro_rules! impl_from_pending_read_error {
+    ($enum_name:ty) => {
+        impl From<pathfinder_pending_data::ReadError> for $enum_name {
+            fn from(e: pathfinder_pending_data::ReadError) -> Self {
+                match e {
+                    pathfinder_pending_data::ReadError::Unavailable(reason) => Self::Custom(
+                        ::anyhow::anyhow!("pre-confirmed data unavailable: {reason}"),
+                    ),
+                    pathfinder_pending_data::ReadError::Internal(e) => Self::Internal(e),
+                }
+            }
+        }
+    };
+}
+pub(super) use impl_from_pending_read_error;
+
 /// Generates an enum subset of [ApplicationError] along with boilerplate for
 /// mapping the variants back to [ApplicationError].
 ///
@@ -474,12 +493,14 @@ macro_rules! generate_rpc_error_subset {
     ($enum_name:ident) => {
         generate_rpc_error_subset!(@enum_def, $enum_name,);
         generate_rpc_error_subset!(@from_anyhow, $enum_name);
+        generate_rpc_error_subset!(@from_read_error, $enum_name);
         generate_rpc_error_subset!(@from_def, $enum_name,);
     };
     // Main entry-point for the macro
     ($enum_name:ident: $($subset:tt),+) => {
         generate_rpc_error_subset!(@enum_def, $enum_name, $($subset),+);
         generate_rpc_error_subset!(@from_anyhow, $enum_name);
+        generate_rpc_error_subset!(@from_read_error, $enum_name);
         generate_rpc_error_subset!(@from_def, $enum_name, $($subset),+);
     };
     // Generates the enum definition, nothing tricky here.
@@ -500,6 +521,11 @@ macro_rules! generate_rpc_error_subset {
                 Self::Internal(e)
             }
         }
+    };
+    // Generates From<ReadError>; the mapping lives in
+    // `impl_from_pending_read_error!`, which the hand-written error enums share.
+    (@from_read_error, $enum_name:ident) => {
+        crate::error::impl_from_pending_read_error!($enum_name);
     };
     // Generates From<$enum_name> for RpcError, this macro arm itself is not tricky,
     // however its child calls are.

@@ -85,10 +85,7 @@ pub async fn get_block_with_txs(
 
         let block_id = match input.block_id {
             BlockId::PreConfirmed => {
-                let pending = context
-                    .pending_data
-                    .get(&transaction, rpc_version)
-                    .context("Querying pending data")?;
+                let pending = context.pending_data.get(&transaction, rpc_version)?;
 
                 let transactions = pending.pre_confirmed_transactions().to_vec();
 

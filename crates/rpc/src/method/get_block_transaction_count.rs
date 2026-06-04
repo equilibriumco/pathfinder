@@ -43,8 +43,7 @@ pub async fn get_block_transaction_count(
             BlockId::PreConfirmed => {
                 let count = context
                     .pending_data
-                    .get(&db, rpc_version)
-                    .context("Querying pending data")?
+                    .get(&db, rpc_version)?
                     .pre_confirmed_transactions()
                     .len() as u64;
                 return Ok(Output(count));

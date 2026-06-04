@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use pathfinder_common::{BlockNumber, StateUpdate};
-use pathfinder_pending_data::PendingDataCache;
 pub use pathfinder_pending_data::{
     PendingBlocks,
     PendingData,
@@ -11,6 +10,7 @@ pub use pathfinder_pending_data::{
     PreLatestData,
     TxnReceiptAndEvents,
 };
+use pathfinder_pending_data::{PendingDataCache, ReadError};
 use pathfinder_storage::Transaction;
 use tokio::sync::watch::Receiver as WatchReceiver;
 
@@ -53,7 +53,7 @@ impl PendingWatcher {
         &self,
         tx: &Transaction<'_>,
         rpc_version: RpcVersion,
-    ) -> anyhow::Result<PendingData> {
+    ) -> Result<PendingData, ReadError> {
         let latest = tx
             .block_header(pathfinder_common::BlockId::Latest)
             .context("Querying latest block header")?
@@ -69,9 +69,7 @@ impl PendingWatcher {
 
         let watched_pending_data = match self.cache.try_read() {
             Some(data) => data,
-            None => tokio::runtime::Handle::current()
-                .block_on(self.cache.read())
-                .context("Reading pre-confirmed cache")?,
+            None => tokio::runtime::Handle::current().block_on(self.cache.read())?,
         };
 
         let watched_pending_blocks = watched_pending_data.pending_block();

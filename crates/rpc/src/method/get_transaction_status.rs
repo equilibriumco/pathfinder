@@ -48,7 +48,7 @@ pub async fn get_transaction_status(
 ) -> Result<Output, Error> {
     // Check database.
     let span = tracing::Span::current();
-    let db_status = util::task::spawn_blocking(move |_| {
+    let db_status = util::task::spawn_blocking(move |_| -> Result<Option<Output>, Error> {
         let _g = span.enter();
 
         let mut db = context
@@ -57,10 +57,7 @@ pub async fn get_transaction_status(
             .context("Opening database connection")?;
         let db_tx = db.transaction().context("Creating database transaction")?;
 
-        let pending_data = context
-            .pending_data
-            .get(&db_tx, rpc_version)
-            .context("Querying pending data")?;
+        let pending_data = context.pending_data.get(&db_tx, rpc_version)?;
 
         if let Some(finalized_tx_data) =
             crate::pending::find_finalized_tx_data(&pending_data, input.transaction_hash)
@@ -97,7 +94,7 @@ pub async fn get_transaction_status(
             .transaction_with_receipt(input.transaction_hash)
             .context("Fetching receipt from database")?
         else {
-            return anyhow::Ok(None);
+            return Ok(None);
         };
 
         let l1_accepted = db_tx

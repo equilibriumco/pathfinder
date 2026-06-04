@@ -67,10 +67,7 @@ pub async fn trace_transaction(
                 .context("Creating database transaction")?;
 
             // Find the transaction's block.
-            let pending = context
-                .pending_data
-                .get(&db_tx, rpc_version)
-                .context("Querying pending data")?;
+            let pending = context.pending_data.get(&db_tx, rpc_version)?;
 
             let (header, transactions, cache) = if let Some(pending_tx) = pending
                 .pre_confirmed_transactions()
@@ -289,6 +286,8 @@ impl From<anyhow::Error> for TraceTransactionError {
         Self::Internal(e)
     }
 }
+
+crate::error::impl_from_pending_read_error!(TraceTransactionError);
 
 impl From<super::trace_block_transactions::TraceBlockTransactionsError> for TraceTransactionError {
     fn from(e: super::trace_block_transactions::TraceBlockTransactionsError) -> Self {

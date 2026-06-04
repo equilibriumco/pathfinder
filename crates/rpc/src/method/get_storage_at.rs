@@ -77,10 +77,7 @@ pub async fn get_storage_at(
         let tx = db.transaction().context("Creating database transaction")?;
 
         if input.block_id.is_pending() {
-            let pending_data = context
-                .pending_data
-                .get(&tx, rpc_version)
-                .context("Querying pending data")?;
+            let pending_data = context.pending_data.get(&tx, rpc_version)?;
             let opt_found = pending_data.find_storage_value(input.contract_address, input.key);
             if let Some(found) = opt_found {
                 let (value, last_update_block) = match found {

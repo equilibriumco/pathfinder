@@ -45,8 +45,7 @@ pub async fn get_class_hash_at(
         if input.block_id.is_pending() {
             let class_hash = context
                 .pending_data
-                .get(&tx, rpc_version)
-                .context("Querying pending data")?
+                .get(&tx, rpc_version)?
                 .find_contract_class(input.contract_address);
 
             if let Some(class_hash) = class_hash {

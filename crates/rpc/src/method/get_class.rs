@@ -60,8 +60,7 @@ pub async fn get_class(
         let is_pending = input.block_id.is_pending()
             && context
                 .pending_data
-                .get(&tx, rpc_version)
-                .context("Querying pending data")?
+                .get(&tx, rpc_version)?
                 .class_is_declared(input.class_hash);
 
         let block_id = input

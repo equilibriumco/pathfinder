@@ -60,10 +60,7 @@ pub async fn get_block_with_tx_hashes(
 
         let block_id = match input.block_id {
             BlockId::PreConfirmed => {
-                let pending = context
-                    .pending_data
-                    .get(&transaction, rpc_version)
-                    .context("Querying pending data")?;
+                let pending = context.pending_data.get(&transaction, rpc_version)?;
 
                 let transactions = pending
                     .pre_confirmed_transactions()
@@ -169,6 +166,28 @@ mod tests {
     use super::*;
     use crate::dto::{SerializeForVersion, Serializer};
     use crate::RpcVersion;
+
+    /// An unavailable pre-confirmed cache surfaces a client-visible reason —
+    /// code -32603 with the reason in `data` — rather than a bare
+    /// "Internal error".
+    #[test]
+    fn unavailable_maps_to_custom_with_reason() {
+        use pathfinder_pending_data::ReadError;
+
+        use crate::error::ApplicationError;
+
+        let err: Error = ReadError::Unavailable("syncing").into();
+        let app: ApplicationError = err.into();
+
+        assert_eq!(app.code(RpcVersion::V09), -32603);
+        let data = app
+            .data(RpcVersion::V09)
+            .expect("the reason is carried in `data`");
+        assert!(
+            data["error"].as_str().unwrap().contains("syncing"),
+            "got: {data}"
+        );
+    }
 
     #[rstest::rstest]
     #[case::v06(RpcVersion::V06)]
