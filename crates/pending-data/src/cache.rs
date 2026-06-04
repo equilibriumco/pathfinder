@@ -65,8 +65,8 @@ impl PendingDataCache {
         self.bump_freshness();
     }
 
-    /// Marks the cache fresh without changing its contents.
-    pub fn refresh(&self) {
+    /// Marks the cache fresh without replacing its contents.
+    pub fn mark_fresh(&self) {
         self.bump_freshness();
     }
 
@@ -222,12 +222,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_does_not_notify_subscribers() {
+    async fn mark_fresh_does_not_notify_subscribers() {
         let cache = PendingDataCache::new();
         let mut rx = cache.subscribe();
         let _ = rx.borrow_and_update();
 
-        cache.refresh();
+        cache.mark_fresh();
 
         assert!(timeout(Duration::from_millis(50), rx.changed())
             .await
@@ -286,7 +286,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(30)).await;
         assert!(!reader.is_finished());
 
-        cache.refresh();
+        cache.mark_fresh();
 
         let got = timeout(Duration::from_millis(100), reader)
             .await
@@ -346,10 +346,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_after_idle_clears_stale() {
+    async fn mark_fresh_after_idle_clears_stale() {
         let cache = PendingDataCache::new().with_cold_start_timeout(Duration::from_millis(50));
         cache.mark_stale();
-        cache.refresh();
+        cache.mark_fresh();
 
         timeout(Duration::from_millis(20), cache.read())
             .await
@@ -371,7 +371,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(30)).await;
         assert!(!reader.is_finished());
 
-        cache.refresh();
+        cache.mark_fresh();
         timeout(Duration::from_millis(100), reader)
             .await
             .expect("reader should unblock")

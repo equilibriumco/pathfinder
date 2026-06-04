@@ -233,7 +233,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
         // Publish. Each branch is responsible for signalling cache freshness:
         //   - changed: the emitted event leads to a `cache.store(...)` call, which
         //     bumps freshness as a side effect.
-        //   - unchanged: nothing is emitted, so we call `cache.refresh()` here to
+        //   - unchanged: nothing is emitted, so we call `cache.mark_fresh()` here to
         //     unblock cold-start readers with the existing cache contents.
         if state.apply(response, pre_latest_data.is_some()) {
             let accumulated = state
@@ -254,7 +254,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             }
         } else {
             tracing::trace!("No change in pre-confirmed block data");
-            cache.refresh();
+            cache.mark_fresh();
         }
 
         // Wait for the next tick.
