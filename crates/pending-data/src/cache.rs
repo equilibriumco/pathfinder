@@ -26,6 +26,34 @@ struct Freshness {
     publish_seq: u64,
 }
 
+/// Why a [`PendingDataCache::read`] failed.
+#[derive(Debug)]
+pub enum ReadError {
+    /// Fresh data isn't available yet, for a known reason: node is catching up,
+    /// a failed fetch... it's expected to clear on its own.
+    Unavailable(&'static str),
+    /// The read failed: a cold-start timeout, a dropped producer, or a wrapped
+    /// `anyhow` error.
+    Internal(anyhow::Error),
+}
+
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadError::Unavailable(reason) => {
+                write!(f, "pre-confirmed data unavailable: {reason}")
+            }
+            ReadError::Internal(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<anyhow::Error> for ReadError {
+    fn from(e: anyhow::Error) -> Self {
+        ReadError::Internal(e)
+    }
+}
+
 /// Shared pre-confirmed data cache with freshness tracking.
 ///
 /// Holds the latest [`PendingData`] and a small amount of freshness state.
@@ -119,7 +147,7 @@ impl PendingDataCache {
     /// Returns the latest cached data. Returns immediately when fresh, fails
     /// fast with the reason when unavailable, and blocks while stale (up to the
     /// configured cold-start timeout). Always fires the read signal.
-    pub async fn read(&self) -> anyhow::Result<PendingData> {
+    pub async fn read(&self) -> Result<PendingData, ReadError> {
         self.signal_read();
         self.wait_for_fresh_data().await?;
         Ok(self.data_rx.borrow().clone())
@@ -167,7 +195,7 @@ impl PendingDataCache {
         });
     }
 
-    async fn wait_for_fresh_data(&self) -> anyhow::Result<()> {
+    async fn wait_for_fresh_data(&self) -> Result<(), ReadError> {
         let snapshot = *self.freshness_tx.borrow();
         if matches!(snapshot.status, Status::Fresh) {
             return Ok(());
@@ -182,7 +210,7 @@ impl PendingDataCache {
 
                 // Unavailable now. Fail fast with the reason.
                 if let Status::Unavailable(reason) = current.status {
-                    return Err(anyhow::anyhow!("pre-confirmed data unavailable: {reason}"));
+                    return Err(ReadError::Unavailable(reason));
                 }
 
                 // A publish landed. The data is fresh, serve it.
@@ -192,7 +220,9 @@ impl PendingDataCache {
 
                 // Still stale. Park until the next change, or bail if the producer is gone.
                 if rx.changed().await.is_err() {
-                    return Err(anyhow::anyhow!("producer disconnected"));
+                    return Err(ReadError::Internal(anyhow::anyhow!(
+                        "producer disconnected"
+                    )));
                 }
             }
         })
@@ -200,10 +230,10 @@ impl PendingDataCache {
 
         match result {
             Ok(r) => r,
-            Err(_) => Err(anyhow::anyhow!(
+            Err(_) => Err(ReadError::Internal(anyhow::anyhow!(
                 "cold-start read timed out after {:?}",
                 self.cold_start_timeout
-            )),
+            ))),
         }
     }
 }

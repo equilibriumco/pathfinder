@@ -3,7 +3,7 @@
 mod cache;
 mod data;
 
-pub use cache::PendingDataCache;
+pub use cache::{PendingDataCache, ReadError};
 pub use data::{
     PendingBlocks,
     PendingData,
