@@ -70,8 +70,7 @@ pub async fn get_state_update(
         if input.block_id.is_pending() {
             let mut state_update = context
                 .pending_data
-                .get(&tx, rpc_version)
-                .context("Query pending data")?
+                .get(&tx, rpc_version)?
                 .pre_confirmed_state_update();
             if !input.contract_addresses.is_empty() {
                 let mut own_state_update = state_update.as_ref().clone();

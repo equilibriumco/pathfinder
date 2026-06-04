@@ -78,10 +78,7 @@ pub async fn estimate_message_fee(
 
         let (header, pending) = match input.block_id {
             BlockId::PreConfirmed => {
-                let pending = context
-                    .pending_data
-                    .get(&db_tx, rpc_version)
-                    .context("Querying pending data")?;
+                let pending = context.pending_data.get(&db_tx, rpc_version)?;
 
                 (
                     pending.pre_confirmed_header(),
@@ -221,6 +218,8 @@ impl From<anyhow::Error> for EstimateMessageFeeError {
         Self::Internal(e)
     }
 }
+
+crate::error::impl_from_pending_read_error!(EstimateMessageFeeError);
 
 impl From<pathfinder_executor::TransactionExecutionError> for EstimateMessageFeeError {
     fn from(c: pathfinder_executor::TransactionExecutionError) -> Self {

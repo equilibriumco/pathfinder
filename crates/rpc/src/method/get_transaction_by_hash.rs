@@ -66,8 +66,7 @@ pub async fn get_transaction_by_hash(
         // Check pending transactions.
         if let Some(transaction) = context
             .pending_data
-            .get(&db_tx, rpc_version)
-            .context("Querying pending data")?
+            .get(&db_tx, rpc_version)?
             .find_transaction(input.transaction_hash)
         {
             return Ok(Output {

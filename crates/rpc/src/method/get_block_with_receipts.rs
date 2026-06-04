@@ -82,10 +82,7 @@ pub async fn get_block_with_receipts(
 
         let block_id = match input.block_id {
             BlockId::PreConfirmed => {
-                let pending = context
-                    .pending_data
-                    .get(&db, rpc_version)
-                    .context("Querying pending data")?;
+                let pending = context.pending_data.get(&db, rpc_version)?;
 
                 let parent_hash = (rpc_version < RpcVersion::V09)
                     .then(|| {

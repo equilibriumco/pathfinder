@@ -106,10 +106,7 @@ pub async fn trace_block_transactions(
 
         let (block_id, header, transactions, cache) = match input.block_id {
             BlockId::PreConfirmed => {
-                let pending = context
-                    .pending_data
-                    .get(&db_tx, rpc_version)
-                    .context("Querying pending data")?;
+                let pending = context.pending_data.get(&db_tx, rpc_version)?;
 
                 let header = pending.pre_confirmed_header();
                 let transactions = pending.pre_confirmed_transactions().to_vec();
@@ -777,6 +774,8 @@ impl From<anyhow::Error> for TraceBlockTransactionsError {
         Self::Internal(value)
     }
 }
+
+crate::error::impl_from_pending_read_error!(TraceBlockTransactionsError);
 
 impl From<pathfinder_storage::StorageError> for TraceBlockTransactionsError {
     fn from(value: pathfinder_storage::StorageError) -> Self {

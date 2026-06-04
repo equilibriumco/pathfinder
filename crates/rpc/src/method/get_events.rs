@@ -31,6 +31,8 @@ impl From<anyhow::Error> for GetEventsError {
     }
 }
 
+crate::error::impl_from_pending_read_error!(GetEventsError);
+
 impl From<GetEventsError> for crate::error::ApplicationError {
     fn from(e: GetEventsError) -> Self {
         match e {
@@ -182,10 +184,7 @@ pub async fn get_events(
             .transaction()
             .context("Creating database transaction")?;
 
-        let pending = context
-            .pending_data
-            .get(&transaction, rpc_version)
-            .context("Querying pending data")?;
+        let pending = context.pending_data.get(&transaction, rpc_version)?;
 
         // Replace from/to blocks with `BlockId::PreConfirmed` if their numbers match
         // the pre-latest/pre-confirmed block number.

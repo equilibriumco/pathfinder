@@ -44,8 +44,7 @@ pub async fn get_nonce(
         if input.block_id.is_pending() {
             let nonce = context
                 .pending_data
-                .get(&tx, rpc_version)
-                .context("Querying pending data")?
+                .get(&tx, rpc_version)?
                 .find_nonce(input.contract_address);
 
             if let Some(nonce) = nonce {

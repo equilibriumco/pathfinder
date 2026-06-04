@@ -98,10 +98,7 @@ pub async fn get_transaction_receipt(
         let db_tx = db.transaction().context("Creating database transaction")?;
 
         // Check pending transactions.
-        let pending = context
-            .pending_data
-            .get(&db_tx, rpc_version)
-            .context("Querying pending data")?;
+        let pending = context.pending_data.get(&db_tx, rpc_version)?;
 
         if let Some(finalized_tx_data) =
             crate::pending::find_finalized_tx_data(&pending, input.transaction_hash)
