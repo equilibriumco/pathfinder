@@ -1,5 +1,6 @@
 use blockifier::blockifier::transaction_executor::TransactionExecutorError as BlockifierTransactionExecutorError;
 use blockifier::execution::errors::{
+    AnnotatedEntryPointExecutionError,
     ConstructorEntryPointExecutionError,
     EntryPointExecutionError as BlockifierEntryPointExecutionError,
     PreExecutionError,
@@ -28,7 +29,7 @@ impl From<BlockifierTransactionExecutionError> for CallError {
         match value {
             ContractConstructorExecutionFailed(
                 ConstructorEntryPointExecutionError::ExecutionError { error, .. },
-            ) => match error.as_ref() {
+            ) => match error.unannotated() {
                 BlockifierEntryPointExecutionError::PreExecutionError(
                     PreExecutionError::EntryPointNotFound(_)
                     | PreExecutionError::NoEntryPointOfTypeFound(_),
@@ -38,7 +39,7 @@ impl From<BlockifierTransactionExecutionError> for CallError {
                 ) => Self::ContractNotFound,
                 _ => Self::ContractError(error.into(), error_stack.into()),
             },
-            ExecutionError { error, .. } => match error.as_ref() {
+            ExecutionError { error, .. } => match error.unannotated() {
                 BlockifierEntryPointExecutionError::PreExecutionError(
                     PreExecutionError::EntryPointNotFound(_)
                     | PreExecutionError::NoEntryPointOfTypeFound(_),
@@ -48,7 +49,7 @@ impl From<BlockifierTransactionExecutionError> for CallError {
                 ) => Self::ContractNotFound,
                 _ => Self::ContractError(error.into(), error_stack.into()),
             },
-            ValidateTransactionError { error, .. } => match error.as_ref() {
+            ValidateTransactionError { error, .. } => match error.unannotated() {
                 BlockifierEntryPointExecutionError::PreExecutionError(
                     PreExecutionError::EntryPointNotFound(_)
                     | PreExecutionError::NoEntryPointOfTypeFound(_),
@@ -65,7 +66,7 @@ impl From<BlockifierTransactionExecutionError> for CallError {
 
 impl CallError {
     pub fn from_entry_point_execution_error(
-        error: BlockifierEntryPointExecutionError,
+        error: AnnotatedEntryPointExecutionError,
         contract_address: &starknet_api::core::ContractAddress,
         class_hash: &starknet_api::core::ClassHash,
         entry_point: &starknet_api::core::EntryPointSelector,
@@ -221,7 +222,10 @@ mod tests {
 
             let err = BlockifierTransactionExecutionError::ContractConstructorExecutionFailed(
                 ConstructorEntryPointExecutionError::ExecutionError {
-                    error: Box::new(child),
+                    error: Box::new(child.annotated(
+                        blockifier::execution::contract_class::TrackedResource::SierraGas,
+                        true,
+                    )),
                     class_hash: Default::default(),
                     contract_address: Default::default(),
                     constructor_selector: Default::default(),
@@ -249,7 +253,10 @@ mod tests {
 
             let err = BlockifierTransactionExecutionError::ContractConstructorExecutionFailed(
                 ConstructorEntryPointExecutionError::ExecutionError {
-                    error: Box::new(child),
+                    error: Box::new(child.annotated(
+                        blockifier::execution::contract_class::TrackedResource::SierraGas,
+                        true,
+                    )),
                     class_hash: Default::default(),
                     contract_address: Default::default(),
                     constructor_selector: Default::default(),
@@ -275,7 +282,10 @@ mod tests {
             );
 
             let err = BlockifierTransactionExecutionError::ValidateTransactionError {
-                error: Box::new(child),
+                error: Box::new(child.annotated(
+                    blockifier::execution::contract_class::TrackedResource::SierraGas,
+                    true,
+                )),
                 class_hash: Default::default(),
                 storage_address: Default::default(),
                 selector: Default::default(),
