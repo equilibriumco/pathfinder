@@ -8826,6 +8826,7 @@ dependencies = [
  "anyhow",
  "pathfinder-common",
  "starknet-gateway-types",
+ "thiserror 2.0.18",
  "tokio",
 ]
 

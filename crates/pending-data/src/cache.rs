@@ -27,31 +27,16 @@ struct Freshness {
 }
 
 /// Why a [`PendingDataCache::read`] failed.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ReadError {
     /// Fresh data isn't available yet, for a known reason: node is catching up,
     /// a failed fetch... it's expected to clear on its own.
+    #[error("pre-confirmed data unavailable: {0}")]
     Unavailable(&'static str),
     /// The read failed: a cold-start timeout, a dropped producer, or a wrapped
     /// `anyhow` error.
-    Internal(anyhow::Error),
-}
-
-impl std::fmt::Display for ReadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ReadError::Unavailable(reason) => {
-                write!(f, "pre-confirmed data unavailable: {reason}")
-            }
-            ReadError::Internal(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl From<anyhow::Error> for ReadError {
-    fn from(e: anyhow::Error) -> Self {
-        ReadError::Internal(e)
-    }
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
 }
 
 /// Shared pre-confirmed data cache with freshness tracking.
