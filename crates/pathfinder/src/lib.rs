@@ -7,8 +7,6 @@ pub mod consensus;
 pub mod devnet;
 pub mod monitoring;
 pub mod p2p_network;
-#[cfg(feature = "p2p")]
-pub mod preconfirmed;
 pub mod state;
 pub mod sync;
 pub enum SyncMessageToConsensus {

@@ -10,9 +10,6 @@ pub mod consensus;
 /// Core p2p network behaviour. This is the foundation for all the other
 /// application-specific behaviours.
 pub mod core;
-/// Application-specific p2p network behaviour. This one handles preconfirmed
-/// transactions.
-pub mod preconfirmed;
 /// Application-specific p2p network behaviour. This one handles sync.
 pub mod sync;
 
@@ -61,21 +58,6 @@ pub fn new_consensus(
 ) {
     Builder::new(keypair.clone(), core_config, chain_id)
         .app_behaviour(consensus::Behaviour::new(keypair))
-        .build()
-}
-
-/// Creates a new preconfirmed P2P network.
-pub fn new_preconfirmed(
-    keypair: Keypair,
-    core_config: core::Config,
-    chain_id: ChainId,
-) -> (
-    core::Client<preconfirmed::Command>,
-    mpsc::UnboundedReceiver<preconfirmed::Event>,
-    main_loop::MainLoop<preconfirmed::Behaviour>,
-) {
-    Builder::new(keypair.clone(), core_config, chain_id)
-        .app_behaviour(preconfirmed::Behaviour::new(keypair))
         .build()
 }
 

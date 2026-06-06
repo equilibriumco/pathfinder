@@ -17,12 +17,10 @@ use pathfinder_ethereum::EthereumClient;
 use pathfinder_gas_price::{L1GasPriceConfig, L1GasPriceProvider};
 #[cfg(feature = "p2p")]
 use pathfinder_lib::consensus::ConsensusTaskHandles;
-#[cfg(feature = "p2p")]
-use pathfinder_lib::preconfirmed::PreconfirmedTaskHandles;
 use pathfinder_lib::state::{sync_gas_prices, L1GasPriceSyncConfig, SyncContext};
 use pathfinder_lib::ConsensusChannels;
 #[cfg(feature = "p2p")]
-use pathfinder_lib::{config, consensus, monitoring, p2p_network, preconfirmed, state};
+use pathfinder_lib::{config, consensus, monitoring, p2p_network, state};
 #[cfg(not(feature = "p2p"))]
 use pathfinder_lib::{config, monitoring, p2p_network, state};
 use pathfinder_pending_data::PendingDataCache;
@@ -337,18 +335,6 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
     )
     .await;
 
-    let (preconfirmed_p2p_handle, preconfirmed_p2p_client_and_event_rx) =
-        if config.preconfirmed_p2p.enable {
-            p2p_network::preconfirmed::start(
-                chain_id,
-                config.preconfirmed_p2p.clone(),
-                config.data_directory.clone(),
-            )
-            .await
-        } else {
-            (tokio::task::spawn(futures::future::pending()), None)
-        };
-
     let integration_testing_config = config.integration_testing;
 
     // Create L1 gas price provider and sync task if consensus is enabled
@@ -451,40 +437,11 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
         )
     };
 
-    #[cfg(feature = "p2p")]
-    let (preconfirmed_p2p_event_processing_handle, preconfirmed_watch_rx) = {
-        let handles = if config.preconfirmed_p2p.enable {
-            match preconfirmed_p2p_client_and_event_rx {
-                Some((event_rx, _)) => preconfirmed::start(event_rx),
-                None => PreconfirmedTaskHandles::pending(),
-            }
-        } else {
-            PreconfirmedTaskHandles::pending()
-        };
-        (
-            handles.preconfirmed_p2p_event_processing_handle,
-            handles.preconfirmed_watch,
-        )
-    };
-
-    #[cfg(not(feature = "p2p"))]
-    let (preconfirmed_p2p_event_processing_handle, preconfirmed_watch_rx) = {
-        let _ = preconfirmed_p2p_client_and_event_rx;
-        (
-            tokio::task::spawn(std::future::pending::<anyhow::Result<()>>()),
-            None,
-        )
-    };
-
     let context = match consensus_channels
         .as_ref()
         .map(|cc| cc.consensus_info_watch.clone())
     {
         Some(consensus_info_watch) => context.with_consensus_info_watch(consensus_info_watch),
-        None => context,
-    };
-    let context = match preconfirmed_watch_rx {
-        Some(preconfirmed_watch) => context.with_preconfirmed_watch(preconfirmed_watch),
         None => context,
     };
 
@@ -568,9 +525,7 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
         result = rpc_handle => handle_critical_task_result("RPC", result),
         result = sync_p2p_handle => handle_critical_task_result("Sync P2P network and handlers", result),
         result = consensus_p2p_handle => handle_critical_task_result("Consensus P2P network", result),
-        result = preconfirmed_p2p_handle => handle_critical_task_result("Preconfirmed P2P network", result),
         result = consensus_p2p_event_processing_handle => handle_critical_task_result("Consensus P2P event processing", result),
-        result = preconfirmed_p2p_event_processing_handle => handle_critical_task_result("Preconfirmed P2P event processing", result),
         result = consensus_engine_handle => handle_critical_task_result("Consensus engine", result),
         result = http_client_refresh_handle => handle_critical_task_result("HTTP client refresh", result),
         _ = term_signal.recv() => {
