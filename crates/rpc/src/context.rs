@@ -102,7 +102,6 @@ pub struct RpcContext {
     pub config: RpcConfig,
     pub native_class_cache: Option<NativeClassCache>,
     pub consensus_info_watch: Option<watch::Receiver<consensus_info::ConsensusInfo>>,
-    pub preconfirmed_watch: Option<watch::Receiver<u32>>,
 }
 
 impl RpcContext {
@@ -148,7 +147,6 @@ impl RpcContext {
             config,
             native_class_cache,
             consensus_info_watch: None,
-            preconfirmed_watch: None,
         }
     }
 
@@ -180,13 +178,6 @@ impl RpcContext {
     ) -> Self {
         Self {
             consensus_info_watch: Some(consensus_info_watch),
-            ..self
-        }
-    }
-
-    pub fn with_preconfirmed_watch(self, preconfirmed_watch: watch::Receiver<u32>) -> Self {
-        Self {
-            preconfirmed_watch: Some(preconfirmed_watch),
             ..self
         }
     }

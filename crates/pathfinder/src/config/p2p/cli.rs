@@ -147,7 +147,6 @@ Example:
 
 define_p2p_core_cli! {"sync"}
 define_p2p_core_cli! {"consensus"}
-define_p2p_core_cli! {"preconfirmed"}
 
 #[derive(clap::Args)]
 pub(crate) struct P2PSyncCli {
@@ -208,19 +207,4 @@ pub(crate) struct P2PSyncCli {
 pub struct P2PConsensusCli {
     #[clap(flatten)]
     pub(super) core: P2PConsensusCoreCli,
-}
-
-#[derive(clap::Args)]
-pub struct P2PPreconfirmedCli {
-    #[clap(flatten)]
-    pub(super) core: P2PPreconfirmedCoreCli,
-
-    #[arg(
-        long = "p2p.preconfirmed.enable",
-        long_help = "Enable the preconfirmed P2P network.",
-        action = clap::ArgAction::Set,
-        default_value = "false",
-        env = "PATHFINDER_P2P_PRECONFIRMED_ENABLE",
-    )]
-    pub enable: bool,
 }

@@ -22,8 +22,8 @@ pub mod integration_testing;
 pub mod p2p;
 
 #[cfg(feature = "p2p")]
-use p2p::cli::{P2PConsensusCli, P2PPreconfirmedCli, P2PSyncCli};
-use p2p::{P2PConsensusConfig, P2PPreconfirmedConfig, P2PSyncConfig};
+use p2p::cli::{P2PConsensusCli, P2PSyncCli};
+use p2p::{P2PConsensusConfig, P2PSyncConfig};
 
 const COMPILER_MEMORY_USAGE_ALLOWED_RANGE: std::ops::RangeInclusive<u64> =
     (pathfinder_compiler::ResourceLimits::RECOMMENDED_MEMORY_USAGE_LIMIT_MIB / 2)
@@ -304,14 +304,6 @@ Examples:
     #[cfg(feature = "p2p")]
     #[clap(flatten)]
     consensus: ConsensusCli,
-
-    #[cfg(feature = "p2p")]
-    #[clap(flatten)]
-    p2p_preconfirmed: P2PPreconfirmedCli,
-
-    #[cfg(not(feature = "p2p"))]
-    #[clap(skip)]
-    p2p_preconfirmed: (),
 
     #[cfg(not(feature = "p2p"))]
     #[clap(skip)]
@@ -1125,7 +1117,6 @@ pub struct Config {
     pub disable_version_update_check: bool,
     pub sync_p2p: P2PSyncConfig,
     pub consensus_p2p: P2PConsensusConfig,
-    pub preconfirmed_p2p: P2PPreconfirmedConfig,
     pub debug: DebugConfig,
     pub verify_tree_hashes: bool,
     pub rpc_batch_concurrency_limit: NonZeroUsize,
@@ -1428,7 +1419,6 @@ impl Config {
             disable_version_update_check: args.disable_version_update_check,
             sync_p2p: P2PSyncConfig::parse_or_exit(args.p2p_sync),
             consensus_p2p: P2PConsensusConfig::parse_or_exit(args.p2p_consensus),
-            preconfirmed_p2p: P2PPreconfirmedConfig::parse_or_exit(args.p2p_preconfirmed),
             debug: DebugConfig::parse(args.debug),
             verify_tree_hashes: args.verify_tree_node_data,
             rpc_batch_concurrency_limit: args.rpc_batch_concurrency_limit,
