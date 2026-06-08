@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 /// A small blocking semaphore for limiting access to a shared resource.
 ///
 /// A semaphore starts with a fixed number of permits. Calling [`acquire`] waits
@@ -18,11 +20,12 @@
 /// Limit a section of work to one concurrent caller:
 ///
 /// ```
+/// use std::num::NonZeroUsize;
 /// use std::sync::Arc;
 ///
 /// use util::sync::semaphore::Semaphore;
 ///
-/// let semaphore = Arc::new(Semaphore::new(1));
+/// let semaphore = Arc::new(Semaphore::new(NonZeroUsize::new(1).unwrap()));
 ///
 /// let first = semaphore.acquire();
 /// assert_eq!(semaphore.available_permits(), 0);
@@ -34,9 +37,11 @@
 /// Try to acquire a permit without blocking:
 ///
 /// ```
+/// use std::num::NonZeroUsize;
+///
 /// use util::sync::semaphore::Semaphore;
 ///
-/// let semaphore = Semaphore::new(1);
+/// let semaphore = Semaphore::new(NonZeroUsize::new(1).unwrap());
 /// let permit = semaphore.try_acquire().expect("permit should be available");
 ///
 /// assert!(semaphore.try_acquire().is_none());
@@ -51,17 +56,9 @@ pub struct Semaphore {
 
 impl Semaphore {
     /// Creates a semaphore with `permits` initially available permits.
-    ///
-    /// # Panics
-    ///
-    /// Since there is no `add_permits` or similar API, a semaphore created with
-    /// zero permits would effectively be permanently closed. To prevent this,
-    /// the function panics when attempting to create a semaphore with zero
-    /// available permits.
-    pub fn new(permits: usize) -> Self {
-        assert!(permits > 0);
+    pub fn new(permits: NonZeroUsize) -> Self {
         Self {
-            permits: std::sync::Mutex::new(permits),
+            permits: std::sync::Mutex::new(permits.get()),
             condvar: std::sync::Condvar::new(),
         }
     }
@@ -124,6 +121,7 @@ impl<'a> Drop for SemaphorePermit<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
 
@@ -131,7 +129,7 @@ mod tests {
 
     #[test]
     fn acquire_consumes_permit_until_dropped() {
-        let semaphore = Semaphore::new(1);
+        let semaphore = Semaphore::new(NonZeroUsize::new(1).unwrap());
 
         let permit = semaphore.acquire();
 
@@ -142,7 +140,7 @@ mod tests {
 
     #[test]
     fn multiple_initial_permits() {
-        let semaphore = Semaphore::new(2);
+        let semaphore = Semaphore::new(NonZeroUsize::new(2).unwrap());
 
         let first = semaphore.acquire();
         let second = semaphore.acquire();
@@ -156,7 +154,7 @@ mod tests {
 
     #[test]
     fn repeated_acquire_and_drop_does_not_grow_capacity() {
-        let semaphore = Semaphore::new(1);
+        let semaphore = Semaphore::new(NonZeroUsize::new(1).unwrap());
 
         for _ in 0..3 {
             drop(semaphore.acquire());
@@ -167,7 +165,7 @@ mod tests {
 
     #[test]
     fn acquire_blocks_until_permit_is_released() {
-        let semaphore = Arc::new(Semaphore::new(1));
+        let semaphore = Arc::new(Semaphore::new(NonZeroUsize::new(1).unwrap()));
         let permit = semaphore.acquire();
         let (sender, receiver) = mpsc::channel();
 
