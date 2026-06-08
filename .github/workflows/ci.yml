@@ -248,6 +248,23 @@ jobs:
           cd crates/load-test
           cargo check
 
+  # The Docker build excludes rust-toolchain.toml from its context, so the only thing
+  # setting the build's Rust version is the base image tag in the Dockerfile. Guard
+  # against the two drifting apart, which silently builds against the wrong toolchain.
+  docker-rust-version:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Dockerfile Rust version matches rust-toolchain.toml
+        run: |
+          pin=$(grep -oP 'channel\s*=\s*"\K[^"]+' rust-toolchain.toml)
+          img=$(grep -oP 'cargo-chef:.*-rust-\K[0-9]+\.[0-9]+\.[0-9]+' Dockerfile | head -1)
+          if [ "$pin" != "$img" ]; then
+            echo "::error::Dockerfile base image Rust ($img) does not match rust-toolchain.toml channel ($pin). Bump the cargo-chef image tag in the Dockerfile to rust-$pin."
+            exit 1
+          fi
+          echo "Rust version matches: $pin"
+
   required:
     needs:
       - test-all-features
@@ -259,6 +276,7 @@ jobs:
       - dep-sort
       - typos
       - load_test
+      - docker-rust-version
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
