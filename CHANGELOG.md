@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Parallel Sierra to CASM compilation processes during RPC requests are now limited to the number of CPU cores available by default, configurable with `--rpc.compiler.concurrency-limit` CLI option.
 
+### Fixed
+
+- Pre-confirmed block polling re-fetching the full block on every poll due to a `block_identifier` field being deserialized under the wrong name.
+
 ## [0.22.4] - 2026-06-08
 
 ### Changed
