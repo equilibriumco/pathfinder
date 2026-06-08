@@ -29,7 +29,7 @@ metrics = { workspace = true }
 num-bigint = { workspace = true }
 num-traits = "0.2"
 paste = { workspace = true }
-pathfinder-crypto = { version = "0.22.4", path = "../crypto" }
+pathfinder-crypto = { version = "0.22.5", path = "../crypto" }
 pathfinder-tagged = { version = "0.1.0", path = "../tagged" }
 pathfinder-tagged-debug-derive = { version = "0.1.0", path = "../tagged-debug-derive" }
 primitive-types = { workspace = true, features = ["serde"] }
