@@ -17,8 +17,8 @@ categories = [
 
 [dependencies]
 anyhow = { workspace = true }
-pathfinder-common = { version = "0.22.4", path = "../common" }
-pathfinder-crypto = { version = "0.22.4", path = "../crypto" }
+pathfinder-common = { version = "0.22.5", path = "../common" }
+pathfinder-crypto = { version = "0.22.5", path = "../crypto" }
 primitive-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["arbitrary_precision", "raw_value"] }
