@@ -132,7 +132,7 @@ pub struct PreConfirmedPollResponseWire {
     changed: bool,
 
     #[serde(default)]
-    known_block_identifier: Option<String>,
+    block_identifier: Option<String>,
 
     // Block number: present on Full responses only.
     #[serde(default)]
@@ -217,7 +217,7 @@ impl TryFrom<PreConfirmedPollResponseWire> for PreConfirmedPollResponse {
         if !wire.changed {
             return Ok(Self::Unchanged);
         }
-        let identifier = wire.known_block_identifier.take().unwrap_or_default();
+        let identifier = wire.block_identifier.take().unwrap_or_default();
         if wire.status.is_some() {
             Ok(Self::Full {
                 identifier,
@@ -2761,7 +2761,7 @@ mod tests {
         fn delta() {
             let json = serde_json::json!({
                 "changed": true,
-                "known_block_identifier": "abc",
+                "block_identifier": "abc",
                 "transactions": [
                     {
                         "type": "INVOKE_FUNCTION",
@@ -2805,7 +2805,7 @@ mod tests {
                 .insert("changed".into(), true.into());
             json.as_object_mut()
                 .unwrap()
-                .insert("known_block_identifier".into(), "xyz".into());
+                .insert("block_identifier".into(), "xyz".into());
 
             let wire: PreConfirmedPollResponseWire = serde_json::from_value(json).unwrap();
             let response = PreConfirmedPollResponse::try_from(wire).unwrap();
