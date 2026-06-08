@@ -19,7 +19,7 @@ impl PathfinderCompiler {
         blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
     ) -> Self {
         Self {
-            concurrency_limit: Arc::new(util::sync::Semaphore::new(concurrency_limit.get())),
+            concurrency_limit: Arc::new(util::sync::Semaphore::new(concurrency_limit)),
             resource_limits,
             blockifier_libfuncs,
         }
