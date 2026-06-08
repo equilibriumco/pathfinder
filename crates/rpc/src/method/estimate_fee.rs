@@ -128,8 +128,7 @@ pub async fn estimate_fee(
                 crate::executor::map_broadcasted_transaction(
                     &tx,
                     context.chain_id,
-                    context.config.compiler_resource_limits,
-                    context.config.blockifier_libfuncs,
+                    &context.compiler,
                     skip_validate,
                     true,
                 )

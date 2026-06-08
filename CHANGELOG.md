@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Parallel subscriptions on a single WS connection are now limited to 1024 by default, configurable with `--rpc.websocket.max-subscriptions` CLI option.
+- Parallel Sierra to CASM compilation processes during RPC requests are now limited to the number of CPU cores available by default, configurable with `--rpc.compiler.concurrency-limit` CLI option.
 
 ## [0.22.3] - 2026-04-20
 

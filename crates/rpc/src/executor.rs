@@ -17,6 +17,7 @@ use crate::types::request::{
     BroadcastedInvokeTransaction,
     BroadcastedTransaction,
 };
+use crate::PathfinderCompiler;
 
 pub enum ExecutionStateError {
     BlockNotFound,
@@ -82,8 +83,7 @@ pub(crate) fn signature_elem_limit_exceeded(tx: &BroadcastedTransaction) -> bool
 pub(crate) fn map_broadcasted_transaction(
     transaction: &BroadcastedTransaction,
     chain_id: ChainId,
-    compiler_resource_limits: pathfinder_compiler::ResourceLimits,
-    blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
+    compiler: &PathfinderCompiler,
     skip_validate: bool,
     skip_fee_charge: bool,
 ) -> anyhow::Result<pathfinder_executor::Transaction> {
@@ -131,12 +131,9 @@ pub(crate) fn map_broadcasted_transaction(
                 serde_json::to_vec(&tx.contract_class)
                     .context("Serializing Sierra class definition")?,
             );
-            let casm_contract_definition = pathfinder_compiler::compile_sierra_to_casm(
-                &sierra_definition,
-                compiler_resource_limits,
-                blockifier_libfuncs,
-            )
-            .context("Compiling Sierra class definition to CASM")?;
+            let casm_contract_definition = compiler
+                .compile_sierra_to_casm(&sierra_definition)
+                .context("Compiling Sierra class definition to CASM")?;
 
             let casm_contract_definition = pathfinder_executor::parse_casm_definition(
                 casm_contract_definition,
@@ -157,12 +154,9 @@ pub(crate) fn map_broadcasted_transaction(
                 serde_json::to_vec(&tx.contract_class)
                     .context("Serializing Sierra class definition")?,
             );
-            let casm_contract_definition = pathfinder_compiler::compile_sierra_to_casm(
-                &sierra_definition,
-                compiler_resource_limits,
-                blockifier_libfuncs,
-            )
-            .context("Compiling Sierra class definition to CASM")?;
+            let casm_contract_definition = compiler
+                .compile_sierra_to_casm(&sierra_definition)
+                .context("Compiling Sierra class definition to CASM")?;
 
             let casm_contract_definition = pathfinder_executor::parse_casm_definition(
                 casm_contract_definition,
