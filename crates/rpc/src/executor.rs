@@ -80,6 +80,11 @@ pub(crate) fn signature_elem_limit_exceeded(tx: &BroadcastedTransaction) -> bool
     }
 }
 
+/// Maps an [RPC layer transaction](BroadcastedTransaction) into a transaction
+/// that can be fed into the [executor](pathfinder_executor).
+///
+/// This is a blocking function. When used inside an async runtime, it should be
+/// called on a blocking thread.
 pub(crate) fn map_broadcasted_transaction(
     transaction: &BroadcastedTransaction,
     chain_id: ChainId,

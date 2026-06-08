@@ -74,6 +74,20 @@ pub async fn simulate_transactions(
             .simulation_flags
             .contains(&crate::dto::SimulationFlag::ReturnInitialReads);
 
+        let transactions = input
+            .transactions
+            .into_iter()
+            .map(|tx| {
+                crate::executor::map_broadcasted_transaction(
+                    &tx,
+                    context.chain_id,
+                    &context.compiler,
+                    skip_validate,
+                    skip_fee_charge,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         let mut db_conn = context
             .execution_storage
             .connection()
@@ -118,20 +132,6 @@ pub async fn simulate_transactions(
                 .config
                 .native_execution_force_use_for_incompatible_classes,
         );
-
-        let transactions = input
-            .transactions
-            .into_iter()
-            .map(|tx| {
-                crate::executor::map_broadcasted_transaction(
-                    &tx,
-                    context.chain_id,
-                    &context.compiler,
-                    skip_validate,
-                    skip_fee_charge,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
 
         let (simulations, initial_reads) = pathfinder_executor::simulate(
             db_tx,

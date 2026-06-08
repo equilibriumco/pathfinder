@@ -71,6 +71,26 @@ pub async fn estimate_fee(
     }
     let result = util::task::spawn_blocking(move |_| {
         let _g = span.enter();
+
+        let skip_validate = input
+            .simulation_flags
+            .iter()
+            .any(|flag| flag == &SimulationFlag::SkipValidate);
+
+        let transactions = input
+            .request
+            .into_iter()
+            .map(|tx| {
+                crate::executor::map_broadcasted_transaction(
+                    &tx,
+                    context.chain_id,
+                    &context.compiler,
+                    skip_validate,
+                    true,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         let mut db_conn = context
             .execution_storage
             .connection()
@@ -115,25 +135,6 @@ pub async fn estimate_fee(
                 .config
                 .native_execution_force_use_for_incompatible_classes,
         );
-
-        let skip_validate = input
-            .simulation_flags
-            .iter()
-            .any(|flag| flag == &SimulationFlag::SkipValidate);
-
-        let transactions = input
-            .request
-            .into_iter()
-            .map(|tx| {
-                crate::executor::map_broadcasted_transaction(
-                    &tx,
-                    context.chain_id,
-                    &context.compiler,
-                    skip_validate,
-                    true,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
 
         let result = pathfinder_executor::estimate(
             db_tx,
