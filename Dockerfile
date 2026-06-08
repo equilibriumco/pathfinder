@@ -9,7 +9,13 @@
 # Note that we're explicitly using the Debian bookworm image to make sure we're
 # compatible with the Debian container we'll be copying the pathfinder
 # executable to.
-FROM --platform=$BUILDPLATFORM lukemathwalker/cargo-chef:0.1.73-rust-1.91.1-slim-bookworm AS cargo-chef
+#
+# IMPORTANT: keep the Rust version in this image tag equal to the channel in
+# rust-toolchain.toml. The COPY steps below exclude rust-toolchain.toml from the
+# build context, so rustup never sees the pin and the build always uses the Rust
+# that ships in this image (we exclude it so rustup doesn't re-download the
+# toolchain's components on every build)
+FROM --platform=$BUILDPLATFORM lukemathwalker/cargo-chef:0.1.77-rust-1.95.0-slim-bookworm AS cargo-chef
 WORKDIR /usr/src/pathfinder
 
 FROM --platform=$BUILDPLATFORM cargo-chef AS rust-planner
