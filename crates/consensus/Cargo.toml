@@ -18,8 +18,8 @@ malachite-consensus = { package = "informalsystems-malachitebft-core-consensus",
 malachite-metrics = { package = "informalsystems-malachitebft-metrics", version = "0.5" }
 malachite-signing-ed25519 = { package = "informalsystems-malachitebft-signing-ed25519", version = "0.5", features = ["serde"] }
 malachite-types = { package = "informalsystems-malachitebft-core-types", version = "0.5" }
-pathfinder-common = { version = "0.22.3", path = "../common" }
-pathfinder-crypto = { version = "0.22.3", path = "../crypto" }
+pathfinder-common = { version = "0.22.4", path = "../common" }
+pathfinder-crypto = { version = "0.22.4", path = "../crypto" }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
