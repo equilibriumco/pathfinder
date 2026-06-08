@@ -15,7 +15,7 @@ pub use crate::jsonrpc::websocket::WebsocketContext;
 use crate::jsonrpc::Notifications;
 use crate::pending::PendingWatcher;
 use crate::tracker::SubmittedTransactionTracker;
-use crate::SyncState;
+use crate::{PathfinderCompiler, SyncState};
 
 type SequencerClient = starknet_gateway_client::Client;
 
@@ -82,6 +82,7 @@ pub struct RpcConfig {
     pub submission_tracker_time_limit: NonZeroU64,
     pub submission_tracker_size_limit: NonZeroUsize,
     pub block_trace_cache_size: NonZeroUsize,
+    pub compiler_concurrency_limit: NonZeroUsize,
     pub compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     pub blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
 }
@@ -101,6 +102,7 @@ pub struct RpcContext {
     pub notifications: Notifications,
     pub ethereum: EthereumClient,
     pub config: RpcConfig,
+    pub compiler: PathfinderCompiler,
     pub native_class_cache: Option<NativeClassCache>,
     pub consensus_info_watch: Option<watch::Receiver<consensus_info::ConsensusInfo>>,
     pub preconfirmed_watch: Option<watch::Receiver<u32>>,
@@ -133,6 +135,12 @@ impl RpcContext {
         } else {
             None
         };
+        let compiler = PathfinderCompiler::new(
+            config.compiler_concurrency_limit,
+            config.compiler_resource_limits,
+            config.blockifier_libfuncs,
+        );
+
         Self {
             cache: TraceCache::with_size(config.block_trace_cache_size),
             storage,
@@ -147,6 +155,7 @@ impl RpcContext {
             notifications,
             ethereum,
             config,
+            compiler,
             native_class_cache,
             consensus_info_watch: None,
             preconfirmed_watch: None,
@@ -266,6 +275,7 @@ impl RpcContext {
             submission_tracker_time_limit: NonZeroU64::new(300).unwrap(),
             submission_tracker_size_limit: NonZeroUsize::new(30000).unwrap(),
             block_trace_cache_size: NonZeroUsize::new(1).unwrap(),
+            compiler_concurrency_limit: NonZeroUsize::new(1).unwrap(),
             compiler_resource_limits: pathfinder_compiler::ResourceLimits::for_test(),
             blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs::default(),
         };

@@ -509,6 +509,14 @@ This should only be enabled for debugging purposes as it adds substantial proces
     custom_versioned_constants_path: Option<PathBuf>,
 
     #[arg(
+        long = "rpc.compiler.concurrency-limit",
+        long_help = "Maximum number of concurrent Sierra to CASM compilations for RPC calls. \
+                     Defaults to the number of CPU cores available.",
+        env = "PATHFINDER_RPC_COMPILER_CONCURRENCY_LIMIT"
+    )]
+    compiler_concurrency_limit: Option<NonZeroUsize>,
+
+    #[arg(
         long = "compiler.max-memory-usage-mib",
         long_help = "Maximum memory usage for the compiler in MiB. 
 
@@ -1149,6 +1157,7 @@ pub struct Config {
     pub blockchain_history: Option<BlockchainHistory>,
     pub state_tries: Option<StateTries>,
     pub versioned_constants_map: VersionedConstantsMap,
+    pub compiler_concurrency_limit: Option<NonZeroUsize>,
     pub compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     pub blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
     pub feeder_gateway_fetch_concurrency: NonZeroUsize,
@@ -1465,6 +1474,7 @@ impl Config {
                 args.compiler_max_memory_usage_mib * 1024 * 1024,
                 args.compiler_max_cpu_time_secs,
             ),
+            compiler_concurrency_limit: args.compiler_concurrency_limit,
             blockifier_libfuncs: args.compile_config.blockifier_libfuncs.into(),
             fetch_casm_from_fgw: args.fetch_casm_from_fgw,
             shutdown_grace_period: Duration::from_secs(args.shutdown_grace_period.get()),

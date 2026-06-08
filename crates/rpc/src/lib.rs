@@ -1,4 +1,5 @@
 //! Starknet node JSON-RPC related modules.
+mod compiler;
 pub mod context;
 mod dto;
 mod error;
@@ -27,6 +28,7 @@ use anyhow::Context;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::DefaultBodyLimit;
 use axum::response::IntoResponse;
+pub use compiler::PathfinderCompiler;
 use context::RpcContext;
 pub use executor::compose_executor_transaction;
 use http_body::Body;
