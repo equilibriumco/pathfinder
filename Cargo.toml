@@ -45,7 +45,7 @@ authors = ["Equilibrium Labs <info@equilibrium.co>"]
 [workspace.dependencies]
 anyhow = "1.0.102"
 # This one needs to match the version used by blockifier
-apollo_versioned_constants = { package = "apollo_versioned_constants", git = "https://github.com/starkware-libs/sequencer", tag = "blockifier-v0.19.0-rc.0" }
+apollo_versioned_constants = { package = "apollo_versioned_constants", git = "https://github.com/starkware-libs/sequencer", tag = "blockifier-v0.19.0-rc.1" }
 ark-ff = "0.5.0"
 assert_matches = "1.5.0"
 async-trait = "0.1.89"
@@ -55,7 +55,7 @@ base64 = "0.22.1"
 # TODO: bincode development stopped, we should probably replace it. 3.0.0 is just a compile_error! in lib.rs
 bincode = "=2.0.1"
 bitvec = "1.0.1"
-blockifier = { version = "0.19.0-rc.0", features = [
+blockifier = { version = "0.19.0-rc.1", features = [
     "node_api",
     "reexecution",
 ] }
@@ -135,7 +135,7 @@ smallvec = "1.15.1"
 # This one needs to match the version used by blockifier
 starknet-types-core = "=0.2.4"
 # This one needs to match the version used by blockifier
-starknet_api = { version = "0.19.0-rc.0" }
+starknet_api = { version = "0.19.0-rc.1" }
 syn = "2.0"
 tempfile = "3.27"
 test-log = { version = "0.2.20", features = ["trace"] }

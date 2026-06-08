@@ -801,9 +801,9 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "apollo_compilation_utils"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64e65f709b67c59d214863a94467b7ba57e256a5294b6985aba2c8a66086afd4"
+checksum = "8a80643d13be9b298b316eba16fb3728f184b1ebf175cda864145c35a8ef488c"
 dependencies = [
  "cairo-lang-sierra 2.19.0-rc.2",
  "cairo-lang-starknet-classes",
@@ -812,16 +812,16 @@ dependencies = [
  "serde",
  "serde_json",
  "starknet-types-core",
- "starknet_api 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "starknet_api 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempfile",
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "apollo_compile_to_native"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bdb6d43532f52cf61f993d2a2a844bea4bf67c4baad58b66f5b202342412491"
+checksum = "8b9029b9a37b5cc48e475f242aa77a77b9e43a7ce6d8601f36f9ee17ac9594ef"
 dependencies = [
  "apollo_compilation_utils",
  "apollo_compile_to_native_types",
@@ -832,9 +832,9 @@ dependencies = [
 
 [[package]]
 name = "apollo_compile_to_native_types"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aec315626f330db48c0c507d164271227dc2fc2f7cb9f8a420b3790578ba3fa0"
+checksum = "9c86e3c2d0684bae526775f49db1534f4fe69e175d276252b9fdb99884c4378e"
 dependencies = [
  "apollo_config",
  "serde",
@@ -843,11 +843,11 @@ dependencies = [
 
 [[package]]
 name = "apollo_config"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e54dc26c63654cd2b5426bfd35febf8a29f270676a4ebc06f8a0750f19f82182"
+checksum = "71a0bf993b0f810040b6e5028455814f432eb897e2ea4693eb7d99bec6db27e1"
 dependencies = [
- "apollo_infra_utils 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "apollo_infra_utils 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "clap",
  "const_format",
  "itertools 0.12.1",
@@ -862,11 +862,11 @@ dependencies = [
 
 [[package]]
 name = "apollo_infra_utils"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7ffa778ed31cfa0e1ff861adc8b22fd04f9316ec49fa9dfb4f99530fff3b73b"
+checksum = "f13f9ff898d9b2ae423bc31a3e02f7075c21d4a241dfdd87d031e7140a9cedd8"
 dependencies = [
- "apollo_proc_macros 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "apollo_proc_macros 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "assert-json-diff",
  "colored 3.1.1",
  "num_enum",
@@ -886,10 +886,10 @@ dependencies = [
 
 [[package]]
 name = "apollo_infra_utils"
-version = "0.19.0-rc.0"
-source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.0#8fec81e6f7333485a86281764af7144bf1c25998"
+version = "0.19.0-rc.1"
+source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.1#31e7cdf34ca5c824bc86e05915bd3ed948facfe8"
 dependencies = [
- "apollo_proc_macros 0.19.0-rc.0 (git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.0)",
+ "apollo_proc_macros 0.19.0-rc.1 (git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.1)",
  "num_enum",
  "serde",
  "serde_json",
@@ -903,9 +903,9 @@ dependencies = [
 
 [[package]]
 name = "apollo_metrics"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89bc020a09ce51573fbbcd3ec06dfc3060fb796487e53ce3ea621bf3e05fe863"
+checksum = "486799c028dd41eb878934c6f291754c3ece52c31871791111eedf34b3338bd8"
 dependencies = [
  "apollo_time",
  "const_format",
@@ -918,28 +918,28 @@ dependencies = [
 
 [[package]]
 name = "apollo_proc_macros"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "921a69f239057ae1c6ef9f08b1e21083e0cb31824ea533666ce482a609f28df3"
+checksum = "ce71c7b10e6a34b0570292ef976a7802370efcb6e08078cd5da4302d8bdd0463"
 dependencies = [
- "apollo_proc_macros_lib 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "apollo_proc_macros_lib 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "metrics",
 ]
 
 [[package]]
 name = "apollo_proc_macros"
-version = "0.19.0-rc.0"
-source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.0#8fec81e6f7333485a86281764af7144bf1c25998"
+version = "0.19.0-rc.1"
+source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.1#31e7cdf34ca5c824bc86e05915bd3ed948facfe8"
 dependencies = [
- "apollo_proc_macros_lib 0.19.0-rc.0 (git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.0)",
+ "apollo_proc_macros_lib 0.19.0-rc.1 (git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.1)",
  "metrics",
 ]
 
 [[package]]
 name = "apollo_proc_macros_lib"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ed3223f0948e2f63ac16623d43606805376b1d9678766c8a0ae10bb275a2be8"
+checksum = "15a1dd8662b533eba8572309f024b2f75a4c155ec04296a543deaa1c3ce550c6"
 dependencies = [
  "lazy_static",
  "proc-macro2",
@@ -949,8 +949,8 @@ dependencies = [
 
 [[package]]
 name = "apollo_proc_macros_lib"
-version = "0.19.0-rc.0"
-source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.0#8fec81e6f7333485a86281764af7144bf1c25998"
+version = "0.19.0-rc.1"
+source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.1#31e7cdf34ca5c824bc86e05915bd3ed948facfe8"
 dependencies = [
  "lazy_static",
  "proc-macro2",
@@ -960,28 +960,28 @@ dependencies = [
 
 [[package]]
 name = "apollo_sizeof"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74ce22b93dd26e9de1569733879a0be1bf06696fda9f8bdf261942a6a3e8d7ea"
+checksum = "dd227d97108d29448409b6a113cf42c6096c2c878f7b90259fb95c0740d1593a"
 dependencies = [
- "apollo_sizeof_macros 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "apollo_sizeof_macros 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "starknet-types-core",
 ]
 
 [[package]]
 name = "apollo_sizeof"
-version = "0.19.0-rc.0"
-source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.0#8fec81e6f7333485a86281764af7144bf1c25998"
+version = "0.19.0-rc.1"
+source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.1#31e7cdf34ca5c824bc86e05915bd3ed948facfe8"
 dependencies = [
- "apollo_sizeof_macros 0.19.0-rc.0 (git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.0)",
+ "apollo_sizeof_macros 0.19.0-rc.1 (git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.1)",
  "starknet-types-core",
 ]
 
 [[package]]
 name = "apollo_sizeof_macros"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6043c0e32e7e66ff55181cf218a41ec3f6088f19373c33fa97eba16c9e53db7d"
+checksum = "a015c2883b41ae2cb83229a78f6b26cd2268e70bd363da2cc035f4be5c56ab84"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -990,8 +990,8 @@ dependencies = [
 
 [[package]]
 name = "apollo_sizeof_macros"
-version = "0.19.0-rc.0"
-source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.0#8fec81e6f7333485a86281764af7144bf1c25998"
+version = "0.19.0-rc.1"
+source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.1#31e7cdf34ca5c824bc86e05915bd3ed948facfe8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1000,20 +1000,20 @@ dependencies = [
 
 [[package]]
 name = "apollo_time"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3aaf26d1b4b96b74892ee6d199e8f2001a6e4189e668347da3325793c167c71"
+checksum = "1dfcf70931aab75f64fe2e83bd803e039bac6c0a2f8b5388a22f382a994defca"
 dependencies = [
  "chrono",
 ]
 
 [[package]]
 name = "apollo_versioned_constants"
-version = "0.19.0-rc.0"
-source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.0#8fec81e6f7333485a86281764af7144bf1c25998"
+version = "0.19.0-rc.1"
+source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.1#31e7cdf34ca5c824bc86e05915bd3ed948facfe8"
 dependencies = [
  "serde",
- "starknet_api 0.19.0-rc.0 (git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.0)",
+ "starknet_api 0.19.0-rc.1 (git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.1)",
  "thiserror 1.0.69",
 ]
 
@@ -1854,16 +1854,16 @@ dependencies = [
 
 [[package]]
 name = "blockifier"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "503b9d6fa2c77850dfda39c7781deaea9844d997bb6449a5ccfeab50a9820a22"
+checksum = "bbc0228548f106ce58822bca091c3144b1a8f735641ecd75d8a1041d0fcdabb3"
 dependencies = [
  "anyhow",
  "apollo_compilation_utils",
  "apollo_compile_to_native",
  "apollo_compile_to_native_types",
  "apollo_config",
- "apollo_infra_utils 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "apollo_infra_utils 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "apollo_metrics",
  "ark-ec",
  "ark-ff 0.5.0",
@@ -1895,7 +1895,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "starknet-types-core",
- "starknet_api 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "starknet_api 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "strum",
  "thiserror 1.0.69",
  "validator",
@@ -1903,18 +1903,18 @@ dependencies = [
 
 [[package]]
 name = "blockifier_test_utils"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f6d31da7d6028b76a84d22079fcdefb5d9b2cc589cf4c8675cb527e1e392dd9"
+checksum = "799b9d5f9251b6f049b3c95430058153a7eafe69d807f4088744a4696cf53d1f"
 dependencies = [
- "apollo_infra_utils 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "apollo_infra_utils 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "cairo-lang-starknet-classes",
  "digest 0.10.7",
  "expect-test",
  "serde_json",
  "sha2 0.10.9",
  "starknet-types-core",
- "starknet_api 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "starknet_api 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "strum",
  "tempfile",
  "tracing",
@@ -8573,7 +8573,7 @@ dependencies = [
  "starknet-gateway-client",
  "starknet-gateway-test-fixtures",
  "starknet-gateway-types",
- "starknet_api 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "starknet_api 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempfile",
  "test-log",
  "thiserror 2.0.18",
@@ -8687,7 +8687,7 @@ dependencies = [
  "serde",
  "serde_json",
  "starknet-gateway-test-fixtures",
- "starknet_api 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "starknet_api 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tracing",
 ]
 
@@ -8783,7 +8783,7 @@ dependencies = [
  "primitive-types 0.14.0",
  "serde_json",
  "starknet-types-core",
- "starknet_api 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "starknet_api 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio",
  "tokio-util",
  "tracing",
@@ -8877,7 +8877,7 @@ dependencies = [
  "starknet-gateway-test-fixtures",
  "starknet-gateway-types",
  "starknet-types-core",
- "starknet_api 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "starknet_api 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempfile",
  "test-log",
  "thiserror 2.0.18",
@@ -8992,7 +8992,7 @@ dependencies = [
  "rayon",
  "rstest",
  "serde_json",
- "starknet_api 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "starknet_api 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -11096,12 +11096,12 @@ dependencies = [
 
 [[package]]
 name = "starknet_api"
-version = "0.19.0-rc.0"
+version = "0.19.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "716ea9a55e7840daeaff2619eae8dfbb8fe6548e8200b47c18f2ed387f079695"
+checksum = "789112430e6c200369bbdf141b4aa83e5e08c586ae97b01bebda7d3c4a4739b6"
 dependencies = [
- "apollo_infra_utils 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "apollo_sizeof 0.19.0-rc.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "apollo_infra_utils 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "apollo_sizeof 0.19.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "base64 0.13.1",
  "bitvec",
  "cached 0.44.0",
@@ -11136,11 +11136,11 @@ dependencies = [
 
 [[package]]
 name = "starknet_api"
-version = "0.19.0-rc.0"
-source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.0#8fec81e6f7333485a86281764af7144bf1c25998"
+version = "0.19.0-rc.1"
+source = "git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.1#31e7cdf34ca5c824bc86e05915bd3ed948facfe8"
 dependencies = [
- "apollo_infra_utils 0.19.0-rc.0 (git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.0)",
- "apollo_sizeof 0.19.0-rc.0 (git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.0)",
+ "apollo_infra_utils 0.19.0-rc.1 (git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.1)",
+ "apollo_sizeof 0.19.0-rc.1 (git+https://github.com/starkware-libs/sequencer?tag=blockifier-v0.19.0-rc.1)",
  "base64 0.13.1",
  "bitvec",
  "cached 0.44.0",
