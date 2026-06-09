@@ -5,6 +5,11 @@ name: Docker
 
 on:
   workflow_dispatch:
+    inputs:
+      pathfinder_force_version:
+        description: 'Set version for pathfinder via PATHFINDER_FORCE_VERSION (defaults to `git describe --tags --dirty`)'
+        type: string
+        default: ''
   push:
     tags:
       - 'v*'
@@ -32,9 +37,15 @@ jobs:
           fetch-depth: 0
       - name: Generate version
         id: generate_version
+        env:
+          PATHFINDER_FORCE_VERSION: ${{ inputs.pathfinder_force_version }}
         run: |
-          echo -n "pathfinder_version=" >> $GITHUB_OUTPUT
-          git describe --tags --dirty >> $GITHUB_OUTPUT
+          if [ -n "$PATHFINDER_FORCE_VERSION" ]; then
+            echo "pathfinder_version=$PATHFINDER_FORCE_VERSION" >> $GITHUB_OUTPUT
+          else
+            echo -n "pathfinder_version=" >> $GITHUB_OUTPUT
+            git describe --tags --dirty >> $GITHUB_OUTPUT
+          fi
       - name: Set up QEMU
         id: qemu
         uses: docker/setup-qemu-action@v3
