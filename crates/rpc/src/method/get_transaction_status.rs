@@ -56,10 +56,11 @@ pub async fn get_transaction_status(
             .context("Opening database connection")?;
         let db_tx = db.transaction().context("Creating database transaction")?;
 
-        let pending_data = context.pending_data.get(&db_tx, rpc_version)?;
+        let pending_data = context.pending_data.get_optional(&db_tx, rpc_version)?;
 
-        if let Some(finalized_tx_data) =
-            crate::pending::find_finalized_tx_data(&pending_data, input.transaction_hash)
+        if let Some(finalized_tx_data) = pending_data
+            .as_ref()
+            .and_then(|p| crate::pending::find_finalized_tx_data(p, input.transaction_hash))
         {
             let execution_status = &finalized_tx_data.receipt.execution_status;
             let output = match finalized_tx_data.finality_status {
@@ -241,6 +242,24 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(status, Output::AcceptedOnL1(TxnExecutionStatus::Succeeded));
+    }
+
+    #[tokio::test]
+    async fn finalized_tx_resolves_when_pending_unavailable() {
+        let cache = std::sync::Arc::new(pathfinder_pending_data::PendingDataCache::new());
+        cache.mark_unavailable("syncing");
+        let context = RpcContext::for_tests().with_pending_data_cache(cache);
+
+        let input = Input {
+            transaction_hash: transaction_hash_bytes!(b"txn 1"),
+        };
+
+        // A finalized tx lives in the DB, so an unavailable pending cache must not
+        // error.
+        let status = get_transaction_status(context, input, RPC_VERSION)
+            .await
+            .unwrap();
         assert_eq!(status, Output::AcceptedOnL1(TxnExecutionStatus::Succeeded));
     }
 
