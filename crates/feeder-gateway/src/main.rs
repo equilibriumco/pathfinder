@@ -19,7 +19,7 @@
 /// that pathfinder reorgs from block 50 to 40 use the following command line:
 /// `cargo run --release -p pathfinder --example feeder_gateway
 /// ./testnet-sepolia.sqlite --reorg-at-block 50 --reorg-to-block 40`
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -934,10 +934,15 @@ fn storage_to_gateway(
         })
         .collect();
 
+    // The historically correct value is
+    // state_update.declared_cairo_classes, but the real gateway
+    // apparently does not send the old contracts any more...
+    let old_declared_contracts = HashSet::new();
+
     let state_diff = starknet_gateway_types::reply::state_update::StateDiff {
         storage_diffs,
         deployed_contracts,
-        old_declared_contracts: state_update.declared_cairo_classes,
+        old_declared_contracts,
         declared_classes,
         nonces,
         replaced_classes,
