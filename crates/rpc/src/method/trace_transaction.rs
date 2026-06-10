@@ -67,13 +67,16 @@ pub async fn trace_transaction(
                 .context("Creating database transaction")?;
 
             // Find the transaction's block.
-            let pending = context.pending_data.get(&db_tx, rpc_version)?;
+            let pending = context.pending_data.get_optional(&db_tx, rpc_version)?;
+            let pending = pending.as_ref();
 
-            let (header, transactions, cache) = if let Some(pending_tx) = pending
-                .pre_confirmed_transactions()
-                .iter()
-                .find(|tx| tx.hash == input.transaction_hash)
-            {
+            let (header, transactions, cache) = if let Some((pending, pending_tx)) = pending
+                .and_then(|p| {
+                    p.pre_confirmed_transactions()
+                        .iter()
+                        .find(|tx| tx.hash == input.transaction_hash)
+                        .map(|tx| (p, tx))
+                }) {
                 let header = pending.pre_confirmed_header();
 
                 if header.starknet_version
@@ -88,12 +91,16 @@ pub async fn trace_transaction(
                     // Can't use the cache for pending blocks since they have no block hash.
                     pathfinder_executor::TraceCache::default(),
                 )
-            } else if let Some(pre_latest_tx) = pending.pre_latest_block().and_then(|pre_latest| {
-                pre_latest
-                    .transactions
-                    .iter()
-                    .find(|tx| tx.hash == input.transaction_hash)
-                    .cloned()
+            } else if let Some((pending, pre_latest_tx)) = pending.and_then(|p| {
+                p.pre_latest_block()
+                    .and_then(|pre_latest| {
+                        pre_latest
+                            .transactions
+                            .iter()
+                            .find(|tx| tx.hash == input.transaction_hash)
+                            .cloned()
+                    })
+                    .map(|tx| (p, tx))
             }) {
                 let header = pending
                     .pre_latest_header()
