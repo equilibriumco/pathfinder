@@ -184,50 +184,75 @@ pub async fn get_events(
             .transaction()
             .context("Creating database transaction")?;
 
-        let pending = context.pending_data.get(&transaction, rpc_version)?;
+        let requires_pre_confirmed = matches!(request.from_block, Some(PreConfirmed))
+            || matches!(request.to_block, Some(PreConfirmed));
+
+        // Missing pending data only errs when the request explicitly asked for it.
+        let pending: Option<PendingData> = if requires_pre_confirmed {
+            Some(context.pending_data.get(&transaction, rpc_version)?)
+        } else {
+            context
+                .pending_data
+                .get_optional(&transaction, rpc_version)?
+        };
 
         // Replace from/to blocks with `BlockId::PreConfirmed` if their numbers match
         // the pre-latest/pre-confirmed block number.
         let from_block_id = request.from_block.map(|from_id| match from_id {
-            Number(from) if pending.is_pre_latest_or_pre_confirmed(from) => PreConfirmed,
+            Number(from)
+                if pending
+                    .as_ref()
+                    .is_some_and(|p| p.is_pre_latest_or_pre_confirmed(from)) =>
+            {
+                PreConfirmed
+            }
             _ => from_id,
         });
         let to_block_id = request.to_block.map(|to_id| match to_id {
-            Number(to) if pending.is_pre_latest_or_pre_confirmed(to) => PreConfirmed,
+            Number(to)
+                if pending
+                    .as_ref()
+                    .is_some_and(|p| p.is_pre_latest_or_pre_confirmed(to)) =>
+            {
+                PreConfirmed
+            }
             _ => to_id,
         });
 
-        // Handle the trivial (1), (2) and (4a) cases.
-        match (&from_block_id, &to_block_id) {
-            (Some(PreConfirmed), to) => {
-                if matches!(to, Some(PreConfirmed) | None) {
-                    let (pending_events, pending_ct) = get_pending_events(
-                        &pending,
-                        request.chunk_size,
-                        &request.keys,
-                        &request.addresses,
-                        request_ct,
-                    )?;
-                    return Ok(GetEventsResult {
-                        events: pending_events,
-                        continuation_token: pending_ct.map(|ct| ct.to_string()),
-                    });
-                } else {
+        // Handle the trivial (1), (2) and (4a) cases — all of which need pending data,
+        // which a pre-confirmed bound guarantees is present.
+        if let Some(pending) = pending.as_ref() {
+            match (&from_block_id, &to_block_id) {
+                (Some(PreConfirmed), to) => {
+                    if matches!(to, Some(PreConfirmed) | None) {
+                        let (pending_events, pending_ct) = get_pending_events(
+                            pending,
+                            request.chunk_size,
+                            &request.keys,
+                            &request.addresses,
+                            request_ct,
+                        )?;
+                        return Ok(GetEventsResult {
+                            events: pending_events,
+                            continuation_token: pending_ct.map(|ct| ct.to_string()),
+                        });
+                    } else {
+                        return Ok(GetEventsResult {
+                            events: Vec::new(),
+                            continuation_token: None,
+                        });
+                    }
+                }
+                (Some(Number(from_block)), Some(PreConfirmed))
+                    if from_block > &pending.pre_confirmed_block_number() =>
+                {
                     return Ok(GetEventsResult {
                         events: Vec::new(),
                         continuation_token: None,
                     });
                 }
+                _ => {}
             }
-            (Some(Number(from_block)), Some(PreConfirmed))
-                if from_block > &pending.pre_confirmed_block_number() =>
-            {
-                return Ok(GetEventsResult {
-                    events: Vec::new(),
-                    continuation_token: None,
-                });
-            }
-            _ => {}
         }
 
         let from_block = map_from_block_to_number(&transaction, from_block_id)?;
@@ -283,31 +308,33 @@ pub async fn get_events(
         let append_from_pending =
             db_ct.is_none() && matches!(to_block_id, Some(PreConfirmed) | None);
 
-        let continuation_token = if append_from_pending {
-            if events.len() < request.chunk_size {
-                let amount_to_take_from_pending = request.chunk_size - events.len();
-                let (pending_events, pending_ct) = get_pending_events(
-                    &pending,
-                    amount_to_take_from_pending,
-                    &request.keys,
-                    &request.addresses,
-                    request_ct,
-                )?;
-                events.extend(pending_events);
-                pending_ct
-            } else {
-                // We have a full page from the database, but there might be more pending
-                // events. Return a continuation token for the pending block.
-                let pending_block = pending
-                    .pre_latest_block_number()
-                    .unwrap_or_else(|| pending.pre_confirmed_block_number());
-                Some(ContinuationToken {
-                    block_number: pending_block,
-                    offset: 0,
-                })
+        // Append pending events only when there is a pending block to draw from.
+        let continuation_token = match pending.as_ref() {
+            Some(pending) if append_from_pending => {
+                if events.len() < request.chunk_size {
+                    let amount_to_take_from_pending = request.chunk_size - events.len();
+                    let (pending_events, pending_ct) = get_pending_events(
+                        pending,
+                        amount_to_take_from_pending,
+                        &request.keys,
+                        &request.addresses,
+                        request_ct,
+                    )?;
+                    events.extend(pending_events);
+                    pending_ct
+                } else {
+                    // We have a full page from the database, but there might be more pending
+                    // events. Return a continuation token for the pending block.
+                    let pending_block = pending
+                        .pre_latest_block_number()
+                        .unwrap_or_else(|| pending.pre_confirmed_block_number());
+                    Some(ContinuationToken {
+                        block_number: pending_block,
+                        offset: 0,
+                    })
+                }
             }
-        } else {
-            db_ct
+            _ => db_ct,
         };
 
         Ok(GetEventsResult {
@@ -1153,6 +1180,51 @@ mod tests {
         use pretty_assertions_sorted::assert_eq;
 
         use super::*;
+
+        fn unavailable_cache() -> std::sync::Arc<pathfinder_pending_data::PendingDataCache> {
+            let cache = std::sync::Arc::new(pathfinder_pending_data::PendingDataCache::new());
+            cache.mark_unavailable("syncing");
+            cache
+        }
+
+        #[tokio::test]
+        async fn db_range_succeeds_when_pending_unavailable() {
+            let (storage, _) = pathfinder_storage::test_utils::setup_test_storage();
+            let context = RpcContext::for_tests()
+                .with_storage(storage)
+                .with_pending_data_cache(unavailable_cache());
+
+            // Range bounded entirely within the database. Never touches pending
+            // data, so an unavailable cache must not turn it into an error.
+            let input = GetEventsInput {
+                filter: EventFilter {
+                    from_block: Some(BlockId::Number(BlockNumber::new_or_panic(0))),
+                    to_block: Some(BlockId::Latest),
+                    chunk_size: 1024,
+                    ..Default::default()
+                },
+            };
+            let result = get_events(context, input, RPC_VERSION).await.unwrap();
+            assert!(!result.events.is_empty());
+        }
+
+        #[tokio::test]
+        async fn explicit_pre_confirmed_errors_when_unavailable() {
+            let context = RpcContext::for_tests().with_pending_data_cache(unavailable_cache());
+
+            // Explicitly requesting pre-confirmed makes the data mandatory: an unavailable
+            // cache should error here.
+            let input = GetEventsInput {
+                filter: EventFilter {
+                    from_block: Some(BlockId::PreConfirmed),
+                    to_block: Some(BlockId::PreConfirmed),
+                    chunk_size: 1024,
+                    ..Default::default()
+                },
+            };
+            let error = get_events(context, input, RPC_VERSION).await.unwrap_err();
+            assert!(matches!(error, GetEventsError::Custom(_)));
+        }
 
         #[tokio::test]
         async fn backward_range() {
