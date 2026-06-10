@@ -12,7 +12,6 @@
 //!   3. [Params](stage::Params) where you select the retry behavior.
 //!   4. [Final](stage::Final) where you select the REST operation type, which
 //!      is then executed.
-use std::io::Write as _;
 
 use backon::Retryable;
 use pathfinder_common::{ClassHash, TransactionHash};
@@ -371,14 +370,9 @@ impl Request<stage::Final> {
                     None => request,
                 };
                 if compress {
-                    let body = serde_json::to_vec(json)
-                        .map_err(|e| SequencerError::GatewayRequestCreationError(e.into()))?;
-                    let mut encoder = flate2::write::GzEncoder::new(
-                        Vec::with_capacity(body.len() / 2),
-                        flate2::Compression::default(),
-                    );
-                    encoder
-                        .write_all(&body)
+                    let mut encoder =
+                        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                    serde_json::to_writer(&mut encoder, json)
                         .map_err(|e| SequencerError::GatewayRequestCreationError(e.into()))?;
                     let compressed_body = encoder
                         .finish()
@@ -835,8 +829,6 @@ mod tests {
     }
 
     mod body_is_compressed_if_and_only_if_compress_flag_is_set {
-        use std::io::Write as _;
-
         use pathfinder_common::{ContractAddress, Proof, ProofFactElem, Tip, TransactionNonce};
         use serde_json::json;
         use starknet_gateway_types::reply::DataAvailabilityMode;
@@ -890,13 +882,13 @@ mod tests {
         }
 
         fn compressed_body() -> Vec<u8> {
-            let body = serde_json::to_vec(&AddTransaction::Invoke(InvokeFunction::V3(
-                v3_non_empty_proof(),
-            )))
-            .unwrap();
             let mut encoder =
                 flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-            encoder.write_all(&body).unwrap();
+            serde_json::to_writer(
+                &mut encoder,
+                &AddTransaction::Invoke(InvokeFunction::V3(v3_non_empty_proof())),
+            )
+            .unwrap();
             encoder.finish().unwrap()
         }
 
