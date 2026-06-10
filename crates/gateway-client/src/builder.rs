@@ -849,27 +849,35 @@ mod tests {
 
         use crate::{Client, GatewayApi};
 
-        fn v3_empty_proof() -> InvokeFunctionV3 {
+        fn v3_empty_proof() -> InvokeFunctionV3<'static> {
+            static EMPTY_PROOF: Proof = Proof(Vec::new());
+
             InvokeFunctionV3 {
-                signature: vec![],
+                signature: &[],
                 nonce: TransactionNonce::ZERO,
                 nonce_data_availability_mode: DataAvailabilityMode::L1,
                 fee_data_availability_mode: DataAvailabilityMode::L1,
                 resource_bounds: Default::default(),
                 tip: Tip(0),
-                paymaster_data: vec![],
+                paymaster_data: &[],
                 sender_address: ContractAddress::ZERO,
-                calldata: vec![],
-                account_deployment_data: vec![],
-                proof_facts: vec![],
-                proof: Proof(vec![]),
+                calldata: &[],
+                account_deployment_data: &[],
+                proof_facts: &[],
+                proof: &EMPTY_PROOF,
             }
         }
 
-        fn v3_non_empty_proof() -> InvokeFunctionV3 {
+        fn v3_non_empty_proof() -> InvokeFunctionV3<'static> {
+            use std::sync::LazyLock;
+
+            static PROOF: LazyLock<Proof> = LazyLock::new(|| Proof(vec![0; 100]));
+            static PROOF_FACTS: LazyLock<Vec<ProofFactElem>> =
+                LazyLock::new(|| vec![ProofFactElem::ZERO]);
+
             InvokeFunctionV3 {
-                proof: Proof(vec![0; 100]),
-                proof_facts: vec![ProofFactElem::ZERO],
+                proof: &PROOF,
+                proof_facts: &PROOF_FACTS,
                 ..v3_empty_proof()
             }
         }

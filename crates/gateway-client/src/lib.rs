@@ -112,24 +112,24 @@ pub trait GatewayApi: Sync {
         unimplemented!();
     }
 
-    async fn add_invoke_transaction(
+    async fn add_invoke_transaction<'tx>(
         &self,
-        invoke: request::add_transaction::InvokeFunction,
+        invoke: request::add_transaction::InvokeFunction<'tx>,
     ) -> Result<reply::add_transaction::InvokeResponse, SequencerError> {
         unimplemented!();
     }
 
-    async fn add_declare_transaction(
+    async fn add_declare_transaction<'tx>(
         &self,
-        declare: request::add_transaction::Declare,
+        declare: request::add_transaction::Declare<'tx>,
         token: Option<String>,
     ) -> Result<reply::add_transaction::DeclareResponse, SequencerError> {
         unimplemented!();
     }
 
-    async fn add_deploy_account(
+    async fn add_deploy_account<'tx>(
         &self,
-        deploy: request::add_transaction::DeployAccount,
+        deploy: request::add_transaction::DeployAccount<'tx>,
     ) -> Result<reply::add_transaction::DeployAccountResponse, SequencerError> {
         unimplemented!();
     }
@@ -212,24 +212,24 @@ impl<T: GatewayApi + Sync + Send> GatewayApi for Arc<T> {
         self.as_ref().eth_contract_addresses().await
     }
 
-    async fn add_invoke_transaction(
+    async fn add_invoke_transaction<'tx>(
         &self,
-        invoke: request::add_transaction::InvokeFunction,
+        invoke: request::add_transaction::InvokeFunction<'tx>,
     ) -> Result<reply::add_transaction::InvokeResponse, SequencerError> {
         self.as_ref().add_invoke_transaction(invoke).await
     }
 
-    async fn add_declare_transaction(
+    async fn add_declare_transaction<'tx>(
         &self,
-        declare: request::add_transaction::Declare,
+        declare: request::add_transaction::Declare<'tx>,
         token: Option<String>,
     ) -> Result<reply::add_transaction::DeclareResponse, SequencerError> {
         self.as_ref().add_declare_transaction(declare, token).await
     }
 
-    async fn add_deploy_account(
+    async fn add_deploy_account<'tx>(
         &self,
-        deploy: request::add_transaction::DeployAccount,
+        deploy: request::add_transaction::DeployAccount<'tx>,
     ) -> Result<reply::add_transaction::DeployAccountResponse, SequencerError> {
         self.as_ref().add_deploy_account(deploy).await
     }
@@ -659,9 +659,9 @@ impl GatewayApi for Client {
 
     /// Adds a transaction invoking a contract.
     #[tracing::instrument(skip(self))]
-    async fn add_invoke_transaction(
+    async fn add_invoke_transaction<'tx>(
         &self,
-        invoke: request::add_transaction::InvokeFunction,
+        invoke: request::add_transaction::InvokeFunction<'tx>,
     ) -> Result<reply::add_transaction::InvokeResponse, SequencerError> {
         // Note that we don't do retries here.
         // This method is used to proxy an add transaction operation from the JSON-RPC
@@ -682,9 +682,9 @@ impl GatewayApi for Client {
 
     /// Adds a transaction declaring a class.
     #[tracing::instrument(skip(self))]
-    async fn add_declare_transaction(
+    async fn add_declare_transaction<'tx>(
         &self,
-        declare: request::add_transaction::Declare,
+        declare: request::add_transaction::Declare<'tx>,
         token: Option<String>,
     ) -> Result<reply::add_transaction::DeclareResponse, SequencerError> {
         // Note that we don't do retries here.
@@ -704,9 +704,9 @@ impl GatewayApi for Client {
     }
 
     #[tracing::instrument(skip(self))]
-    async fn add_deploy_account(
+    async fn add_deploy_account<'tx>(
         &self,
-        deploy: request::add_transaction::DeployAccount,
+        deploy: request::add_transaction::DeployAccount<'tx>,
     ) -> Result<reply::add_transaction::DeployAccountResponse, SequencerError> {
         // Note that we don't do retries here.
         // This method is used to proxy an add transaction operation from the JSON-RPC
@@ -942,11 +942,11 @@ mod tests {
                 let (_, fee, sig, nonce, addr, call) = inputs();
                 let invoke = InvokeFunction::V0(InvokeFunctionV0V1 {
                     max_fee: fee,
-                    signature: sig,
+                    signature: &sig,
                     nonce: Some(nonce),
                     sender_address: addr,
                     entry_point_selector: None,
-                    calldata: call,
+                    calldata: &call,
                 });
 
                 let error = client.add_invoke_transaction(invoke).await.unwrap_err();
@@ -974,11 +974,11 @@ mod tests {
                 let (_, fee, sig, nonce, addr, call) = inputs();
                 let invoke = InvokeFunction::V1(InvokeFunctionV0V1 {
                     max_fee: fee,
-                    signature: sig,
+                    signature: &sig,
                     nonce: Some(nonce),
                     sender_address: addr,
                     entry_point_selector: None,
-                    calldata: call,
+                    calldata: &call,
                 });
                 client.add_invoke_transaction(invoke).await.unwrap();
             }
@@ -1007,7 +1007,7 @@ mod tests {
                 let declare = Declare::V0(DeclareV0V1V2 {
                     version: TransactionVersion::ZERO,
                     max_fee: Fee(Felt::ZERO),
-                    signature: vec![],
+                    signature: &[],
                     contract_class: ContractDefinition::Cairo(cairo_contract_class_from_fixture()),
                     sender_address: contract_address!("0x1"),
                     nonce: TransactionNonce::ZERO,
@@ -1042,7 +1042,7 @@ mod tests {
                 let declare = Declare::V1(DeclareV0V1V2 {
                     version: TransactionVersion::ONE,
                     max_fee: fee!("0xFFFF"),
-                    signature: vec![],
+                    signature: &[],
                     contract_class: ContractDefinition::Cairo(cairo_contract_class_from_fixture()),
                     sender_address: contract_address!("0x1"),
                     nonce: TransactionNonce(Felt::ZERO),
@@ -1120,7 +1120,7 @@ mod tests {
                 let declare = Declare::V2(DeclareV0V1V2 {
                     version: TransactionVersion::TWO,
                     max_fee: fee!("0xffff"),
-                    signature: vec![],
+                    signature: &[],
                     contract_class: ContractDefinition::Sierra(sierra_contract_class_from_fixture()),
                     sender_address: contract_address!("0x1"),
                     nonce: TransactionNonce::ZERO,
@@ -1220,7 +1220,7 @@ mod tests {
                 let declare = Declare::V0(DeclareV0V1V2 {
                     version: TransactionVersion::ZERO,
                     max_fee: Fee::ZERO,
-                    signature: vec![],
+                    signature: &[],
                     contract_class: ContractDefinition::Cairo(CairoContractDefinition {
                         program: "".to_owned(),
                         entry_points_by_type: HashMap::new(),
@@ -1249,7 +1249,7 @@ mod tests {
                 let declare = Declare::V0(DeclareV0V1V2 {
                     version: TransactionVersion::ZERO,
                     max_fee: Fee::ZERO,
-                    signature: vec![],
+                    signature: &[],
                     contract_class: ContractDefinition::Cairo(CairoContractDefinition {
                         program: "".to_owned(),
                         entry_points_by_type: HashMap::new(),

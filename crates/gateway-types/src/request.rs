@@ -54,59 +54,59 @@ pub mod add_transaction {
     /// Account deployment transaction details.
     #[derive(Debug, serde::Serialize)]
     #[serde(tag = "version")]
-    pub enum DeployAccount {
+    pub enum DeployAccount<'a> {
         #[serde(rename = "0x0")]
-        V0(DeployAccountV0V1),
+        V0(DeployAccountV0V1<'a>),
         #[serde(rename = "0x1")]
-        V1(DeployAccountV0V1),
+        V1(DeployAccountV0V1<'a>),
         #[serde(rename = "0x3")]
-        V3(DeployAccountV3),
+        V3(DeployAccountV3<'a>),
     }
 
     #[serde_as]
     #[derive(Debug, serde::Serialize)]
-    pub struct DeployAccountV0V1 {
+    pub struct DeployAccountV0V1<'a> {
         pub max_fee: Fee,
-        #[serde_as(as = "Vec<TransactionSignatureElemAsDecimalStr>")]
-        pub signature: Vec<TransactionSignatureElem>,
+        #[serde_as(as = "&[TransactionSignatureElemAsDecimalStr]")]
+        pub signature: &'a [TransactionSignatureElem],
         pub nonce: TransactionNonce,
 
         pub class_hash: ClassHash,
         pub contract_address_salt: ContractAddressSalt,
-        #[serde_as(as = "Vec<CallParamAsDecimalStr>")]
-        pub constructor_calldata: Vec<CallParam>,
+        #[serde_as(as = "&[CallParamAsDecimalStr]")]
+        pub constructor_calldata: &'a [CallParam],
     }
 
     #[serde_as]
     #[derive(Debug, serde::Serialize)]
-    pub struct DeployAccountV3 {
-        pub signature: Vec<TransactionSignatureElem>,
+    pub struct DeployAccountV3<'a> {
+        pub signature: &'a [TransactionSignatureElem],
         pub nonce: TransactionNonce,
         pub nonce_data_availability_mode: DataAvailabilityMode,
         pub fee_data_availability_mode: DataAvailabilityMode,
         pub resource_bounds: ResourceBounds,
         #[serde_as(as = "pathfinder_serde::TipAsHexStr")]
         pub tip: Tip,
-        pub paymaster_data: Vec<PaymasterDataElem>,
+        pub paymaster_data: &'a [PaymasterDataElem],
 
         pub class_hash: ClassHash,
         pub contract_address_salt: ContractAddressSalt,
-        pub constructor_calldata: Vec<CallParam>,
+        pub constructor_calldata: &'a [CallParam],
     }
 
     /// Invoke contract transaction details.
     #[derive(Debug, serde::Serialize)]
     #[serde(tag = "version")]
-    pub enum InvokeFunction {
+    pub enum InvokeFunction<'a> {
         #[serde(rename = "0x0")]
-        V0(InvokeFunctionV0V1),
+        V0(InvokeFunctionV0V1<'a>),
         #[serde(rename = "0x1")]
-        V1(InvokeFunctionV0V1),
+        V1(InvokeFunctionV0V1<'a>),
         #[serde(rename = "0x3")]
-        V3(InvokeFunctionV3),
+        V3(InvokeFunctionV3<'a>),
     }
 
-    impl InvokeFunction {
+    impl InvokeFunction<'_> {
         pub fn is_proof_empty(&self) -> bool {
             match self {
                 InvokeFunction::V0(_) | InvokeFunction::V1(_) => true,
@@ -117,10 +117,10 @@ pub mod add_transaction {
 
     #[serde_as]
     #[derive(Debug, serde::Serialize)]
-    pub struct InvokeFunctionV0V1 {
+    pub struct InvokeFunctionV0V1<'a> {
         // AccountTransaction properties
         pub max_fee: Fee,
-        pub signature: Vec<TransactionSignatureElem>,
+        pub signature: &'a [TransactionSignatureElem],
         // NOTE: this is optional because Invoke v0 transactions do not have a nonce
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub nonce: Option<TransactionNonce>,
@@ -129,54 +129,54 @@ pub mod add_transaction {
         // NOTE: this is optional because only Invoke v0 transactions have an entry point selector
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub entry_point_selector: Option<EntryPoint>,
-        pub calldata: Vec<CallParam>,
+        pub calldata: &'a [CallParam],
     }
 
     #[serde_as]
     #[derive(Debug, serde::Serialize)]
-    pub struct InvokeFunctionV3 {
-        pub signature: Vec<TransactionSignatureElem>,
+    pub struct InvokeFunctionV3<'a> {
+        pub signature: &'a [TransactionSignatureElem],
         pub nonce: TransactionNonce,
         pub nonce_data_availability_mode: DataAvailabilityMode,
         pub fee_data_availability_mode: DataAvailabilityMode,
         pub resource_bounds: ResourceBounds,
         #[serde_as(as = "pathfinder_serde::TipAsHexStr")]
         pub tip: Tip,
-        pub paymaster_data: Vec<PaymasterDataElem>,
+        pub paymaster_data: &'a [PaymasterDataElem],
 
         pub sender_address: ContractAddress,
-        pub calldata: Vec<CallParam>,
-        pub account_deployment_data: Vec<AccountDeploymentDataElem>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        pub proof_facts: Vec<ProofFactElem>,
+        pub calldata: &'a [CallParam],
+        pub account_deployment_data: &'a [AccountDeploymentDataElem],
+        #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+        pub proof_facts: &'a [ProofFactElem],
         #[serde(default, skip_serializing_if = "Proof::is_empty")]
-        pub proof: Proof,
+        pub proof: &'a Proof,
     }
 
     /// Declare transaction details.
     #[allow(clippy::large_enum_variant)]
     #[derive(Debug, serde::Serialize)]
     #[serde(tag = "version")]
-    pub enum Declare {
+    pub enum Declare<'a> {
         #[serde(rename = "0x0")]
-        V0(DeclareV0V1V2),
+        V0(DeclareV0V1V2<'a>),
         #[serde(rename = "0x1")]
-        V1(DeclareV0V1V2),
+        V1(DeclareV0V1V2<'a>),
         #[serde(rename = "0x2")]
-        V2(DeclareV0V1V2),
+        V2(DeclareV0V1V2<'a>),
         #[serde(rename = "0x3")]
-        V3(DeclareV3),
+        V3(DeclareV3<'a>),
     }
 
     #[serde_as]
     #[derive(Debug, serde::Serialize)]
-    pub struct DeclareV0V1V2 {
+    pub struct DeclareV0V1V2<'a> {
         // Transaction properties
         pub version: TransactionVersion,
 
         // AccountTransaction properties -- except for nonce which is non-optional here
         pub max_fee: Fee,
-        pub signature: Vec<TransactionSignatureElem>,
+        pub signature: &'a [TransactionSignatureElem],
 
         pub contract_class: ContractDefinition,
         pub sender_address: ContractAddress,
@@ -189,20 +189,20 @@ pub mod add_transaction {
 
     #[serde_as]
     #[derive(Debug, serde::Serialize)]
-    pub struct DeclareV3 {
-        pub signature: Vec<TransactionSignatureElem>,
+    pub struct DeclareV3<'a> {
+        pub signature: &'a [TransactionSignatureElem],
         pub nonce: TransactionNonce,
         pub nonce_data_availability_mode: DataAvailabilityMode,
         pub fee_data_availability_mode: DataAvailabilityMode,
         pub resource_bounds: ResourceBounds,
         #[serde_as(as = "pathfinder_serde::TipAsHexStr")]
         pub tip: Tip,
-        pub paymaster_data: Vec<PaymasterDataElem>,
+        pub paymaster_data: &'a [PaymasterDataElem],
 
         pub contract_class: SierraContractDefinition,
         pub compiled_class_hash: CasmHash,
         pub sender_address: ContractAddress,
-        pub account_deployment_data: Vec<AccountDeploymentDataElem>,
+        pub account_deployment_data: &'a [AccountDeploymentDataElem],
     }
 
     /// Add transaction API operation.
@@ -211,13 +211,13 @@ pub mod add_transaction {
     /// the transaction (invoke or deploy).
     #[derive(Debug, serde::Serialize)]
     #[serde(tag = "type")]
-    pub enum AddTransaction {
+    pub enum AddTransaction<'a> {
         #[serde(rename = "INVOKE_FUNCTION")]
-        Invoke(InvokeFunction),
+        Invoke(InvokeFunction<'a>),
         #[serde(rename = "DECLARE")]
-        Declare(Declare),
+        Declare(Declare<'a>),
         #[serde(rename = "DEPLOY_ACCOUNT")]
-        DeployAccount(DeployAccount),
+        DeployAccount(DeployAccount<'a>),
     }
 
     #[cfg(test)]
@@ -234,7 +234,7 @@ pub mod add_transaction {
                 serde_json::from_str(INVOKE_CONTRACT_WITH_SIGNATURE).unwrap();
 
             let input = AddTransaction::Invoke(InvokeFunction::V1(InvokeFunctionV0V1 {
-                signature: vec![
+                signature: &[
                     transaction_signature_elem!(
                         "0x7dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5"
                     ),
@@ -246,7 +246,7 @@ pub mod add_transaction {
                 sender_address: contract_address!(
                     "0x23371b227eaecd8e8920cd429357edddd2cd0f3fee6abaacca08d3ab82a7cdd"
                 ),
-                calldata: vec![
+                calldata: &[
                     call_param!("0x1"),
                     call_param!(
                         "0x677bb1cdc050e8d63855e8743ab6e09179138def390676cc03c484daf112ba1"
