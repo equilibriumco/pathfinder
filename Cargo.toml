@@ -88,7 +88,6 @@ http = "1.4.0"
 http-body = "1.0.1"
 hyper = "1.8.1"
 ipnet = "2.12.0"
-tikv-jemallocator = "0.6.0"
 libc = "0.2.183"
 libp2p = { version = "0.56.0", default-features = false }
 libp2p-identity = "0.2.13"
@@ -121,7 +120,6 @@ reqwest = { version = "0.12.28", default-features = false, features = [
     "gzip",
     "deflate",
 ] }
-roaring = "0.11"
 rstest = "0.18.2"
 rusqlite = "0.37.0"
 rust-rocksdb = { version = "0.45.0", default-features = false, features = [
@@ -145,6 +143,7 @@ syn = "1.0"
 tempfile = "3.27"
 test-log = { version = "0.2.19", features = ["trace"] }
 thiserror = "2.0.18"
+tikv-jemallocator = "0.6.0"
 time = "0.3.47"
 tokio = "1.50"
 tokio-retry = "0.3.0"

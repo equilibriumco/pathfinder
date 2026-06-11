@@ -257,11 +257,11 @@ impl crate::storage::Storage for ContractStorage<'_> {
         &self,
         index: TrieStorageIndex,
     ) -> anyhow::Result<Option<pathfinder_storage::StoredNode>> {
-        self.tx.contract_trie_node(index, &self.contract)
+        self.tx.contract_trie_node(index)
     }
 
     fn hash(&self, index: TrieStorageIndex) -> anyhow::Result<Option<Felt>> {
-        self.tx.contract_trie_node_hash(index, &self.contract)
+        self.tx.contract_trie_node_hash(index)
     }
 
     fn leaf(&self, path: &BitSlice<u8, Msb0>) -> anyhow::Result<Option<Felt>> {
