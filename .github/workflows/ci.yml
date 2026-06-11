@@ -20,7 +20,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -42,7 +42,7 @@ jobs:
       LLVM_SYS_191_PREFIX: "/usr/lib/llvm-19"
       TABLEGEN_190_PREFIX: "/usr/lib/llvm-19"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ./.github/actions/free-disk-space
       - uses: rui314/setup-mold@v1
       - uses: Swatinem/rust-cache@v2
@@ -86,7 +86,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ./.github/actions/free-disk-space
       - uses: rui314/setup-mold@v1
       - uses: Swatinem/rust-cache@v2
@@ -126,7 +126,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ./.github/actions/free-disk-space
       - uses: rui314/setup-mold@v1
       - uses: Swatinem/rust-cache@v2
@@ -162,7 +162,7 @@ jobs:
       LLVM_SYS_191_PREFIX: "/usr/lib/llvm-19"
       TABLEGEN_190_PREFIX: "/usr/lib/llvm-19"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -191,7 +191,7 @@ jobs:
   rustfmt:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
@@ -206,7 +206,7 @@ jobs:
     env:
       RUSTDOCFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -221,7 +221,7 @@ jobs:
   dep-sort:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: baptiste0928/cargo-install@v3
         with:
           crate: cargo-sort
@@ -232,7 +232,7 @@ jobs:
   typos:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: crate-ci/typos@v1.26.0
         with:
           files: .
@@ -242,7 +242,7 @@ jobs:
     if: needs.detect-changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: cargo check
         run: |
           cd crates/load-test
@@ -254,7 +254,7 @@ jobs:
   docker-rust-version:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Check Dockerfile Rust version matches rust-toolchain.toml
         run: |
           pin=$(grep -oP 'channel\s*=\s*"\K[^"]+' rust-toolchain.toml)
