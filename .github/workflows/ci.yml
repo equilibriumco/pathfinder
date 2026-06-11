@@ -73,7 +73,7 @@ jobs:
       - name: Run unit tests with all features enabled excluding consensus integration tests
         run: timeout 10m cargo nextest run --cargo-profile ci-dev --no-fail-fast --all-targets --all-features --workspace --locked -E 'not test(/^test::consensus_[34]_nodes/)' --retries 2
       - name: Store timings with all features enabled
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: timings-all-features
           path: target/cargo-timings/
@@ -112,7 +112,7 @@ jobs:
         run: PATHFINDER_TEST_ENABLE_MARKER_FILES=1 timeout 30m cargo nextest run --test consensus -p pathfinder --features p2p,consensus-integration-tests --locked --retries 2 -j 1
       - name: Store test artifacts for consensus integration tests
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: consensus-integration-tests
           include-hidden-files: true
@@ -147,7 +147,7 @@ jobs:
       - name: Run unit tests with default features
         run: timeout 10m cargo nextest run --cargo-profile ci-dev --no-fail-fast --all-targets --workspace --locked
       - name: Store timings with default features
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: timings-default-features
           path: target/cargo-timings/
