@@ -225,11 +225,11 @@ pub(crate) async fn add_deploy_account_transaction_impl(
                 .add_deploy_account(add_transaction::DeployAccount::V0(
                     add_transaction::DeployAccountV0V1 {
                         max_fee: tx.max_fee,
-                        signature: tx.signature.clone(),
+                        signature: &tx.signature,
                         nonce: tx.nonce,
                         class_hash: tx.class_hash,
                         contract_address_salt: tx.contract_address_salt,
-                        constructor_calldata: tx.constructor_calldata.clone(),
+                        constructor_calldata: &tx.constructor_calldata,
                     },
                 ))
                 .await?;
@@ -255,11 +255,11 @@ pub(crate) async fn add_deploy_account_transaction_impl(
                 .add_deploy_account(add_transaction::DeployAccount::V1(
                     add_transaction::DeployAccountV0V1 {
                         max_fee: tx.max_fee,
-                        signature: tx.signature.clone(),
+                        signature: &tx.signature,
                         nonce: tx.nonce,
                         class_hash: tx.class_hash,
                         contract_address_salt: tx.contract_address_salt,
-                        constructor_calldata: tx.constructor_calldata.clone(),
+                        constructor_calldata: &tx.constructor_calldata,
                     },
                 ))
                 .await?;
@@ -283,23 +283,23 @@ pub(crate) async fn add_deploy_account_transaction_impl(
                     code: KnownStarknetErrorCode::InvalidTransactionVersion.into(),
                     message: "".to_string(),
                 },
-            ))
+            ));
         }
         BroadcastedDeployAccountTransaction::V3(tx) => {
             let response = context
                 .sequencer
                 .add_deploy_account(add_transaction::DeployAccount::V3(
                     add_transaction::DeployAccountV3 {
-                        signature: tx.signature.clone(),
+                        signature: &tx.signature,
                         nonce: tx.nonce,
                         nonce_data_availability_mode: tx.nonce_data_availability_mode.into(),
                         fee_data_availability_mode: tx.fee_data_availability_mode.into(),
                         resource_bounds: tx.resource_bounds.into(),
                         tip: tx.tip,
-                        paymaster_data: tx.paymaster_data.clone(),
+                        paymaster_data: &tx.paymaster_data,
                         class_hash: tx.class_hash,
                         contract_address_salt: tx.contract_address_salt,
-                        constructor_calldata: tx.constructor_calldata.clone(),
+                        constructor_calldata: &tx.constructor_calldata,
                     },
                 ))
                 .await?;

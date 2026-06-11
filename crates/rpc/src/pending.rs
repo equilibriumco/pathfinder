@@ -168,6 +168,20 @@ impl PendingWatcher {
         Ok(pending_data)
     }
 
+    /// Returns the pending data, or `None` when the cache is unavailable.
+    /// Unlike [`Self::get`], an `Unavailable` cache is not an error.
+    pub fn get_optional(
+        &self,
+        tx: &Transaction<'_>,
+        rpc_version: RpcVersion,
+    ) -> Result<Option<PendingData>, ReadError> {
+        match self.get(tx, rpc_version) {
+            Ok(data) => Ok(Some(data)),
+            Err(ReadError::Unavailable(_)) => Ok(None),
+            Err(e @ ReadError::Internal(_)) => Err(e),
+        }
+    }
+
     #[cfg(test)]
     pub fn get_unchecked(&self) -> PendingData {
         self.cache.subscribe().borrow().clone()

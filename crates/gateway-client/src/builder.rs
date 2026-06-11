@@ -12,7 +12,6 @@
 //!   3. [Params](stage::Params) where you select the retry behavior.
 //!   4. [Final](stage::Final) where you select the REST operation type, which
 //!      is then executed.
-use std::io::Write as _;
 
 use backon::Retryable;
 use pathfinder_common::{ClassHash, TransactionHash};
@@ -371,14 +370,9 @@ impl Request<stage::Final> {
                     None => request,
                 };
                 if compress {
-                    let body = serde_json::to_vec(json)
-                        .map_err(|e| SequencerError::GatewayRequestCreationError(e.into()))?;
-                    let mut encoder = flate2::write::GzEncoder::new(
-                        Vec::with_capacity(body.len() / 2),
-                        flate2::Compression::default(),
-                    );
-                    encoder
-                        .write_all(&body)
+                    let mut encoder =
+                        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                    serde_json::to_writer(&mut encoder, json)
                         .map_err(|e| SequencerError::GatewayRequestCreationError(e.into()))?;
                     let compressed_body = encoder
                         .finish()
@@ -835,8 +829,6 @@ mod tests {
     }
 
     mod body_is_compressed_if_and_only_if_compress_flag_is_set {
-        use std::io::Write as _;
-
         use pathfinder_common::{ContractAddress, Proof, ProofFactElem, Tip, TransactionNonce};
         use serde_json::json;
         use starknet_gateway_types::reply::DataAvailabilityMode;
@@ -849,27 +841,35 @@ mod tests {
 
         use crate::{Client, GatewayApi};
 
-        fn v3_empty_proof() -> InvokeFunctionV3 {
+        fn v3_empty_proof() -> InvokeFunctionV3<'static> {
+            static EMPTY_PROOF: Proof = Proof(Vec::new());
+
             InvokeFunctionV3 {
-                signature: vec![],
+                signature: &[],
                 nonce: TransactionNonce::ZERO,
                 nonce_data_availability_mode: DataAvailabilityMode::L1,
                 fee_data_availability_mode: DataAvailabilityMode::L1,
                 resource_bounds: Default::default(),
                 tip: Tip(0),
-                paymaster_data: vec![],
+                paymaster_data: &[],
                 sender_address: ContractAddress::ZERO,
-                calldata: vec![],
-                account_deployment_data: vec![],
-                proof_facts: vec![],
-                proof: Proof(vec![]),
+                calldata: &[],
+                account_deployment_data: &[],
+                proof_facts: &[],
+                proof: &EMPTY_PROOF,
             }
         }
 
-        fn v3_non_empty_proof() -> InvokeFunctionV3 {
+        fn v3_non_empty_proof() -> InvokeFunctionV3<'static> {
+            use std::sync::LazyLock;
+
+            static PROOF: LazyLock<Proof> = LazyLock::new(|| Proof(vec![0; 100]));
+            static PROOF_FACTS: LazyLock<Vec<ProofFactElem>> =
+                LazyLock::new(|| vec![ProofFactElem::ZERO]);
+
             InvokeFunctionV3 {
-                proof: Proof(vec![0; 100]),
-                proof_facts: vec![ProofFactElem::ZERO],
+                proof: &PROOF,
+                proof_facts: &PROOF_FACTS,
                 ..v3_empty_proof()
             }
         }
@@ -882,13 +882,13 @@ mod tests {
         }
 
         fn compressed_body() -> Vec<u8> {
-            let body = serde_json::to_vec(&AddTransaction::Invoke(InvokeFunction::V3(
-                v3_non_empty_proof(),
-            )))
-            .unwrap();
             let mut encoder =
                 flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-            encoder.write_all(&body).unwrap();
+            serde_json::to_writer(
+                &mut encoder,
+                &AddTransaction::Invoke(InvokeFunction::V3(v3_non_empty_proof())),
+            )
+            .unwrap();
             encoder.finish().unwrap()
         }
 

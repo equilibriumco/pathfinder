@@ -332,7 +332,7 @@ pub async fn add_declare_transaction(
                     add_transaction::Declare::V1(add_transaction::DeclareV0V1V2 {
                         version: tx.version,
                         max_fee: tx.max_fee,
-                        signature: tx.signature.clone(),
+                        signature: &tx.signature,
                         contract_class: ContractDefinition::Cairo(contract_definition),
                         sender_address: tx.sender_address,
                         nonce: tx.nonce,
@@ -370,7 +370,7 @@ pub async fn add_declare_transaction(
                     add_transaction::Declare::V2(add_transaction::DeclareV0V1V2 {
                         version: tx.version,
                         max_fee: tx.max_fee,
-                        signature: tx.signature.clone(),
+                        signature: &tx.signature,
                         contract_class: ContractDefinition::Sierra(contract_definition),
                         sender_address: tx.sender_address,
                         nonce: tx.nonce,
@@ -407,17 +407,17 @@ pub async fn add_declare_transaction(
                 .sequencer
                 .add_declare_transaction(
                     add_transaction::Declare::V3(add_transaction::DeclareV3 {
-                        signature: tx.signature.clone(),
+                        signature: &tx.signature,
                         nonce: tx.nonce,
                         nonce_data_availability_mode: tx.nonce_data_availability_mode.into(),
                         fee_data_availability_mode: tx.fee_data_availability_mode.into(),
                         resource_bounds: tx.resource_bounds.into(),
                         tip: tx.tip,
-                        paymaster_data: tx.paymaster_data.clone(),
+                        paymaster_data: &tx.paymaster_data,
                         contract_class: contract_definition,
                         compiled_class_hash: tx.compiled_class_hash,
                         sender_address: tx.sender_address,
-                        account_deployment_data: tx.account_deployment_data.clone(),
+                        account_deployment_data: &tx.account_deployment_data,
                     }),
                     input.token,
                 )

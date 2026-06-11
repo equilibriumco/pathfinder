@@ -239,11 +239,11 @@ pub(crate) async fn add_invoke_transaction_impl(
                 .add_invoke_transaction(add_transaction::InvokeFunction::V0(
                     add_transaction::InvokeFunctionV0V1 {
                         max_fee: tx.max_fee,
-                        signature: tx.signature.clone(),
+                        signature: &tx.signature,
                         nonce: None,
                         sender_address: tx.contract_address,
                         entry_point_selector: Some(tx.entry_point_selector),
-                        calldata: tx.calldata.clone(),
+                        calldata: &tx.calldata,
                     },
                 ))
                 .await?;
@@ -266,11 +266,11 @@ pub(crate) async fn add_invoke_transaction_impl(
                 .add_invoke_transaction(add_transaction::InvokeFunction::V1(
                     add_transaction::InvokeFunctionV0V1 {
                         max_fee: tx.max_fee,
-                        signature: tx.signature.clone(),
+                        signature: &tx.signature,
                         nonce: Some(tx.nonce),
                         sender_address: tx.sender_address,
                         entry_point_selector: None,
-                        calldata: tx.calldata.clone(),
+                        calldata: &tx.calldata,
                     },
                 ))
                 .await?;
@@ -291,18 +291,18 @@ pub(crate) async fn add_invoke_transaction_impl(
                 .sequencer
                 .add_invoke_transaction(add_transaction::InvokeFunction::V3(
                     add_transaction::InvokeFunctionV3 {
-                        signature: tx.signature.clone(),
+                        signature: &tx.signature,
                         nonce: tx.nonce,
                         nonce_data_availability_mode: tx.nonce_data_availability_mode.into(),
                         fee_data_availability_mode: tx.fee_data_availability_mode.into(),
                         resource_bounds: tx.resource_bounds.into(),
                         tip: tx.tip,
-                        paymaster_data: tx.paymaster_data.clone(),
+                        paymaster_data: &tx.paymaster_data,
                         sender_address: tx.sender_address,
-                        calldata: tx.calldata.clone(),
-                        account_deployment_data: tx.account_deployment_data.clone(),
-                        proof_facts: tx.proof_facts.clone(),
-                        proof: tx.proof.clone(),
+                        calldata: &tx.calldata,
+                        account_deployment_data: &tx.account_deployment_data,
+                        proof_facts: &tx.proof_facts,
+                        proof: &tx.proof,
                     },
                 ))
                 .await?;

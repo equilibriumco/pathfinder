@@ -97,11 +97,12 @@ pub async fn get_transaction_receipt(
 
         let db_tx = db.transaction().context("Creating database transaction")?;
 
-        // Check pending transactions.
-        let pending = context.pending_data.get(&db_tx, rpc_version)?;
+        // Pending is an optional first look; a finalized tx lives in the DB regardless.
+        let pending = context.pending_data.get_optional(&db_tx, rpc_version)?;
 
-        if let Some(finalized_tx_data) =
-            crate::pending::find_finalized_tx_data(&pending, input.transaction_hash)
+        if let Some(finalized_tx_data) = pending
+            .as_ref()
+            .and_then(|p| crate::pending::find_finalized_tx_data(p, input.transaction_hash))
         {
             return Ok(Output::Pending {
                 receipt: finalized_tx_data.receipt,
@@ -178,6 +179,22 @@ mod tests {
             version,
             "transactions/receipt_l1_accepted.json"
         );
+    }
+
+    #[tokio::test]
+    async fn finalized_tx_resolves_when_pending_unavailable() {
+        let cache = std::sync::Arc::new(pathfinder_pending_data::PendingDataCache::new());
+        cache.mark_unavailable("syncing");
+        let context = RpcContext::for_tests().with_pending_data_cache(cache);
+
+        let input = Input {
+            transaction_hash: transaction_hash_bytes!(b"txn 1"),
+        };
+
+        // A finalized tx lives in the DB, so an unavailable pending cache must not
+        // error.
+        let result = get_transaction_receipt(context, input, RpcVersion::V09).await;
+        assert!(result.is_ok());
     }
 
     #[rstest::rstest]
