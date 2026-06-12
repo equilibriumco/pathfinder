@@ -8912,6 +8912,7 @@ dependencies = [
  "fake",
  "flume",
  "hex",
+ "libc",
  "metrics",
  "paste",
  "pathfinder-casm-hashes",

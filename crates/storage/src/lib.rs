@@ -13,6 +13,7 @@ use connection::pruning::BlockchainHistoryMode;
 mod connection;
 mod error;
 pub mod fake;
+mod fd_limit;
 mod params;
 mod schema;
 pub use schema::revision_0073::reorg_regression_checks;
@@ -666,6 +667,21 @@ impl StorageBuilder {
     }
 
     pub(crate) fn open_rocksdb(path: &Path) -> anyhow::Result<RocksDBInner> {
+        // Raise the process FD soft limit so RocksDB's table cache can grow
+        // freely. `None` means we have no information (non-Unix, or the
+        // initial getrlimit failed); skip the threshold check in that case.
+        if let Some(soft) = crate::fd_limit::raise_to_hard() {
+            if soft < 8192 {
+                tracing::warn!(
+                    soft_limit = soft,
+                    "Process file-descriptor soft limit is below 8192; RocksDB may hit EMFILE \
+                     during large SST scans. Raise it via `ulimit -n <N>` or, under systemd, \
+                     `LimitNOFILE=<N>` in the service unit. On macOS, also check `sysctl \
+                     kern.maxfilesperproc` if `ulimit -n` cannot reach the desired value."
+                );
+            }
+        }
+
         let available_parallelism = std::thread::available_parallelism()
             .map(|e| (e.get() as i32 / 2).max(1))
             .unwrap_or(1);
@@ -682,7 +698,11 @@ impl StorageBuilder {
         options.set_bytes_per_sync(1024 * 1024_u64);
         options.set_wal_bytes_per_sync(512 * 1024_u64);
         options.set_max_log_file_size(10 * 1024 * 1024_usize);
-        options.set_max_open_files(50000);
+        // `-1` disables eviction so SST handles stay open for the process
+        // lifetime. This is RocksDB's documented best-performance setting,
+        // safe now that the FD soft limit was raised above. See
+        // https://github.com/facebook/rocksdb/wiki/Tuning-RocksDB-Options#general-options
+        options.set_max_open_files(-1);
         options.set_keep_log_file_num(3);
         options.set_log_level(rust_rocksdb::LogLevel::Warn);
 
