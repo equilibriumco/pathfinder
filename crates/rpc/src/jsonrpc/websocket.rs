@@ -30,6 +30,8 @@
 //! Closing subscription."}},"id":null}
 //! ```
 
+use std::time::Duration;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WebsocketHistory {
     Limited(u64),
@@ -40,13 +42,28 @@ pub enum WebsocketHistory {
 pub struct WebsocketContext {
     pub max_history: WebsocketHistory,
     pub max_subscriptions: usize,
+    pub send_timeout: Duration,
 }
 
 impl WebsocketContext {
-    pub fn new(max_history: WebsocketHistory, max_subscriptions: usize) -> Self {
+    pub fn new(
+        max_history: WebsocketHistory,
+        max_subscriptions: usize,
+        send_timeout: Duration,
+    ) -> Self {
         Self {
             max_history,
             max_subscriptions,
+            send_timeout,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn for_test(max_history: WebsocketHistory) -> Self {
+        Self {
+            max_history,
+            max_subscriptions: 1024,
+            send_timeout: Duration::from_secs_f64(0.1),
         }
     }
 }

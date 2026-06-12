@@ -1314,6 +1314,7 @@ mod tests {
 
     use dto::DeserializeForVersion;
     use serde_json::json;
+    use tokio::time::{timeout, Duration};
 
     use super::*;
 
@@ -1581,9 +1582,8 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let mut context = RpcContext::for_tests();
         if api.has_websocket() {
-            context = context.with_websockets(context::WebsocketContext::new(
+            context = context.with_websockets(context::WebsocketContext::for_test(
                 WebsocketHistory::Unlimited,
-                1024,
             ));
         }
         let (_jh, addr) = RpcServer::new(addr, context, RpcVersion::V07)
@@ -1681,7 +1681,7 @@ mod tests {
                 });
 
                 stream.send(Message::Text(request.to_string().into())).await.unwrap();
-                let res: Message = stream.next().await.unwrap().unwrap();
+                let res: Message = timeout(Duration::from_secs(1), stream.next()).await.unwrap().unwrap().unwrap();
                 let res: serde_json::Value = serde_json::from_str(&res.to_string()).unwrap();
 
                 if res["error"]["code"] == method_not_found {
