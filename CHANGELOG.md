@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Parallel Sierra to CASM compilation processes during RPC requests are now limited to the number of CPU cores available by default, configurable with `--rpc.compiler.concurrency-limit` CLI option.
+- Blocking writes to RPC WS connections now time out and are reported as errors. The timeout is configurable with `--rpc.websocket.send-timeout` CLI option.
 
 ### Fixed
 
