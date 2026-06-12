@@ -1507,6 +1507,14 @@ pub struct WebsocketConfig {
         env = "PATHFINDER_WEBSOCKET_MAX_SUBSCRIPTIONS"
     )]
     pub max_subscriptions: NonZeroUsize,
+    #[arg(
+        long = "rpc.websocket.send-timeout",
+        long_help = "Threshold for considering the websocket's output buffer full (and closing the connection).",
+        default_value = "0.1",
+        value_parser = parse_fractional_seconds,
+        env = "PATHFINDER_WEBSOCKET_SEND_TIMEOUT"
+    )]
+    pub send_timeout: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

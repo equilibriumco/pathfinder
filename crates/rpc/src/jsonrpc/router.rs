@@ -197,13 +197,16 @@ pub async fn rpc_handler(
 ) -> impl axum::response::IntoResponse {
     match ws {
         Ok(ws) => {
-            if state.context.websocket.is_none() {
-                return StatusCode::FORBIDDEN.into_response();
-            }
+            let send_timeout = match state.context.websocket {
+                Some(ref ws_cfg) => ws_cfg.send_timeout,
+                None => {
+                    return StatusCode::FORBIDDEN.into_response();
+                }
+            };
 
             ws.max_message_size(state.context.config.request_max_size.get())
-                .on_upgrade(|ws| async move {
-                    let (ws_tx, ws_rx) = split_ws(ws, state.version);
+                .on_upgrade(async move |ws| {
+                    let (ws_tx, ws_rx) = split_ws(ws, state.version, send_timeout);
                     handle_json_rpc_socket(state, ws_tx, ws_rx);
                 })
         }
@@ -393,6 +396,7 @@ mod tests {
     use futures::SinkExt;
     use serde::{Deserialize, Serialize};
     use serde_json::{json, Value};
+    use tokio::time::{timeout, Duration};
 
     use super::*;
     use crate::jsonrpc::response::RpcResult;
@@ -439,7 +443,11 @@ mod tests {
         .await
         .unwrap();
         let tokio_tungstenite::tungstenite::Message::Text(response) =
-            ws.next().await.unwrap().unwrap()
+            timeout(Duration::from_secs(1), ws.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
         else {
             panic!("Expected a text response");
         };
@@ -512,7 +520,7 @@ mod tests {
                 }
             }
 
-            let ws_ctx = WebsocketContext::new(WebsocketHistory::Unlimited, 1024);
+            let ws_ctx = WebsocketContext::for_test(WebsocketHistory::Unlimited);
             RpcRouter::builder(RpcVersion::default())
                 .register("subtract", subtract)
                 .register("sum", sum)
@@ -671,7 +679,11 @@ mod tests {
             .await
             .unwrap();
             let tokio_tungstenite::tungstenite::Message::Text(response) =
-                ws.next().await.unwrap().unwrap()
+                timeout(Duration::from_secs(1), ws.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
             else {
                 panic!("Expected a text response");
             };
@@ -752,7 +764,7 @@ mod tests {
                 "Success"
             }
 
-            let ws_ctx = WebsocketContext::new(WebsocketHistory::Unlimited, 1024);
+            let ws_ctx = WebsocketContext::for_test(WebsocketHistory::Unlimited);
             RpcRouter::builder(Default::default())
                 .register("panic", always_panic)
                 .register("success", always_success)

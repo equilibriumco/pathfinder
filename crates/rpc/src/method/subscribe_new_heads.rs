@@ -544,7 +544,7 @@ mod tests {
             .with_storage(storage)
             .with_notifications(notifications)
             .with_pending_data_cache(pending_data_cache.clone())
-            .with_websockets(WebsocketContext::new(WebsocketHistory::Unlimited, 1024));
+            .with_websockets(WebsocketContext::for_test(WebsocketHistory::Unlimited));
         v08::register_routes().build(ctx)
     }
 

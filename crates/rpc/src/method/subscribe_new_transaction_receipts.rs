@@ -1008,7 +1008,7 @@ mod tests {
             .with_storage(storage)
             .with_notifications(notifications.clone())
             .with_pending_data_cache(pending_data_cache.clone())
-            .with_websockets(WebsocketContext::new(WebsocketHistory::Unlimited, 1024));
+            .with_websockets(WebsocketContext::for_test(WebsocketHistory::Unlimited));
         let router = v09::register_routes().build(ctx);
         let (sender_tx, sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);

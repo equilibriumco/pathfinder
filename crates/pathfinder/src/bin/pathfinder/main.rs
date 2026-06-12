@@ -293,6 +293,7 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
         context.with_websockets(WebsocketContext::new(
             config.websocket.max_history.into(),
             config.websocket.max_subscriptions.get(),
+            config.websocket.send_timeout,
         ))
     } else {
         context
