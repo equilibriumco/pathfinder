@@ -1233,6 +1233,114 @@ mod tests {
         assert!(err.to_string().contains("gateway error"), "got: {err}");
     }
 
+    /// At the "same identifier, more txs" moment, a `Full` response
+    /// replaces accumulated wholesale with the new `(n+1)`-tx block —
+    /// reaching the same end state a spec-required `Delta { new_transactions:
+    /// [tx_n+1] }` would reach by appending. Either response must produce
+    /// an emission carrying `n+1` txs.
+    #[tokio::test]
+    async fn full_at_same_identifier_with_more_txs_still_advances() {
+        const IDENTIFIER: &str = "shared-id";
+        const HEIGHT: u64 = 12;
+
+        // Two block variants at the same height: one with z=1 tx and
+        // one with z+n=2 txs. Tick 1 returns the z view, tick 2 returns
+        // the z+n view as a `Full` (the buggy shape).
+        let mut block_z = PRE_CONFIRMED_BLOCK.clone();
+        block_z.transactions.truncate(1);
+        block_z.transaction_receipts.truncate(1);
+        block_z.transaction_state_diffs.truncate(1);
+        let block_z_plus_n = PRE_CONFIRMED_BLOCK.clone();
+
+        // Scripted gateway. Pre-latest is steady throughout.
+        // Pre-confirmed:
+        //   tick 1: request shape is cold (no identifier, known=0).
+        //           Responds `Full` at `IDENTIFIER`, 1 tx.
+        //   tick 2: request shape carries `IDENTIFIER` and known=1, which
+        //           would normally yield a `Delta`. The test responds
+        //           with `Full` (2 txs) to model the buggy shape.
+        //   tick 3+: quiet (`Unchanged`).
+        let mut sequencer = MockGatewayApi::new();
+        sequencer
+            .expect_pending_block()
+            .returning(|| Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
+        static COUNT: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
+        let b_z = block_z.clone();
+        let b_z_plus_n = block_z_plus_n.clone();
+        sequencer
+            .expect_preconfirmed_block()
+            .returning(move |_, identifier, known_tx_count| {
+                let mut count = COUNT.lock().unwrap();
+                *count += 1;
+                match *count {
+                    1 => {
+                        assert!(identifier.is_none());
+                        assert_eq!(known_tx_count, 0);
+                        Ok(PreConfirmedPollResponse::Full {
+                            identifier: IDENTIFIER.into(),
+                            block_number: Some(BlockNumber::new_or_panic(HEIGHT)),
+                            block: b_z.clone(),
+                        })
+                    }
+                    2 => {
+                        assert_eq!(identifier.as_deref(), Some(IDENTIFIER));
+                        assert_eq!(known_tx_count, 1);
+                        Ok(PreConfirmedPollResponse::Full {
+                            identifier: IDENTIFIER.into(),
+                            block_number: Some(BlockNumber::new_or_panic(HEIGHT)),
+                            block: b_z_plus_n.clone(),
+                        })
+                    }
+                    _ => Ok(PreConfirmedPollResponse::Unchanged),
+                }
+            });
+
+        // Spawn the polling loop with a zero poll interval so ticks land
+        // back-to-back.
+        let latest_hash = PRE_LATEST_BLOCK.parent_hash;
+        let latest_block_number = BlockNumber::new_or_panic(10);
+        let (_, rx_latest) = watch::channel((latest_block_number, latest_hash));
+        let (_, rx_current) = watch::channel((latest_block_number, latest_hash));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let sequencer = Arc::new(sequencer);
+        let _jh = tokio::spawn(async move {
+            super::poll_pre_confirmed(
+                tx,
+                sequencer,
+                std::time::Duration::ZERO,
+                Arc::new(PendingDataCache::new()),
+                rx_latest,
+                rx_current,
+            )
+            .await
+        });
+
+        // Cold start: one tx, identifier just established.
+        let first = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
+            .await
+            .expect("first event should be emitted")
+            .unwrap();
+        assert_matches!(
+            first,
+            SyncEvent::PreConfirmed { number, block, .. }
+                if number == BlockNumber::new_or_panic(HEIGHT)
+                    && block.transactions.len() == 1
+        );
+
+        // Buggy `Full` at the same identifier: accumulated
+        // state must still advance to 2 txs.
+        let second = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
+            .await
+            .expect("second event should be emitted")
+            .unwrap();
+        assert_matches!(
+            second,
+            SyncEvent::PreConfirmed { number, block, .. }
+                if number == BlockNumber::new_or_panic(HEIGHT)
+                    && block.transactions.len() == 2
+        );
+    }
+
     /// When the chain advances past the pre-confirmed block we're tracking,
     /// the loop completes the previous block with one final query (picking up
     /// any transactions that landed just before it was superseded) before
