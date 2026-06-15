@@ -14,9 +14,6 @@ pub mod pending;
 mod test_setup;
 pub mod tracker;
 pub mod types;
-pub mod v06;
-pub mod v07;
-pub mod v08;
 pub mod v09;
 pub mod v10;
 
@@ -47,10 +44,7 @@ const DEFAULT_MAX_CONNECTIONS: usize = 1024;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, PartialOrd)]
 pub enum RpcVersion {
-    V06,
     #[default]
-    V07,
-    V08,
     V09,
     V10,
     PathfinderV01,
@@ -59,9 +53,6 @@ pub enum RpcVersion {
 impl RpcVersion {
     fn to_str(self) -> &'static str {
         match self {
-            RpcVersion::V06 => "v0.6",
-            RpcVersion::V07 => "v0.7",
-            RpcVersion::V08 => "v0.8",
             RpcVersion::V09 => "v0.9",
             RpcVersion::V10 => "v0.10",
             RpcVersion::PathfinderV01 => "v0.1",
@@ -170,18 +161,12 @@ impl RpcServer {
             }
         }
 
-        let v06_routes = v06::register_routes().build(self.context.clone());
-        let v07_routes = v07::register_routes().build(self.context.clone());
-        let v08_routes = v08::register_routes().build(self.context.clone());
         let v09_routes = v09::register_routes().build(self.context.clone());
         let v10_routes = v10::register_routes().build(self.context.clone());
         let pathfinder_routes = pathfinder::register_routes().build(self.context.clone());
         let unstable_routes = pathfinder::unstable::register_routes().build(self.context.clone());
 
         let default_router = match self.default_version {
-            RpcVersion::V06 => v06_routes.clone(),
-            RpcVersion::V07 => v07_routes.clone(),
-            RpcVersion::V08 => v08_routes.clone(),
             RpcVersion::V09 => v09_routes.clone(),
             RpcVersion::V10 => v10_routes.clone(),
             RpcVersion::PathfinderV01 => {
@@ -194,12 +179,6 @@ impl RpcServer {
             // used by monitoring bots to check service health.
             .route("/", get(empty_body).post(rpc_handler))
             .with_state(default_router.clone())
-            .route("/rpc/v0_6", post(rpc_handler))
-            .with_state(v06_routes.clone())
-            .route("/rpc/v0_7", post(rpc_handler))
-            .with_state(v07_routes.clone())
-            .route("/rpc/v0_8", post(rpc_handler).get(rpc_handler))
-            .with_state(v08_routes.clone())
             .route("/rpc/v0_9", post(rpc_handler).get(rpc_handler))
             .with_state(v09_routes.clone())
             .route("/rpc/v0_10", post(rpc_handler).get(rpc_handler))
@@ -214,12 +193,6 @@ impl RpcServer {
             router
                 .route("/ws", get(rpc_handler))
                 .with_state(default_router)
-                .route("/ws/rpc/v0_6", get(rpc_handler))
-                .with_state(v06_routes)
-                .route("/ws/rpc/v0_7", get(rpc_handler))
-                .with_state(v07_routes)
-                .route("/ws/rpc/v0_8", post(rpc_handler).get(rpc_handler))
-                .with_state(v08_routes)
                 .route("/ws/rpc/v0_9", post(rpc_handler).get(rpc_handler))
                 .with_state(v09_routes)
                 .route("/ws/rpc/v0_10", post(rpc_handler).get(rpc_handler))
@@ -309,15 +282,6 @@ pub mod test_utils {
     macro_rules! fixture {
         ($version:expr, $file_name:literal) => {{
             match $version {
-                $crate::RpcVersion::V06 => {
-                    include_str!(concat!("../../fixtures/0.6.0/", $file_name))
-                }
-                $crate::RpcVersion::V07 => {
-                    include_str!(concat!("../../fixtures/0.7.0/", $file_name))
-                }
-                $crate::RpcVersion::V08 => {
-                    include_str!(concat!("../../fixtures/0.8.0/", $file_name))
-                }
                 $crate::RpcVersion::V09 => {
                     include_str!(concat!("../../fixtures/0.9.0/", $file_name))
                 }
@@ -1336,7 +1300,7 @@ mod tests {
 
         for (line, input, expected) in examples {
             let parsed =
-                Syncing::deserialize(crate::dto::Value::from_str(input, RpcVersion::V07).unwrap())
+                Syncing::deserialize(crate::dto::Value::from_str(input, RpcVersion::V09).unwrap())
                     .unwrap();
             assert_eq!(parsed, expected, "example from line {line}");
         }
@@ -1348,7 +1312,7 @@ mod tests {
         // of health check. Test that we return success for such queries.
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let context = RpcContext::for_tests();
-        let (_jh, addr) = RpcServer::new(addr, context, RpcVersion::V07)
+        let (_jh, addr) = RpcServer::new(addr, context, RpcVersion::V09)
             .spawn(&PathBuf::default())
             .await
             .unwrap();
@@ -1397,12 +1361,27 @@ mod tests {
 
     #[rustfmt::skip]
     #[rstest::rstest]
-    #[case::root_api("/", "v07/starknet_api_openrpc.json",       &[], Api::HttpOnly)]
-    #[case::root_api_websocket("/ws", "v07/starknet_api_openrpc.json",       &[], Api::WebsocketOnly)]
-    #[case::root_trace("/", "v07/starknet_trace_api_openrpc.json", &[], Api::HttpOnly)]
-    #[case::root_trace_websocket("/ws", "v07/starknet_trace_api_openrpc.json", &[], Api::WebsocketOnly)]
-    #[case::root_write("/", "v07/starknet_write_api.json",         &[], Api::HttpOnly)]
-    #[case::root_write_websocket("/ws", "v07/starknet_write_api.json",         &[], Api::WebsocketOnly)]
+    #[case::root_api("/", "v09/starknet_api_openrpc.json",       &[], Api::HttpOnly)]
+    #[case::root_api_websocket("/ws", "v09/starknet_api_openrpc.json",       &[], Api::WebsocketOnly)]
+    #[case::root_executables("/", "v09/starknet_executables.json", &[], Api::HttpOnly)]
+    #[case::root_executables_websocket("/ws", "v09/starknet_executables.json", &[], Api::WebsocketOnly)]
+    #[case::root_trace("/", "v09/starknet_trace_api_openrpc.json", &[], Api::HttpOnly)]
+    #[case::root_trace_websocket("/ws", "v09/starknet_trace_api_openrpc.json", &[], Api::WebsocketOnly)]
+    #[case::root_write("/", "v09/starknet_write_api.json",         &[], Api::HttpOnly)]
+    #[case::root_write_websocket("/ws", "v09/starknet_write_api.json",         &[], Api::WebsocketOnly)]
+    #[case::root_websocket(
+        "/ws",
+        "v09/starknet_ws_api.json",
+        // "starknet_subscription*" methods are in fact notifications
+        &[
+            "starknet_subscriptionNewHeads",
+            "starknet_subscriptionTransactionStatus",
+            "starknet_subscriptionEvents",
+            "starknet_subscriptionNewTransactionReceipts",
+            "starknet_subscriptionNewTransaction",
+            "starknet_subscriptionReorg"
+        ],
+        Api::WebsocketOnly)]
     #[case::root_pathfinder("/", "pathfinder_rpc_api.json", &["pathfinder_version"], Api::HttpOnly)]
     #[case::root_pathfinder_websocket("/ws", "pathfinder_rpc_api.json", &["pathfinder_version"], Api::WebsocketOnly)]
 
@@ -1479,68 +1458,6 @@ mod tests {
         ],
         Api::WebsocketOnly)]
     #[case::v0_9_pathfinder("/rpc/v0_9", "pathfinder_rpc_api.json", &["pathfinder_version"], Api::Both)]
-
-    #[case::v0_8_api("/rpc/v0_8", "v08/starknet_api_openrpc.json", &[], Api::Both)]
-    #[case::v0_8_executables("/rpc/v0_8", "v08/starknet_executables.json", &[], Api::Both)]
-    #[case::v0_8_trace("/rpc/v0_8", "v08/starknet_trace_api_openrpc.json", &[], Api::Both)]
-    #[case::v0_8_write("/rpc/v0_8", "v08/starknet_write_api.json", &[], Api::Both)]
-    #[case::v0_8_websocket(
-        "/rpc/v0_8",
-        "v08/starknet_ws_api.json",
-        // "starknet_subscription*" methods are in fact notifications
-        &[
-            "starknet_subscriptionNewHeads",
-            "starknet_subscriptionPendingTransactions",
-            "starknet_subscriptionTransactionStatus",
-            "starknet_subscriptionEvents",
-            "starknet_subscriptionReorg"
-        ],
-        Api::WebsocketOnly)]
-
-    #[case::v0_8_api_alternative_path("/ws/rpc/v0_8", "v08/starknet_api_openrpc.json", &[], Api::Both)]
-    #[case::v0_8_executables_alternative_path("/ws/rpc/v0_8", "v08/starknet_executables.json", &[], Api::Both)]
-    #[case::v0_8_trace_alternative_path("/ws/rpc/v0_8", "v08/starknet_trace_api_openrpc.json", &[], Api::Both)]
-    #[case::v0_8_write_alternative_path("/ws/rpc/v0_8", "v08/starknet_write_api.json", &[], Api::Both)]
-    #[case::v0_8_websocket_alternative_path(
-        "/ws/rpc/v0_8",
-        "v08/starknet_ws_api.json",
-        // "starknet_subscription*" methods are in fact notifications
-        &[
-            "starknet_subscriptionNewHeads",
-            "starknet_subscriptionPendingTransactions",
-            "starknet_subscriptionTransactionStatus",
-            "starknet_subscriptionEvents",
-            "starknet_subscriptionReorg"
-        ],
-        Api::WebsocketOnly)]
-    #[case::v0_8_pathfinder("/rpc/v0_8", "pathfinder_rpc_api.json", &["pathfinder_version"], Api::Both)]
-
-    #[case::v0_7_api("/rpc/v0_7", "v07/starknet_api_openrpc.json", &[], Api::HttpOnly)]
-    #[case::v0_7_api_websocket("/ws/rpc/v0_7", "v07/starknet_api_openrpc.json", &[], Api::WebsocketOnly)]
-    #[case::v0_7_trace("/rpc/v0_7", "v07/starknet_trace_api_openrpc.json", &[], Api::HttpOnly)]
-    #[case::v0_7_trace_websocket("/ws/rpc/v0_7", "v07/starknet_trace_api_openrpc.json", &[], Api::WebsocketOnly)]
-    #[case::v0_7_write("/rpc/v0_7", "v07/starknet_write_api.json", &[], Api::HttpOnly)]
-    #[case::v0_7_write_websocket("/ws/rpc/v0_7", "v07/starknet_write_api.json", &[], Api::WebsocketOnly)]
-    #[case::v0_7_pathfinder("/rpc/v0_7", "pathfinder_rpc_api.json", &["pathfinder_version"], Api::HttpOnly)]
-    #[case::v0_7_pathfinder_websocket("/ws/rpc/v0_7", "pathfinder_rpc_api.json", &["pathfinder_version"], Api::WebsocketOnly)]
-
-    #[case::v0_6_api(
-        "/rpc/v0_6",
-        "v06/starknet_api_openrpc.json",
-        &[],
-        Api::HttpOnly)]
-    #[case::v0_6_api_websocket("/ws/rpc/v0_6", "v06/starknet_api_openrpc.json", &[], Api::WebsocketOnly)]
-    #[case::v0_6_trace(
-        "/rpc/v0_6",
-        "v06/starknet_trace_api_openrpc.json",
-        &[],
-        Api::HttpOnly)]
-    #[case::v0_6_trace_websocket("/ws/rpc/v0_6", "v06/starknet_trace_api_openrpc.json", &[], Api::WebsocketOnly)]
-    #[case::v0_6_write("/rpc/v0_6", "v06/starknet_write_api.json", &[], Api::HttpOnly)]
-    #[case::v0_6_write_websocket("/ws/rpc/v0_6", "v06/starknet_write_api.json", &[], Api::WebsocketOnly)]
-    #[case::v0_6_pathfinder("/rpc/v0_6", "pathfinder_rpc_api.json", &["pathfinder_version"], Api::HttpOnly)]
-    #[case::v0_6_pathfinder_websocket("/ws/rpc/v0_6", "pathfinder_rpc_api.json", &["pathfinder_version"], Api::WebsocketOnly)]
-
     #[case::pathfinder("/rpc/pathfinder/v0.1", "pathfinder_rpc_api.json", &[], Api::HttpOnly)]
     #[case::pathfinder("/ws/rpc/pathfinder/v0_1", "pathfinder_rpc_api.json", &[], Api::WebsocketOnly)]
 
@@ -1585,7 +1502,7 @@ mod tests {
                 WebsocketHistory::Unlimited,
             ));
         }
-        let (_jh, addr) = RpcServer::new(addr, context, RpcVersion::V07)
+        let (_jh, addr) = RpcServer::new(addr, context, RpcVersion::V09)
             .spawn(&PathBuf::default())
             .await
             .unwrap();
