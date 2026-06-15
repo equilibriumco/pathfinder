@@ -174,7 +174,7 @@ Examples:
     #[arg(
         long = "rpc.root-version",
         long_help = "Version of the JSON-RPC API to serve on the / (root) path",
-        default_value = "v08",
+        default_value = "v09",
         env = "PATHFINDER_RPC_ROOT_VERSION"
     )]
     rpc_root_version: RootRpcVersion,
@@ -666,9 +666,6 @@ The default is suitable for all uses except testing.",
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq)]
 pub enum RootRpcVersion {
-    V06,
-    V07,
-    V08,
     V09,
     V10,
 }
