@@ -7,14 +7,10 @@ sidebar_position: 2
 The WebSocket interface serves the same API versions and extension endpoints as HTTP, but in a stateful, two-way communication channel. This can be especially useful for real-time notifications, subscription-based events, or building interactive dashboards.
 
 ## Supported Versions
-- **JSON-RPC v0.6.0**
-  Accessible at `/ws/rpc/v0_6`.
-- **JSON-RPC v0.7.1**
-  Accessible at `/ws/rpc/v0_7`.
-- **JSON-RPC v0.8.1**
-  Accessible at `/rpc/v0_8` and `/ws/rpc/v0_8` (deprecated).
 - **JSON-RPC v0.9.0**
-  Accessible at `/rpc/v0_9` and `/ws/rpc/v0_9` (deprecated).
+  Accessible at `/rpc/v0_9` and `/ws/rpc/v0_9`.
+- **JSON-RPC v0.10**
+  Accessible at `/rpc/v0_10` and `/ws/rpc/v0_10`.
 - **Pathfinder Extension**
   Exposed via `/ws/rpc/pathfinder/v0_1`
 
@@ -24,7 +20,7 @@ The WebSocket interface serves the same API versions and extension endpoints as 
 A typical WebSocket connection can be opened using libraries like `ws`, `websockets`, or the native browser WebSocket API. The RPC payload structure remains the same (JSON-RPC 2.0), but it is sent over a persistent socket connection:
 
 ```js title="WebSocket Connection Example in Node.js"
-const ws = new WebSocket("ws://127.0.0.1:9545/ws/rpc/v0_8");
+const ws = new WebSocket("ws://127.0.0.1:9545/ws/rpc/v0_9");
 
 ws.onopen = () => {
   const message = JSON.stringify({
