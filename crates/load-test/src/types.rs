@@ -43,7 +43,12 @@ pub struct ContractClass {
 
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq)]
 pub struct FeeEstimate {
-    pub gas_consumed: String,
-    pub gas_price: String,
+    pub l1_gas_consumed: String,
+    pub l1_gas_price: String,
+    pub l1_data_gas_consumed: String,
+    pub l1_data_gas_price: String,
+    pub l2_gas_consumed: String,
+    pub l2_gas_price: String,
     pub overall_fee: String,
+    pub unit: String,
 }
