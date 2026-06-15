@@ -237,7 +237,7 @@ pub async fn call(
                 "calldata": call_data,
                 "entry_point_selector": entry_point_selector,
             },
-            "block_id": "pending",
+            "block_id": "pre_confirmed",
         }),
     )
     .await
@@ -245,12 +245,11 @@ pub async fn call(
 
 pub async fn estimate_fee_for_invoke(
     user: &mut GooseUser,
-    contract_address: Felt,
+    sender_address: Felt,
     call_data: &[Felt],
-    entry_point_selector: Felt,
+    nonce: Felt,
     max_fee: Felt,
-    at_block: Felt,
-) -> MethodResult<FeeEstimate> {
+) -> MethodResult<Vec<FeeEstimate>> {
     post_jsonrpc_request(
         user,
         "starknet_estimateFee",
@@ -260,11 +259,17 @@ pub async fn estimate_fee_for_invoke(
                 "version": "0x1",
                 "max_fee": max_fee,
                 "signature": [],
-                "contract_address": contract_address,
+                "nonce": nonce,
+                "sender_address": sender_address,
                 "calldata": call_data,
-                "entry_point_selector": entry_point_selector,
             }],
-            "block_id": {"block_hash": at_block}
+            // Skip validation so the historical nonce and empty signature don't fail the validate/nonce
+            // checks - we only want to exercise the execution path under load.
+            "simulation_flags": ["SKIP_VALIDATE"],
+            // Estimate against the state just before the transaction was included in a block
+            // (it was included in block 500000), so the transfer's balance check matches
+            // the historical state instead of drifting with the tip of the chain.
+            "block_id": {"block_number": 499999}
         }),
     )
     .await
@@ -275,7 +280,7 @@ pub async fn get_nonce(user: &mut GooseUser, contract_address: Felt) -> MethodRe
         user,
         "starknet_getNonce",
         json!({
-            "block_id": "pending",
+            "block_id": "pre_confirmed",
             "contract_address": contract_address
         }),
     )
@@ -289,7 +294,7 @@ async fn post_jsonrpc_request<T: DeserializeOwned>(
 ) -> MethodResult<T> {
     let request = jsonrpc_request(method, params);
     let response = user
-        .post_json("/rpc/v0_8", &request)
+        .post_json("/rpc/v0_9", &request)
         .await?
         .response
         .map_err(|e| Box::new(e.into()))?;
