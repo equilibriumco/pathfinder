@@ -851,12 +851,22 @@ impl<T: crate::dto::SerializeForVersion> SubscriptionSender<T> {
             },
         }
         .serialize(crate::dto::Serializer::new(self.version))
-        .unwrap();
+        .map_err(|e| {
+            tracing::warn!(
+                T = std::any::type_name::<T>(),
+                ?e,
+                "Cannot serialize notification"
+            );
+            mpsc::error::SendError(())
+        })?;
         let data = serde_json::to_string(&notification).unwrap();
         self.tx
             .send(Ok(Message::Text(data.into())))
             .await
-            .map_err(|_| mpsc::error::SendError(()))
+            .map_err(|e| {
+                tracing::trace!(?e, "Cannot send");
+                mpsc::error::SendError(())
+            })
     }
 
     pub async fn send_err(&self, err: RpcError) -> Result<(), mpsc::error::SendError<()>> {
@@ -873,12 +883,18 @@ impl<T: crate::dto::SerializeForVersion> SubscriptionSender<T> {
             },
         }
         .serialize(crate::dto::Serializer::new(self.version))
-        .unwrap();
+        .map_err(|e| {
+            tracing::warn!(?e, "Cannot serialize error notification");
+            mpsc::error::SendError(())
+        })?;
         let data = serde_json::to_string(&notification).unwrap();
         self.tx
             .send(Ok(Message::Text(data.into())))
             .await
-            .map_err(|_| mpsc::error::SendError(()))
+            .map_err(|e| {
+                tracing::trace!(?e, "Cannot send error");
+                mpsc::error::SendError(())
+            })
     }
 }
 
