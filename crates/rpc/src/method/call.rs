@@ -217,7 +217,7 @@ mod tests {
                 { "block_hash": "0xbbbbbbbb" }
             ]);
 
-            let positional = crate::dto::Value::new(positional_json, crate::RpcVersion::V08);
+            let positional = crate::dto::Value::new(positional_json, crate::RpcVersion::V09);
 
             let input = Input::deserialize(positional).unwrap();
             let expected = Input {
@@ -238,7 +238,7 @@ mod tests {
                 "block_id": { "block_hash": "0xbbbbbbbb" }
             });
 
-            let named = crate::dto::Value::new(named_json, crate::RpcVersion::V08);
+            let named = crate::dto::Value::new(named_json, crate::RpcVersion::V09);
 
             let input = Input::deserialize(named).unwrap();
             let expected = Input {
@@ -482,13 +482,6 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(result, Output(vec![CallResultValue(storage_value.0)]));
-
-            // We expect that JSON-RPC versions older than 0.9 do _not_ use the
-            // pre-confirmed block.
-            let error = call(context.clone(), input.clone(), RpcVersion::V08)
-                .await
-                .unwrap_err();
-            assert_matches!(error, CallError::ContractNotFound);
         }
 
         fn pre_confirmed_data_with_update(

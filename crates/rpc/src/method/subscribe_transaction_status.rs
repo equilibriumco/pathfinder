@@ -512,7 +512,7 @@ mod tests {
     use crate::dto::{SerializeForVersion, Serializer};
     use crate::jsonrpc::websocket::WebsocketHistory;
     use crate::jsonrpc::{handle_json_rpc_socket, RpcResponse, RpcRouter};
-    use crate::{v08, PendingData, Reorg, RpcVersion, SubscriptionId};
+    use crate::{v09, PendingData, Reorg, RpcVersion, SubscriptionId};
 
     const TARGET_TX_HASH: TransactionHash = TransactionHash(Felt::from_u64(1));
 
@@ -534,7 +534,7 @@ mod tests {
                                     "execution_status": "SUCCEEDED",
                                 }
                             },
-                            "subscription_id": subscription_id.serialize(Serializer::new(RpcVersion::V08)).unwrap(),
+                            "subscription_id": subscription_id.serialize(Serializer::new(RpcVersion::V09)).unwrap(),
                         }
                     })
                 },
@@ -624,7 +624,7 @@ mod tests {
                             "execution_status": "SUCCEEDED",
                         }
                     },
-                    "subscription_id": subscription_id.serialize(Serializer::new(RpcVersion::V08)).unwrap(),
+                    "subscription_id": subscription_id.serialize(Serializer::new(RpcVersion::V09)).unwrap(),
                 }
             })
         );
@@ -654,7 +654,7 @@ mod tests {
                                 "failure_reason": "tx revert"
                             }
                         },
-                        "subscription_id": subscription_id.serialize(Serializer::new(RpcVersion::V08)).unwrap(),
+                        "subscription_id": subscription_id.serialize(Serializer::new(RpcVersion::V09)).unwrap(),
                     }
                 })
             },
@@ -683,7 +683,7 @@ mod tests {
                                 "execution_status": "SUCCEEDED"
                             }
                         },
-                        "subscription_id": subscription_id.serialize(Serializer::new(RpcVersion::V08)).unwrap(),
+                        "subscription_id": subscription_id.serialize(Serializer::new(RpcVersion::V09)).unwrap(),
                     }
                 })
             }
@@ -715,7 +715,7 @@ mod tests {
                                 "failure_reason": "tx revert"
                             }
                         },
-                        "subscription_id": subscription_id.serialize(Serializer::new(RpcVersion::V08)).unwrap(),
+                        "subscription_id": subscription_id.serialize(Serializer::new(RpcVersion::V09)).unwrap(),
                     }
                 })
             },
@@ -1604,7 +1604,7 @@ mod tests {
             _ => panic!("Expected text message"),
         };
 
-        let subscription_id = crate::dto::Value::new(subscription_id, RpcVersion::V08);
+        let subscription_id = crate::dto::Value::new(subscription_id, RpcVersion::V09);
         let subscription_id: SubscriptionId = subscription_id.deserialize().unwrap();
         let expected_msg = expected(subscription_id);
         let status = sender_rx.recv().await.unwrap().unwrap();
@@ -1636,6 +1636,6 @@ mod tests {
             .with_storage(storage)
             .with_pending_data_cache(pending_data_cache.clone())
             .with_websockets(WebsocketContext::for_test(WebsocketHistory::Unlimited));
-        (v08::register_routes().build(ctx), pending_data_cache)
+        (v09::register_routes().build(ctx), pending_data_cache)
     }
 }

@@ -566,7 +566,7 @@ mod tests {
                     "contract_class": CONTRACT_CLASS.clone(),
                     "sender_address": "0x1"
                 }]);
-                let input = Input::deserialize(crate::dto::Value::new(positional, RpcVersion::V07))
+                let input = Input::deserialize(crate::dto::Value::new(positional, RpcVersion::V09))
                     .unwrap();
                 let expected = Input {
                     declare_transaction: test_declare_txn(),
@@ -590,7 +590,7 @@ mod tests {
                     "token": "token"
                 });
                 let input =
-                    Input::deserialize(crate::dto::Value::new(named, RpcVersion::V07)).unwrap();
+                    Input::deserialize(crate::dto::Value::new(named, RpcVersion::V09)).unwrap();
                 let expected = Input {
                     declare_transaction: test_declare_txn(),
                     token: Some("token".to_owned()),
@@ -617,7 +617,7 @@ mod tests {
                 let error = AddDeclareTransactionError::from(starknet_error);
                 let error = crate::error::ApplicationError::from(error);
                 let error = crate::jsonrpc::RpcError::from(error);
-                let error = error.serialize(Serializer::new(RpcVersion::V07)).unwrap();
+                let error = error.serialize(Serializer::new(RpcVersion::V09)).unwrap();
 
                 let expected = json!({
                     "code": 63,
@@ -664,7 +664,7 @@ mod tests {
                     "compiled_class_hash": "0x1"
                 }]);
 
-                let input = Input::deserialize(crate::dto::Value::new(positional, RpcVersion::V07))
+                let input = Input::deserialize(crate::dto::Value::new(positional, RpcVersion::V09))
                     .unwrap();
                 let expected = Input {
                     declare_transaction: test_declare_txn(),
@@ -690,7 +690,7 @@ mod tests {
                 });
 
                 let input =
-                    Input::deserialize(crate::dto::Value::new(named, RpcVersion::V07)).unwrap();
+                    Input::deserialize(crate::dto::Value::new(named, RpcVersion::V09)).unwrap();
                 let expected = Input {
                     declare_transaction: test_declare_txn(),
                     token: Some("token".to_owned()),

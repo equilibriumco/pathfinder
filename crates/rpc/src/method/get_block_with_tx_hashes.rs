@@ -28,9 +28,6 @@ impl crate::dto::DeserializeForVersion for Input {
 pub enum Output {
     Pending {
         block: Arc<PendingBlocks>,
-        // for backward compatibility with pre 0.9 versions we need to
-        // mimic the structure of the "pending" block, which included parent block hash
-        parent_hash: Option<pathfinder_common::BlockHash>,
         transactions: Vec<TransactionHash>,
     },
     Full {
@@ -68,23 +65,8 @@ pub async fn get_block_with_tx_hashes(
                     .map(|t| t.hash)
                     .collect();
 
-                let parent_hash = (rpc_version < RpcVersion::V09)
-                    .then(|| {
-                        // versions before 0.9 don't have access to pre-confirmed data
-                        // so we never need to worry about parent hash coming from pre-latest
-                        Ok::<_, anyhow::Error>(
-                            transaction
-                                .block_header(pathfinder_common::BlockId::Latest)
-                                .context("Querying latest block header")?
-                                .unwrap_or_default()
-                                .hash,
-                        )
-                    })
-                    .transpose()?;
-
                 return Ok(Output::Pending {
                     block: pending.pending_block(),
-                    parent_hash,
                     transactions,
                 });
             }
@@ -123,11 +105,10 @@ impl crate::dto::SerializeForVersion for Output {
         match self {
             Output::Pending {
                 block,
-                parent_hash,
                 transactions,
             } => {
                 let mut serializer = serializer.serialize_struct()?;
-                serializer.flatten(&(parent_hash, &block.pre_confirmed))?;
+                serializer.flatten(&block.pre_confirmed)?;
                 serializer.serialize_iter(
                     "transactions",
                     transactions.len(),
@@ -190,9 +171,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -216,9 +194,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]

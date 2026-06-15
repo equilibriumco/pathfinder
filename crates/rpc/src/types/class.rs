@@ -849,7 +849,7 @@ mod tests {
 
             let contract_class = CairoContractClass::deserialize(crate::dto::Value::new(
                 definition,
-                crate::RpcVersion::V07,
+                crate::RpcVersion::V09,
             ))
             .unwrap();
 

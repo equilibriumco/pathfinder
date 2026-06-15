@@ -12,14 +12,12 @@ use crate::{Reorg, RpcVersion};
 
 impl crate::dto::DeserializeForVersion for crate::types::request::BlockId {
     fn deserialize(value: super::Value) -> Result<Self, serde_json::Error> {
-        let rpc_version = value.version;
         if value.is_string() {
             let value: String = value.deserialize()?;
             match value.as_str() {
                 "latest" => Ok(Self::Latest),
                 "l1_accepted" => Ok(Self::L1Accepted),
-                "pending" if rpc_version < RpcVersion::V09 => Ok(Self::PreConfirmed),
-                "pre_confirmed" if rpc_version >= RpcVersion::V09 => Ok(Self::PreConfirmed),
+                "pre_confirmed" => Ok(Self::PreConfirmed),
                 _ => Err(serde_json::Error::custom("Invalid block id")),
             }
         } else {
@@ -62,32 +60,28 @@ impl crate::dto::SerializeForVersion for pathfinder_common::BlockHeader {
         )?;
         serializer.serialize_field("starknet_version", &self.starknet_version.to_string())?;
 
-        if serializer.version >= RpcVersion::V07 {
-            serializer.serialize_field(
-                "l1_data_gas_price",
-                &ResourcePrice {
-                    price_in_wei: self.eth_l1_data_gas_price,
-                    price_in_fri: self.strk_l1_data_gas_price,
-                },
-            )?;
-            serializer.serialize_field(
-                "l1_da_mode",
-                &match self.l1_da_mode {
-                    L1DataAvailabilityMode::Blob => "BLOB",
-                    L1DataAvailabilityMode::Calldata => "CALLDATA",
-                },
-            )?;
-        }
+        serializer.serialize_field(
+            "l1_data_gas_price",
+            &ResourcePrice {
+                price_in_wei: self.eth_l1_data_gas_price,
+                price_in_fri: self.strk_l1_data_gas_price,
+            },
+        )?;
+        serializer.serialize_field(
+            "l1_da_mode",
+            &match self.l1_da_mode {
+                L1DataAvailabilityMode::Blob => "BLOB",
+                L1DataAvailabilityMode::Calldata => "CALLDATA",
+            },
+        )?;
 
-        if serializer.version >= RpcVersion::V08 {
-            serializer.serialize_field(
-                "l2_gas_price",
-                &ResourcePrice {
-                    price_in_wei: self.eth_l2_gas_price,
-                    price_in_fri: self.strk_l2_gas_price,
-                },
-            )?;
-        }
+        serializer.serialize_field(
+            "l2_gas_price",
+            &ResourcePrice {
+                price_in_wei: self.eth_l2_gas_price,
+                price_in_fri: self.strk_l2_gas_price,
+            },
+        )?;
 
         if serializer.version >= RpcVersion::V10 {
             if self.starknet_version < StarknetVersion::V_0_13_2 {
@@ -127,11 +121,7 @@ impl crate::dto::SerializeForVersion
         let (block_number, pending_block) = *self;
 
         let mut serializer = serializer.serialize_struct()?;
-        if serializer.version >= RpcVersion::V09 {
-            serializer.serialize_field("block_number", &block_number)?;
-        } else {
-            serializer.serialize_field("parent_hash", &pending_block.parent_hash)?;
-        }
+        serializer.serialize_field("block_number", &block_number)?;
         serializer.serialize_field("timestamp", &pending_block.timestamp.get())?;
         serializer.serialize_field("sequencer_address", &pending_block.sequencer_address)?;
         serializer.serialize_field(
@@ -146,32 +136,28 @@ impl crate::dto::SerializeForVersion
             &pending_block.starknet_version.to_string(),
         )?;
 
-        if serializer.version >= RpcVersion::V07 {
-            serializer.serialize_field(
-                "l1_data_gas_price",
-                &ResourcePrice {
-                    price_in_wei: pending_block.l1_data_gas_price.price_in_wei,
-                    price_in_fri: pending_block.l1_data_gas_price.price_in_fri,
-                },
-            )?;
-            serializer.serialize_field(
-                "l1_da_mode",
-                &match pending_block.l1_da_mode {
-                    starknet_gateway_types::reply::L1DataAvailabilityMode::Blob => "BLOB",
-                    starknet_gateway_types::reply::L1DataAvailabilityMode::Calldata => "CALLDATA",
-                },
-            )?;
-        }
+        serializer.serialize_field(
+            "l1_data_gas_price",
+            &ResourcePrice {
+                price_in_wei: pending_block.l1_data_gas_price.price_in_wei,
+                price_in_fri: pending_block.l1_data_gas_price.price_in_fri,
+            },
+        )?;
+        serializer.serialize_field(
+            "l1_da_mode",
+            &match pending_block.l1_da_mode {
+                starknet_gateway_types::reply::L1DataAvailabilityMode::Blob => "BLOB",
+                starknet_gateway_types::reply::L1DataAvailabilityMode::Calldata => "CALLDATA",
+            },
+        )?;
 
-        if serializer.version >= RpcVersion::V08 {
-            serializer.serialize_field(
-                "l2_gas_price",
-                &ResourcePrice {
-                    price_in_wei: pending_block.l2_gas_price.price_in_wei,
-                    price_in_fri: pending_block.l2_gas_price.price_in_fri,
-                },
-            )?;
-        }
+        serializer.serialize_field(
+            "l2_gas_price",
+            &ResourcePrice {
+                price_in_wei: pending_block.l2_gas_price.price_in_wei,
+                price_in_fri: pending_block.l2_gas_price.price_in_fri,
+            },
+        )?;
 
         serializer.end()
     }
@@ -183,11 +169,7 @@ impl crate::dto::SerializeForVersion for crate::pending::PreConfirmedBlock {
         serializer: crate::dto::Serializer,
     ) -> Result<crate::dto::Ok, crate::dto::Error> {
         let mut serializer = serializer.serialize_struct()?;
-        // For backward compatibility with pre-0.9 rpc versions we mustn't include block
-        // number to mimic the behaviour of "pending" block
-        if serializer.version >= RpcVersion::V09 {
-            serializer.serialize_field("block_number", &self.number.get())?;
-        }
+        serializer.serialize_field("block_number", &self.number.get())?;
         serializer.serialize_field("timestamp", &self.timestamp.get())?;
         serializer.serialize_field("sequencer_address", &self.sequencer_address)?;
         serializer.serialize_field(
@@ -199,32 +181,28 @@ impl crate::dto::SerializeForVersion for crate::pending::PreConfirmedBlock {
         )?;
         serializer.serialize_field("starknet_version", &self.starknet_version.to_string())?;
 
-        if serializer.version >= RpcVersion::V07 {
-            serializer.serialize_field(
-                "l1_data_gas_price",
-                &ResourcePrice {
-                    price_in_wei: self.l1_data_gas_price.price_in_wei,
-                    price_in_fri: self.l1_data_gas_price.price_in_fri,
-                },
-            )?;
-            serializer.serialize_field(
-                "l1_da_mode",
-                &match self.l1_da_mode {
-                    L1DataAvailabilityMode::Blob => "BLOB",
-                    L1DataAvailabilityMode::Calldata => "CALLDATA",
-                },
-            )?;
-        }
+        serializer.serialize_field(
+            "l1_data_gas_price",
+            &ResourcePrice {
+                price_in_wei: self.l1_data_gas_price.price_in_wei,
+                price_in_fri: self.l1_data_gas_price.price_in_fri,
+            },
+        )?;
+        serializer.serialize_field(
+            "l1_da_mode",
+            &match self.l1_da_mode {
+                L1DataAvailabilityMode::Blob => "BLOB",
+                L1DataAvailabilityMode::Calldata => "CALLDATA",
+            },
+        )?;
 
-        if serializer.version >= RpcVersion::V08 {
-            serializer.serialize_field(
-                "l2_gas_price",
-                &ResourcePrice {
-                    price_in_wei: self.l2_gas_price.price_in_wei,
-                    price_in_fri: self.l2_gas_price.price_in_fri,
-                },
-            )?;
-        }
+        serializer.serialize_field(
+            "l2_gas_price",
+            &ResourcePrice {
+                price_in_wei: self.l2_gas_price.price_in_wei,
+                price_in_fri: self.l2_gas_price.price_in_fri,
+            },
+        )?;
 
         serializer.end()
     }
@@ -241,12 +219,6 @@ impl crate::dto::SerializeForVersion
         serializer: crate::dto::Serializer,
     ) -> Result<crate::dto::Ok, crate::dto::Error> {
         let mut serializer = serializer.serialize_struct()?;
-        if serializer.version < RpcVersion::V09 {
-            let parent_hash = self
-                .0
-                .ok_or_else(|| crate::dto::Error::custom("Missing parent block hash"))?;
-            serializer.serialize_field("parent_hash", &parent_hash)?;
-        }
         serializer.flatten(self.1)?;
         serializer.end()
     }
@@ -321,46 +293,7 @@ mod tests {
             ));
 
         pretty_assertions_sorted::assert_eq!(
-            header.serialize(Serializer::new(RpcVersion::V06)).unwrap(),
-            json!({
-                "block_hash": "0x7256dde30ae68f43f3def9ce2a4433dd3de11b630d4f84336891bad8fe4127e",
-                "block_number": 1000000,
-                "l1_gas_price": {
-                  "price_in_fri": "0x59425e9d6d3c",
-                  "price_in_wei": "0x34795c87c"
-                },
-                "new_root": "0x7bd9798e3b03e6dfc12db132d48e4a0dc75202aa6a9b57bc40e3796137bd617",
-                "parent_hash": "0x6084bda2cd3247aa11364404f7918001e82a7567cfe0b949fa6a7f3d4b4099f",
-                "sequencer_address": "0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8",
-                "starknet_version": "0.13.3",
-                "timestamp": 1734728886,
-            })
-        );
-
-        pretty_assertions_sorted::assert_eq!(
-            header.serialize(Serializer::new(RpcVersion::V07)).unwrap(),
-            json!({
-                "block_hash": "0x7256dde30ae68f43f3def9ce2a4433dd3de11b630d4f84336891bad8fe4127e",
-                "block_number": 1000000,
-                "l1_da_mode": "BLOB",
-                "l1_data_gas_price": {
-                  "price_in_fri": "0xe27be612da1",
-                  "price_in_wei": "0x85257107"
-                },
-                "l1_gas_price": {
-                  "price_in_fri": "0x59425e9d6d3c",
-                  "price_in_wei": "0x34795c87c"
-                },
-                "new_root": "0x7bd9798e3b03e6dfc12db132d48e4a0dc75202aa6a9b57bc40e3796137bd617",
-                "parent_hash": "0x6084bda2cd3247aa11364404f7918001e82a7567cfe0b949fa6a7f3d4b4099f",
-                "sequencer_address": "0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8",
-                "starknet_version": "0.13.3",
-                "timestamp": 1734728886,
-            })
-        );
-
-        pretty_assertions_sorted::assert_eq!(
-            header.serialize(Serializer::new(RpcVersion::V08)).unwrap(),
+            header.serialize(Serializer::new(RpcVersion::V09)).unwrap(),
             json!({
                 "block_hash": "0x7256dde30ae68f43f3def9ce2a4433dd3de11b630d4f84336891bad8fe4127e",
                 "block_number": 1000000,
@@ -413,68 +346,6 @@ mod tests {
             l1_da_mode: starknet_gateway_types::reply::L1DataAvailabilityMode::Blob,
             ..Default::default()
         };
-
-        pretty_assertions_sorted::assert_eq!(
-            (block_number, &pending)
-                .serialize(Serializer::new(RpcVersion::V06))
-                .unwrap(),
-            json!({
-                "l1_gas_price": {
-                  "price_in_fri": "0x59425e9d6d3c",
-                  "price_in_wei": "0x34795c87c"
-                },
-                "parent_hash": "0x6084bda2cd3247aa11364404f7918001e82a7567cfe0b949fa6a7f3d4b4099f",
-                "sequencer_address": "0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8",
-                "starknet_version": "0.13.3",
-                "timestamp": 1734728886,
-            })
-        );
-
-        pretty_assertions_sorted::assert_eq!(
-            (block_number, &pending)
-                .serialize(Serializer::new(RpcVersion::V07))
-                .unwrap(),
-            json!({
-                "l1_da_mode": "BLOB",
-                "l1_data_gas_price": {
-                  "price_in_fri": "0xe27be612da1",
-                  "price_in_wei": "0x85257107"
-                },
-                "l1_gas_price": {
-                  "price_in_fri": "0x59425e9d6d3c",
-                  "price_in_wei": "0x34795c87c"
-                },
-                "parent_hash": "0x6084bda2cd3247aa11364404f7918001e82a7567cfe0b949fa6a7f3d4b4099f",
-                "sequencer_address": "0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8",
-                "starknet_version": "0.13.3",
-                "timestamp": 1734728886,
-            })
-        );
-
-        pretty_assertions_sorted::assert_eq!(
-            (block_number, &pending)
-                .serialize(Serializer::new(RpcVersion::V08))
-                .unwrap(),
-            json!({
-                "l1_da_mode": "BLOB",
-                "l1_data_gas_price": {
-                  "price_in_fri": "0xe27be612da1",
-                  "price_in_wei": "0x85257107"
-                },
-                "l1_gas_price": {
-                  "price_in_fri": "0x59425e9d6d3c",
-                  "price_in_wei": "0x34795c87c"
-                },
-                "l2_gas_price": {
-                    "price_in_fri": "0x23456789",
-                    "price_in_wei": "0x12345678"
-                },
-                "parent_hash": "0x6084bda2cd3247aa11364404f7918001e82a7567cfe0b949fa6a7f3d4b4099f",
-                "sequencer_address": "0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8",
-                "starknet_version": "0.13.3",
-                "timestamp": 1734728886,
-            })
-        );
 
         pretty_assertions_sorted::assert_eq!(
             (block_number, &pending)

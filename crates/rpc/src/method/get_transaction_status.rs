@@ -29,10 +29,6 @@ impl crate::dto::DeserializeForVersion for Input {
 #[derive(Debug, PartialEq)]
 pub enum Output {
     Received,
-    Rejected {
-        // Reject error message optional for backward compatibility with gateway.
-        error_message: Option<String>,
-    },
     PreConfirmed(TxnExecutionStatus),
     AcceptedOnL1(TxnExecutionStatus),
     AcceptedOnL2(TxnExecutionStatus),
@@ -130,15 +126,7 @@ pub async fn get_transaction_status(
                         Err(Error::TxnHashNotFound)
                     }
                 }
-                (_, GatewayExecutionStatus::Rejected) => {
-                    if rpc_version < RpcVersion::V09 {
-                        Ok(Output::Rejected {
-                            error_message: tx.tx_failure_reason.map(|reason| reason.error_message),
-                        })
-                    } else {
-                        Err(Error::TxnHashNotFound)
-                    }
-                }
+                (_, GatewayExecutionStatus::Rejected) => Err(Error::TxnHashNotFound),
                 (GatewayFinalityStatus::Received, _) => Ok(Output::Received),
                 (GatewayFinalityStatus::AcceptedOnL1 | GatewayFinalityStatus::AcceptedOnL2, _) => {
                     // The transaction might be accepted, but it
@@ -157,7 +145,6 @@ impl Output {
         use crate::dto::TxnStatus;
         match self {
             Output::Received => TxnStatus::Received,
-            Output::Rejected { .. } => TxnStatus::Rejected,
             Output::PreConfirmed(_) => TxnStatus::PreConfirmed,
             Output::AcceptedOnL1(_) => TxnStatus::AcceptedOnL1,
             Output::AcceptedOnL2(_) => TxnStatus::AcceptedOnL2,
@@ -166,7 +153,7 @@ impl Output {
 
     fn execution_status(&self) -> Option<TxnExecutionStatus> {
         match self {
-            Output::Received | Output::Rejected { .. } => None,
+            Output::Received => None,
             Output::PreConfirmed(x) => Some(x.clone()),
             Output::AcceptedOnL1(x) => Some(x.clone()),
             Output::AcceptedOnL2(x) => Some(x.clone()),
@@ -175,7 +162,6 @@ impl Output {
 
     fn failure_reason(&self) -> Option<String> {
         match self {
-            Output::Rejected { error_message } => error_message.clone(),
             Output::PreConfirmed(TxnExecutionStatus::Reverted { reason }) => reason.clone(),
             Output::AcceptedOnL1(TxnExecutionStatus::Reverted { reason }) => reason.clone(),
             Output::AcceptedOnL2(TxnExecutionStatus::Reverted { reason }) => reason.clone(),
@@ -192,9 +178,7 @@ impl crate::dto::SerializeForVersion for Output {
         let mut serializer = serializer.serialize_struct()?;
         serializer.serialize_field("finality_status", &self.finality_status())?;
         serializer.serialize_optional("execution_status", self.execution_status())?;
-        if serializer.version > RpcVersion::V07 {
-            serializer.serialize_optional("failure_reason", self.failure_reason())?;
-        }
+        serializer.serialize_optional("failure_reason", self.failure_reason())?;
         serializer.end()
     }
 }
@@ -212,7 +196,6 @@ mod tests {
     use crate::RpcVersion;
 
     #[rstest::rstest]
-    #[case::rejected(Output::Rejected { error_message: None }, json!({"finality_status":"REJECTED"}))]
     #[case::reverted(Output::Received, json!({"finality_status":"RECEIVED"}))]
     #[case::accepted_on_l1_succeeded(
         Output::AcceptedOnL1(TxnExecutionStatus::Succeeded),
@@ -264,9 +247,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -291,9 +271,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -307,9 +284,6 @@ mod tests {
 
         match version {
             RpcVersion::PathfinderV01 => unreachable!(),
-            RpcVersion::V06 | RpcVersion::V07 | RpcVersion::V08 => {
-                assert_matches::assert_matches!(result, Err(Error::TxnHashNotFound));
-            }
             RpcVersion::V09 => {
                 let output_json = result.unwrap().serialize(Serializer { version }).unwrap();
                 let expected_json: serde_json::Value = serde_json::from_str(include_str!(
@@ -330,9 +304,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -346,9 +317,6 @@ mod tests {
 
         match version {
             RpcVersion::PathfinderV01 => unreachable!(),
-            RpcVersion::V06 | RpcVersion::V07 | RpcVersion::V08 => {
-                assert_matches::assert_matches!(result, Err(Error::TxnHashNotFound));
-            }
             RpcVersion::V09 => {
                 let output_json = result.unwrap().serialize(Serializer { version }).unwrap();
                 let expected_json: serde_json::Value = serde_json::from_str(include_str!(
@@ -381,31 +349,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejected_with_error_message() {
-        let input = Input {
-            // Transaction hash known to be rejected by the testnet gateway.
-            transaction_hash: transaction_hash!(
-                "0x4fef839b57a7ac72c8738dc821897cc605b5cc5aafa487e445e9282ac37ac23"
-            ),
-        };
-        let context = RpcContext::for_tests();
-        let status = get_transaction_status(context, input, RpcVersion::V08)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            status,
-            Output::Rejected {
-                error_message: Some(
-                    "Transaction is too big to fit a batch; Its gas_weight weights 5214072 while \
-                     the batch upper bound is set to 5000000.0."
-                        .to_string()
-                )
-            }
-        );
-    }
-
-    #[tokio::test]
     async fn rejected_does_not_exist() {
         let input = Input {
             // Transaction hash known to be rejected by the testnet gateway.
@@ -431,9 +374,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -458,11 +398,6 @@ mod tests {
             transaction_hash: transaction_hash_bytes!(b"preconfirmed reverted"),
         };
         let status = get_transaction_status(context, input, version).await;
-
-        if version < RpcVersion::V09 {
-            assert_matches::assert_matches!(status, Err(Error::TxnHashNotFound));
-            return;
-        }
 
         let output_json = status.unwrap().serialize(Serializer { version }).unwrap();
 

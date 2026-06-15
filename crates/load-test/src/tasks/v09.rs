@@ -2,7 +2,7 @@ use goose::prelude::*;
 use pathfinder_crypto::Felt;
 use rand::{Rng, SeedableRng};
 
-use crate::requests::v08::*;
+use crate::requests::v09::*;
 
 /// Fetch a random block, then fetch all individual transactions and receipts in
 /// the block.
@@ -173,31 +173,65 @@ pub async fn task_call(user: &mut GooseUser) -> TransactionResult {
 }
 
 pub async fn task_estimate_fee(user: &mut GooseUser) -> TransactionResult {
-    // estimate invoke on a test contract deployed in block 0
-    // https://voyager.online/contract/0x06ee3440b08a9c805305449ec7f7003f27e9f7e287b83610952ec36bdc5a6bae
+    // Estimate the fee for a real mainnet INVOKE v1 transaction from block 500k.
+    // Replay an existing transaction so that the account, the called contract and
+    // its entry point are all guaranteed to exist on chain.
+    // `estimate_fee_for_invoke` runs this against the previous state (block 499999)
+    // with SKIP_VALIDATE, so the historical nonce/signature and the chain tip's
+    // mutable state (token balances etc.) don't influence the result. We only care
+    // about execution.
+    //
+    // Structure of the transaction:
+    // - invoke `__execute__` on `sender_address`, passing `calldata` as the
+    //   multicall to do,
+    // - `calldata` is the Cairo 0 OpenZeppelin account multicall, encoded as:
+    //   `(call_array_len, [(to, selector, data_offset, data_len); N], calldata_len,
+    //   calldata)`.
+    //
+    // So a single ERC20-style transfer looks like this:
+    //
+    //   call_array_len = 1
+    //   call[0].to            = 0x49d36570...  (token contract)
+    //   call[0].selector      = 0x83afd3f4...  ("transfer")
+    //   call[0].data_offset   = 0              (offset into the flat calldata)
+    //   call[0].data_len      = 3              (recipient + u256 amount)
+    //   calldata_len = 3
+    //   calldata[0]  = 0x2db7e01c...           (recipient address)
+    //   calldata[1]  = 0x13717a1765d1800       (amount, u256 low)
+    //   calldata[2]  = 0x0                     (amount, u256 high)
     estimate_fee_for_invoke(
         user,
-        Felt::from_hex_str("0x06ee3440b08a9c805305449ec7f7003f27e9f7e287b83610952ec36bdc5a6bae")
+        // Sender (account) address
+        Felt::from_hex_str("0x3a20d4f7b4229e7c4863dab158b4d076d7f454b893d90a62011882dc4caca2a")
             .unwrap(),
+        // Account __execute__ calldata: a single transfer call
         &[
-            // address
-            Felt::from_hex_str(
-                "0x01e2cd4b3588e8f6f9c4e89fb0e293bf92018c96d7a93ee367d29a284223b6ff",
-            )
-            .unwrap(),
-            // value
-            Felt::from_hex_str(
-                "0x071d1e9d188c784a0bde95c1d508877a0d93e9102b37213d1e13f3ebc54a7751",
-            )
-            .unwrap(),
+            // call_array_len
+            Felt::from_hex_str("0x1").unwrap(),
+            // call[0].to (token contract)
+            Felt::from_hex_str("0x49d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7")
+                .unwrap(),
+            // call[0].selector ("transfer")
+            Felt::from_hex_str("0x83afd3f4caedc6eebf44246fe54e38c95e3179a5ec9ea81740eca5b482d12e")
+                .unwrap(),
+            // call[0].data_offset
+            Felt::from_hex_str("0x0").unwrap(),
+            // call[0].data_len
+            Felt::from_hex_str("0x3").unwrap(),
+            // calldata_len
+            Felt::from_hex_str("0x3").unwrap(),
+            // calldata[0]: recipient address
+            Felt::from_hex_str("0x2db7e01c69be7e741fcd08fb5096914029131334dbca1d63ab33c05e7a92153")
+                .unwrap(),
+            // calldata[1]: amount, u256 low
+            Felt::from_hex_str("0x13717a1765d1800").unwrap(),
+            // calldata[2]: amount, u256 high
+            Felt::from_hex_str("0x0").unwrap(),
         ],
-        // "set_value" entry point
-        Felt::from_hex_str("0x3d7905601c217734671143d457f0db37f7f8883112abd34b92c4abfeafde0c3")
-            .unwrap(),
+        // nonce (historical; not checked because of SKIP_VALIDATE)
+        Felt::from_hex_str("0x121419").unwrap(),
+        // max_fee
         Felt::ZERO,
-        // hash of mainnet block 0
-        Felt::from_hex_str("0x47c3637b57c2b079b93c61539950c17e868a28f46cdef28f88521067f21e943")
-            .unwrap(),
     )
     .await?;
     Ok(())

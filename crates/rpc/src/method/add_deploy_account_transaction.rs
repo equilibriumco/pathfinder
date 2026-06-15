@@ -370,7 +370,7 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_str(&format!("{{\"deploy_account_transaction\":{INPUT_JSON}}}"))
                 .unwrap();
-        let input: Input = crate::dto::Value::new(json, crate::RpcVersion::V07)
+        let input: Input = crate::dto::Value::new(json, crate::RpcVersion::V09)
             .deserialize()
             .unwrap();
 
@@ -380,7 +380,7 @@ mod tests {
     #[tokio::test]
     async fn test_parse_input_positional() {
         let json: serde_json::Value = serde_json::from_str(&format!("[{INPUT_JSON}]")).unwrap();
-        let input: Input = crate::dto::Value::new(json, crate::RpcVersion::V07)
+        let input: Input = crate::dto::Value::new(json, crate::RpcVersion::V09)
             .deserialize()
             .unwrap();
 
@@ -401,7 +401,7 @@ mod tests {
         let error = crate::error::ApplicationError::from(error);
         let error = crate::jsonrpc::RpcError::from(error);
         let error = error
-            .serialize(Serializer::new(crate::RpcVersion::V07))
+            .serialize(Serializer::new(crate::RpcVersion::V09))
             .unwrap();
 
         let expected = serde_json::json!({

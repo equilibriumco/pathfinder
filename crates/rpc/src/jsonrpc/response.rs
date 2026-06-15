@@ -155,20 +155,20 @@ mod tests {
         let response = RpcResponse {
             output: Err(RpcError::InvalidParams(parsing_err.clone())),
             id: RequestId::Number(1),
-            version: RpcVersion::V07,
+            version: RpcVersion::V09,
         };
         let parsing_err = RpcError::InvalidParams(parsing_err);
 
         let serialized = response
-            .serialize(crate::dto::Serializer::new(RpcVersion::V07))
+            .serialize(crate::dto::Serializer::new(RpcVersion::V09))
             .unwrap();
 
         let expected = json!({
             "jsonrpc": "2.0",
             "error": {
-                "code": parsing_err.code(RpcVersion::V07),
-                "message": parsing_err.message(RpcVersion::V07),
-                "data": parsing_err.data(RpcVersion::V07),
+                "code": parsing_err.code(RpcVersion::V09),
+                "message": parsing_err.message(RpcVersion::V09),
+                "data": parsing_err.data(RpcVersion::V09),
             },
             "id": 1,
         });
@@ -181,9 +181,9 @@ mod tests {
         let serialized = RpcResponse {
             output: Ok(Value::String("foobar".to_owned())),
             id: RequestId::Number(1),
-            version: RpcVersion::V07,
+            version: RpcVersion::V09,
         }
-        .serialize(crate::dto::Serializer::new(RpcVersion::V07))
+        .serialize(crate::dto::Serializer::new(RpcVersion::V09))
         .unwrap();
 
         let expected = json!({
