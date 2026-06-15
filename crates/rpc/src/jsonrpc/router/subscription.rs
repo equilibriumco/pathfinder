@@ -1521,7 +1521,7 @@ mod tests {
             .with_pending_data_cache(pending_data_cache.clone())
             .with_websockets(WebsocketContext::for_test(websocket_history));
 
-        RpcRouter::builder(crate::RpcVersion::V08)
+        RpcRouter::builder(crate::RpcVersion::V09)
             .register("test", endpoint)
             .build(ctx)
     }

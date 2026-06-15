@@ -462,11 +462,9 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
     };
 
     let default_version = match config.rpc_root_version {
-        config::RootRpcVersion::V06 => pathfinder_rpc::RpcVersion::V06,
-        config::RootRpcVersion::V07 => pathfinder_rpc::RpcVersion::V07,
-        config::RootRpcVersion::V08 => pathfinder_rpc::RpcVersion::V08,
         config::RootRpcVersion::V09 => pathfinder_rpc::RpcVersion::V09,
         config::RootRpcVersion::V10 => pathfinder_rpc::RpcVersion::V10,
+        _ => todo!(),
     };
 
     let rpc_server = pathfinder_rpc::RpcServer::new(config.rpc_address, context, default_version);

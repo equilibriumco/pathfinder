@@ -169,7 +169,7 @@ mod tests {
             response_flags: StorageResponseFlags::default(),
         };
 
-        let input = Input::deserialize(crate::dto::Value::new(input, RpcVersion::V07)).unwrap();
+        let input = Input::deserialize(crate::dto::Value::new(input, RpcVersion::V09)).unwrap();
 
         assert_eq!(input, expected);
     }
@@ -260,12 +260,6 @@ mod tests {
             result.value,
             storage_value_bytes!(b"preconfirmed storage value 0")
         );
-
-        // JSON-RPC version before 0.9 are expected to ignore the pre-confirmed block.
-        let err = get_storage_at(ctx, input, RpcVersion::V08)
-            .await
-            .unwrap_err();
-        assert_matches!(err, Error::ContractNotFound);
     }
 
     #[tokio::test]
@@ -288,12 +282,6 @@ mod tests {
             result.value,
             storage_value_bytes!(b"prelatest storage value 0")
         );
-
-        // JSON-RPC version before 0.9 are expected to ignore the pre-latest block.
-        let err = get_storage_at(ctx, input, RpcVersion::V08)
-            .await
-            .unwrap_err();
-        assert_matches!(err, Error::ContractNotFound);
     }
 
     #[tokio::test]

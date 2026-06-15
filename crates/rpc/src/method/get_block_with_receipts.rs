@@ -21,9 +21,6 @@ pub enum Output {
     },
     Pending {
         block: Arc<PendingBlocks>,
-        // for backward compatibility with pre 0.9 versions we need to
-        // mimic the structure of the "pending" block, which included parent block hash
-        parent_hash: Option<pathfinder_common::BlockHash>,
         include_proof_facts: bool,
     },
 }
@@ -84,22 +81,8 @@ pub async fn get_block_with_receipts(
             BlockId::PreConfirmed => {
                 let pending = context.pending_data.get(&db, rpc_version)?;
 
-                let parent_hash = (rpc_version < RpcVersion::V09)
-                    .then(|| {
-                        // versions before 0.9 don't have access to pre-confirmed data
-                        // so we never need to worry about parent hash coming from pre-latest
-                        Ok::<_, anyhow::Error>(
-                            db.block_header(pathfinder_common::BlockId::Latest)
-                                .context("Querying latest block header")?
-                                .unwrap_or_default()
-                                .hash,
-                        )
-                    })
-                    .transpose()?;
-
                 return Ok(Output::Pending {
                     block: pending.pending_block(),
-                    parent_hash,
                     include_proof_facts,
                 });
             }
@@ -176,10 +159,9 @@ impl crate::dto::SerializeForVersion for Output {
             }
             Output::Pending {
                 block,
-                parent_hash,
                 include_proof_facts,
             } => {
-                serializer.flatten(&(parent_hash, &block.pre_confirmed))?;
+                serializer.flatten(&block.pre_confirmed)?;
                 let transactions = block.transactions();
                 serializer.serialize_iter(
                     "transactions",
@@ -216,23 +198,7 @@ impl crate::dto::SerializeForVersion for TransactionWithReceipt<'_> {
         serializer: crate::dto::Serializer,
     ) -> Result<crate::dto::Ok, crate::dto::Error> {
         let mut serializer = serializer.serialize_struct()?;
-        match serializer.version {
-            crate::RpcVersion::V07 => {
-                serializer.serialize_field(
-                    "transaction",
-                    &crate::dto::TransactionWithHash {
-                        transaction: self.transaction,
-                        include_proof_facts: self.include_proof_facts,
-                    },
-                )?;
-            }
-            _ => {
-                serializer.serialize_field(
-                    "transaction",
-                    &(self.transaction, self.include_proof_facts),
-                )?;
-            }
-        }
+        serializer.serialize_field("transaction", &(self.transaction, self.include_proof_facts))?;
         serializer.serialize_field(
             "receipt",
             &crate::dto::TxnReceipt {
@@ -305,9 +271,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -328,9 +291,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]

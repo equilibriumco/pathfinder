@@ -418,7 +418,7 @@ mod tests {
             ]);
 
             let input =
-                Input::deserialize(crate::dto::Value::new(positional, crate::RpcVersion::V07))
+                Input::deserialize(crate::dto::Value::new(positional, crate::RpcVersion::V09))
                     .unwrap();
             let expected = Input {
                 invoke_transaction: test_invoke_txn(),
@@ -453,7 +453,7 @@ mod tests {
             });
 
             let input =
-                Input::deserialize(crate::dto::Value::new(named, crate::RpcVersion::V07)).unwrap();
+                Input::deserialize(crate::dto::Value::new(named, crate::RpcVersion::V09)).unwrap();
             let expected = Input {
                 invoke_transaction: test_invoke_txn(),
             };
@@ -478,7 +478,7 @@ mod tests {
             let error = crate::error::ApplicationError::from(error);
             let error = crate::jsonrpc::RpcError::from(error);
             let error = error
-                .serialize(Serializer::new(crate::RpcVersion::V07))
+                .serialize(Serializer::new(crate::RpcVersion::V09))
                 .unwrap();
 
             let expected = json!({

@@ -26,7 +26,6 @@ impl crate::dto::DeserializeForVersion for Input {
 #[derive(Clone, Debug)]
 enum FinalityStatus {
     Received,
-    Rejected,
     PreConfirmed,
     AcceptedOnL2,
     AcceptedOnL1,
@@ -39,7 +38,6 @@ impl crate::dto::SerializeForVersion for FinalityStatus {
     ) -> Result<crate::dto::Ok, crate::dto::Error> {
         let status_str = match self {
             FinalityStatus::Received => "RECEIVED",
-            FinalityStatus::Rejected => "REJECTED",
             FinalityStatus::PreConfirmed => "PRE_CONFIRMED",
             FinalityStatus::AcceptedOnL2 => "ACCEPTED_ON_L2",
             FinalityStatus::AcceptedOnL1 => "ACCEPTED_ON_L1",
@@ -101,13 +99,11 @@ async fn get_messages_status_impl(
 
         use get_transaction_status::Output as TxStatus;
         let (finality_status, execution_status) = match status {
-            // Since Starknet 0.14, get_transaction_status isn't
-            // supposed to return Received or Rejected for L1 handler
-            // transactions; the cases are kept for backwards
-            // compatibility - more explicit error handling can be
-            // added if/when they actually happen.
+            // Since Starknet 0.14, get_transaction_status isn't supposed to return Received or
+            // Rejected for L1 handler transactions; the cases are kept for backwards compatibility,
+            // more explicit error handling can be added if/when they actually happen. Moreover
+            // Transaction finality status Rejected has been removed in RPC v0.9.
             TxStatus::Received => (FinalityStatus::Received, None),
-            TxStatus::Rejected { .. } => (FinalityStatus::Rejected, None),
             TxStatus::PreConfirmed(ref exec_status) => {
                 (FinalityStatus::PreConfirmed, Some(exec_status.clone()))
             }
@@ -119,19 +115,12 @@ async fn get_messages_status_impl(
             }
         };
 
-        let failure_reason = if rpc_version >= RpcVersion::V09 {
-            match &execution_status {
-                Some(TxnExecutionStatus::Reverted { reason }) => reason.clone(),
-                _ => None,
-            }
-        } else {
-            match &status {
-                TxStatus::Rejected { error_message } => error_message.clone(),
-                _ => None,
-            }
+        let failure_reason = match &execution_status {
+            Some(TxnExecutionStatus::Reverted { reason }) => reason.clone(),
+            _ => None,
         };
 
-        if rpc_version >= RpcVersion::V09 && execution_status.is_none() {
+        if execution_status.is_none() {
             continue; // Skip if execution status is not available, since it's
                       // required for V09+
         }
@@ -164,10 +153,8 @@ impl crate::dto::SerializeForVersion for L1HandlerTransactionStatus {
         let mut serializer = serializer.serialize_struct()?;
         serializer.serialize_field("transaction_hash", &self.transaction_hash)?;
         serializer.serialize_field("finality_status", &self.finality_status)?;
-        if serializer.version >= RpcVersion::V09 {
-            serializer.serialize_optional("execution_status", self.execution_status.clone())?;
-        }
-        serializer.serialize_optional("failure_reason", self.failure_reason.as_deref())?;
+        serializer.serialize_optional("execution_status", self.execution_status.clone())?;
+        serializer.serialize_optional("failure_reason", self.failure_reason.clone())?;
         serializer.end()
     }
 }
@@ -223,7 +210,6 @@ mod tests {
 
     #[rstest::rstest]
     #[case::received(FinalityStatus::Received, "RECEIVED")]
-    #[case::rejected(FinalityStatus::Rejected, "REJECTED")]
     #[case::pre_confirmed(FinalityStatus::PreConfirmed, "PRE_CONFIRMED")]
     #[case::accepted_on_l2(FinalityStatus::AcceptedOnL2, "ACCEPTED_ON_L2")]
     #[case::accepted_on_l1(FinalityStatus::AcceptedOnL1, "ACCEPTED_ON_L1")]
@@ -231,29 +217,6 @@ mod tests {
         let encoded = status.serialize(Default::default()).unwrap();
 
         assert_eq!(encoded, json!(expected));
-    }
-
-    #[test]
-    fn output_serialization_before_v09_omits_execution_status() {
-        let output = Output(vec![L1HandlerTransactionStatus {
-            transaction_hash: transaction_hash!("0x1234"),
-            finality_status: FinalityStatus::Rejected,
-            execution_status: Some(TxnExecutionStatus::Succeeded),
-            failure_reason: Some("message rejected".to_owned()),
-        }]);
-
-        let encoded = output.serialize(Serializer::new(RpcVersion::V08)).unwrap();
-
-        assert_eq!(
-            encoded,
-            json!([
-                {
-                    "transaction_hash": "0x1234",
-                    "finality_status": "REJECTED",
-                    "failure_reason": "message rejected",
-                }
-            ])
-        );
     }
 
     #[test]
@@ -306,19 +269,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v08(
-        RpcVersion::V08,
-        json!([
-            {
-                "transaction_hash": "0x5fbdcde319efbd314396a673e2883c9e32b4e5240af54e4433e1bdcd53edf8",
-                "finality_status": "ACCEPTED_ON_L1",
-            },
-            {
-                "transaction_hash": "0x4dc69e578dfe0792b2f87c060a973bfca28d2a4d76f68dc4a76fbaf031fd3e7",
-                "finality_status": "ACCEPTED_ON_L2",
-            }
-        ])
-    )]
     #[case::v09(
         RpcVersion::V09,
         json!([

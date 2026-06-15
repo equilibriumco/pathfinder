@@ -361,8 +361,6 @@ pub(crate) mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     fn input_deserialization_happy_path(#[case] rpc_version: RpcVersion) {
@@ -418,8 +416,6 @@ pub(crate) mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     fn input_deserialization_rejects_return_initial_reads_pre_v10(#[case] rpc_version: RpcVersion) {
@@ -468,7 +464,7 @@ pub(crate) mod tests {
             "simulation_flags": ["SKIP_FEE_CHARGE"]
         });
 
-        let value = crate::dto::Value::new(input_json, RpcVersion::V07);
+        let value = crate::dto::Value::new(input_json, RpcVersion::V09);
         let input = SimulateTransactionInput::deserialize(value).unwrap();
 
         const DEPLOYED_CONTRACT_ADDRESS: ContractAddress =
@@ -508,7 +504,7 @@ pub(crate) mod tests {
                                 selector: Some(entry_point!("0x028FFE4FF0F226A9107253E17A904099AA4F63A02A5621DE0576E5AA71BC5194").0),
                                 messages: vec![],
                                 result: vec![],
-                                execution_resources: pathfinder_executor::types::InnerCallExecutionResources::default(),
+                                execution_resources: pathfinder_executor::types::InnerCallExecutionResources { l1_gas: 2, l2_gas: 0 },
                                 internal_calls: vec![],
                                 computation_resources: pathfinder_executor::types::ComputationResources {
                                     pedersen_builtin_applications: 2,
@@ -537,7 +533,7 @@ pub(crate) mod tests {
                                     felt!("0x56414c4944")
                                 ],
                                 execution_resources: pathfinder_executor::types::InnerCallExecutionResources {
-                                    l1_gas: 0,
+                                    l1_gas: 1,
                                     l2_gas: 0,
                                 },
                                 internal_calls: vec![],
@@ -563,8 +559,8 @@ pub(crate) mod tests {
                                 l1_gas:0,
                                 l1_data_gas:352
                             },
-                            l1_gas: 0,
-                            l1_data_gas: 160,
+                            l1_gas: 21,
+                            l1_data_gas: 352,
                             l2_gas: 0,
                         },},
                         state_diff: pathfinder_executor::types::StateDiff {
@@ -607,23 +603,21 @@ pub(crate) mod tests {
                 ],
                 initial_reads: None,
         }.serialize(Serializer {
-            version: RpcVersion::V07,
+            version: RpcVersion::V09,
         }).unwrap();
 
-        let result = simulate_transactions(context, input, RpcVersion::V07)
+        let result = simulate_transactions(context, input, RpcVersion::V09)
             .await
             .expect("result");
         let result = result
             .serialize(Serializer {
-                version: RpcVersion::V07,
+                version: RpcVersion::V09,
             })
             .unwrap();
         pretty_assertions_sorted::assert_eq!(result, expected);
     }
 
     #[rstest::rstest]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[test_log::test(tokio::test)]
@@ -633,12 +627,6 @@ pub(crate) mod tests {
             simulation_flags: &crate::dto::SimulationFlags,
         ) -> serde_json::Result<serde_json::Value> {
             let fixture_str = match rpc_version {
-                RpcVersion::V07 => {
-                    include_str!("../../fixtures/0.7.0/simulations/simulate_transaction.json")
-                }
-                RpcVersion::V08 => {
-                    include_str!("../../fixtures/0.8.0/simulations/simulate_transaction.json")
-                }
                 RpcVersion::V09 => {
                     include_str!("../../fixtures/0.9.0/simulations/simulate_transaction.json")
                 }
@@ -652,7 +640,7 @@ pub(crate) mod tests {
                         include_str!("../../fixtures/0.10.0/simulations/simulate_transaction.json")
                     }
                 }
-                RpcVersion::V06 | RpcVersion::PathfinderV01 => unreachable!("no such test case"),
+                RpcVersion::PathfinderV01 => unreachable!("no such test case"),
             };
             serde_json::from_str(fixture_str)
         }
@@ -765,7 +753,7 @@ pub(crate) mod tests {
                             calldata: vec![CAIRO0_HASH.0],
                             messages: vec![],
                             result: vec![felt!("0x56414c4944")],
-                            execution_resources: pathfinder_executor::types::InnerCallExecutionResources::default(),
+                            execution_resources: pathfinder_executor::types::InnerCallExecutionResources { l1_gas: 1, l2_gas: 0 },
                             internal_calls: vec![],
                             computation_resources: pathfinder_executor::types::ComputationResources{
                                 memory_holes: 1,
@@ -803,7 +791,7 @@ pub(crate) mod tests {
                             selector: Some(EntryPoint::hashed(b"transfer").0),
                             messages: vec![],
                             result: vec![felt!("0x1")],
-                            execution_resources: pathfinder_executor::types::InnerCallExecutionResources::default(),
+                            execution_resources: pathfinder_executor::types::InnerCallExecutionResources { l1_gas: 4, l2_gas: 0 },
                             internal_calls: vec![],
                             computation_resources: pathfinder_executor::types::ComputationResources{
                                 steps: 1354,
@@ -827,7 +815,7 @@ pub(crate) mod tests {
                             l1_gas: 0,
                             l1_data_gas: 128,
                         },
-                        l1_gas: 0,
+                        l1_gas: 15464,
                         l1_data_gas: 128,
                         l2_gas: 0,
                     },},
@@ -872,17 +860,17 @@ pub(crate) mod tests {
         ],
                 initial_reads: None,
         }.serialize(Serializer {
-            version: RpcVersion::V07,
+            version: RpcVersion::V09,
         }).unwrap();
 
-        let result = simulate_transactions(context, input, RpcVersion::V07)
+        let result = simulate_transactions(context, input, RpcVersion::V09)
             .await
             .unwrap();
 
         pretty_assertions_sorted::assert_eq!(
             result
                 .serialize(Serializer {
-                    version: RpcVersion::V07,
+                    version: RpcVersion::V09,
                 })
                 .unwrap(),
             expected
@@ -2632,8 +2620,6 @@ pub(crate) mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[test_log::test(tokio::test)]
@@ -2668,8 +2654,6 @@ pub(crate) mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[test_log::test(tokio::test)]
@@ -2708,8 +2692,6 @@ pub(crate) mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[test_log::test(tokio::test)]
@@ -2749,9 +2731,6 @@ pub(crate) mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[test_log::test(tokio::test)]
@@ -2785,9 +2764,6 @@ pub(crate) mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[test_log::test(tokio::test)]

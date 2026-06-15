@@ -232,29 +232,22 @@ impl SerializeForVersion for pathfinder_common::transaction::ResourceBounds {
         let mut serializer = serializer.serialize_struct()?;
         serializer.serialize_field("l1_gas", &self.l1_gas)?;
         serializer.serialize_field("l2_gas", &self.l2_gas)?;
-        if serializer.version >= RpcVersion::V08 {
-            // `l1_data_gas` is serialized as (0, 0) in v0.8+ even if it's not set
-            // See https://github.com/equilibriumco/pathfinder/issues/2571
-            serializer.serialize_field("l1_data_gas", &self.l1_data_gas.unwrap_or_default())?;
-        }
+        // `l1_data_gas` is serialized as (0, 0) even if it's not set
+        // See https://github.com/equilibriumco/pathfinder/issues/2571
+        serializer.serialize_field("l1_data_gas", &self.l1_data_gas.unwrap_or_default())?;
         serializer.end()
     }
 }
 
 impl DeserializeForVersion for pathfinder_common::transaction::ResourceBounds {
     fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
-        let version = value.version;
         value.deserialize_map(|value| {
             Ok(Self {
                 l1_gas: value.deserialize("l1_gas")?,
                 l2_gas: value.deserialize("l2_gas")?,
-                l1_data_gas: if version >= RpcVersion::V08 {
-                    // `l1_data_gas` is *required* in v0.8+
-                    // See https://github.com/equilibriumco/pathfinder/issues/2571
-                    Some(value.deserialize("l1_data_gas")?)
-                } else {
-                    None
-                },
+                // `l1_data_gas` is *required*
+                // See https://github.com/equilibriumco/pathfinder/issues/2571
+                l1_data_gas: Some(value.deserialize("l1_data_gas")?),
             })
         })
     }
@@ -430,7 +423,7 @@ mod tests {
             });
             let result = (uut, false)
                 .serialize(Serializer {
-                    version: RpcVersion::V07,
+                    version: RpcVersion::V09,
                 })
                 .unwrap();
 
@@ -465,7 +458,7 @@ mod tests {
             });
             let result = (uut, false)
                 .serialize(Serializer {
-                    version: RpcVersion::V07,
+                    version: RpcVersion::V09,
                 })
                 .unwrap();
 
@@ -503,7 +496,7 @@ mod tests {
             });
             let result = (uut, false)
                 .serialize(Serializer {
-                    version: RpcVersion::V07,
+                    version: RpcVersion::V09,
                 })
                 .unwrap();
 
@@ -559,6 +552,10 @@ mod tests {
                     "l2_gas": {
                         "max_amount": "0x0",
                         "max_price_per_unit": "0x0",
+                    },
+                    "l1_data_gas": {
+                        "max_amount": "0x0",
+                        "max_price_per_unit": "0x0",
                     }
                 },
                 "tip": "0x5",
@@ -567,7 +564,7 @@ mod tests {
             });
             let result = (uut, false)
                 .serialize(Serializer {
-                    version: RpcVersion::V07,
+                    version: RpcVersion::V09,
                 })
                 .unwrap();
 
@@ -600,7 +597,7 @@ mod tests {
             });
             let result = (uut, false)
                 .serialize(Serializer {
-                    version: RpcVersion::V07,
+                    version: RpcVersion::V09,
                 })
                 .unwrap();
 
@@ -639,7 +636,7 @@ mod tests {
             });
             let result = (uut, false)
                 .serialize(Serializer {
-                    version: RpcVersion::V07,
+                    version: RpcVersion::V09,
                 })
                 .unwrap();
 
@@ -695,6 +692,10 @@ mod tests {
                     "l2_gas": {
                         "max_amount": "0x0",
                         "max_price_per_unit": "0x0",
+                    },
+                    "l1_data_gas": {
+                        "max_amount": "0x0",
+                        "max_price_per_unit": "0x0",
                     }
                 },
                 "tip": "0x5",
@@ -702,7 +703,7 @@ mod tests {
             });
             let result = (uut, false)
                 .serialize(Serializer {
-                    version: RpcVersion::V07,
+                    version: RpcVersion::V09,
                 })
                 .unwrap();
 
@@ -739,7 +740,7 @@ mod tests {
             });
             let result = (uut, false)
                 .serialize(Serializer {
-                    version: RpcVersion::V07,
+                    version: RpcVersion::V09,
                 })
                 .unwrap();
 
@@ -775,7 +776,7 @@ mod tests {
             });
             let result = (uut, false)
                 .serialize(Serializer {
-                    version: RpcVersion::V07,
+                    version: RpcVersion::V09,
                 })
                 .unwrap();
 
@@ -830,6 +831,10 @@ mod tests {
                     "l2_gas": {
                         "max_amount": "0x0",
                         "max_price_per_unit": "0x0",
+                    },
+                    "l1_data_gas": {
+                        "max_amount": "0x0",
+                        "max_price_per_unit": "0x0",
                     }
                 },
                 "tip": "0x5",
@@ -838,7 +843,7 @@ mod tests {
             });
             let result = (uut, false)
                 .serialize(Serializer {
-                    version: RpcVersion::V07,
+                    version: RpcVersion::V09,
                 })
                 .unwrap();
 
@@ -869,7 +874,7 @@ mod tests {
             });
             let result = (uut, false)
                 .serialize(Serializer {
-                    version: RpcVersion::V07,
+                    version: RpcVersion::V09,
                 })
                 .unwrap();
 
@@ -896,39 +901,7 @@ mod tests {
 
         pretty_assertions_sorted::assert_eq!(
             resource_bounds
-                .serialize(Serializer::new(RpcVersion::V06))
-                .unwrap(),
-            json!({
-                "l1_gas": {
-                    "max_amount": "0x1",
-                    "max_price_per_unit": "0x2",
-                },
-                "l2_gas": {
-                    "max_amount": "0x3",
-                    "max_price_per_unit": "0x4",
-                },
-            })
-        );
-
-        pretty_assertions_sorted::assert_eq!(
-            resource_bounds
-                .serialize(Serializer::new(RpcVersion::V07))
-                .unwrap(),
-            json!({
-                "l1_gas": {
-                    "max_amount": "0x1",
-                    "max_price_per_unit": "0x2",
-                },
-                "l2_gas": {
-                    "max_amount": "0x3",
-                    "max_price_per_unit": "0x4",
-                },
-            })
-        );
-
-        pretty_assertions_sorted::assert_eq!(
-            resource_bounds
-                .serialize(Serializer::new(RpcVersion::V08))
+                .serialize(Serializer::new(RpcVersion::V09))
                 .unwrap(),
             json!({
                 "l1_gas": {

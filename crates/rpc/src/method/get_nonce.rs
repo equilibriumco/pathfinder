@@ -192,12 +192,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(nonce.0, contract_nonce_bytes!(b"preconfirmed nonce"));
-
-        // JSON-RPC version before 0.9 are expected to ignore the pre-confirmed block.
-        let nonce = get_nonce(context, input.clone(), RpcVersion::V08)
-            .await
-            .unwrap();
-        assert_eq!(nonce.0, contract_nonce!("0x10"));
     }
 
     #[tokio::test]
@@ -214,12 +208,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(nonce.0, contract_nonce_bytes!(b"prelatest nonce"));
-
-        // JSON-RPC version before 0.9 are expected to ignore the pre-latest block.
-        let err = get_nonce(context, input.clone(), RpcVersion::V08)
-            .await
-            .unwrap_err();
-        assert_matches!(err, Error::ContractNotFound);
     }
 
     #[tokio::test]

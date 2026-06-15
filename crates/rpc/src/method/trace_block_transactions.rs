@@ -986,8 +986,6 @@ pub(crate) mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     fn input_deserialization_happy_path(#[case] rpc_version: RpcVersion) {
@@ -1018,8 +1016,6 @@ pub(crate) mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -1053,8 +1049,6 @@ pub(crate) mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -1077,8 +1071,6 @@ pub(crate) mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -1107,8 +1099,6 @@ pub(crate) mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -1162,7 +1152,7 @@ pub(crate) mod tests {
                 output
                     .unwrap()
                     .serialize(Serializer {
-                        version: RpcVersion::V07,
+                        version: RpcVersion::V09,
                     })
                     .unwrap(),
             );
@@ -1180,7 +1170,7 @@ pub(crate) mod tests {
                     include_state_diffs: true,
                 }
                 .serialize(Serializer {
-                    version: RpcVersion::V07,
+                    version: RpcVersion::V09,
                 })
                 .unwrap(),
             );
@@ -1613,8 +1603,6 @@ pub(crate) mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -1626,8 +1614,6 @@ pub(crate) mod tests {
             trace_flags: &crate::dto::TraceFlags,
         ) -> serde_json::Result<serde_json::Value> {
             let fixture_str = match rpc_version {
-                RpcVersion::V07 => include_str!("../../fixtures/0.7.0/traces/multiple_txs.json"),
-                RpcVersion::V08 => include_str!("../../fixtures/0.8.0/traces/multiple_txs.json"),
                 RpcVersion::V09 => include_str!("../../fixtures/0.9.0/traces/multiple_txs.json"),
                 RpcVersion::V10 => {
                     if trace_flags.contains(&crate::dto::TraceFlag::ReturnInitialReads) {
@@ -1638,7 +1624,7 @@ pub(crate) mod tests {
                         include_str!("../../fixtures/0.10.0/traces/multiple_txs.json")
                     }
                 }
-                RpcVersion::V06 | RpcVersion::PathfinderV01 => unreachable!("no such test case"),
+                RpcVersion::PathfinderV01 => unreachable!("no such test case"),
             };
             serde_json::from_str(fixture_str)
         }
