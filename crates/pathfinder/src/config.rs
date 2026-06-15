@@ -1510,7 +1510,7 @@ pub struct WebsocketConfig {
     #[arg(
         long = "rpc.websocket.send-timeout",
         long_help = "Threshold for considering the websocket's output buffer full (and closing the connection).",
-        default_value = "0.1",
+        default_value = "1",
         value_parser = parse_fractional_seconds,
         env = "PATHFINDER_WEBSOCKET_SEND_TIMEOUT"
     )]
