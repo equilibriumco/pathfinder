@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `margin` is the value of the new CLI option `--compiler.concurrency-memory-margin-mib`, which defaults to 4GiB,
   - `compiler_max_memory_usage` is the value of the `--compiler.max-memory-usage-mib` CLI option, which defaults to 4GiB.
 
+### Removed
+
+- Support for JSON-RPC API versions v0.8 and lower has been removed. The `/rpc/v0_6`, `/rpc/v0_7`, and `/rpc/v0_8` endpoints (and their `/ws` equivalents) are no longer served. The lowest supported version is now v0.9, which is also the new default for the root (`/`) path. The default value for `--rpc.root-version` is now `v09`.
+
 ## [0.22.5] - 2026-06-08
 
 ### Added
