@@ -11,6 +11,7 @@ use pathfinder_serde::AsBoundedVec;
 use serde::de::DeserializeSeed as _;
 use serde_json::value::RawValue;
 use tokio::sync::{mpsc, RwLock};
+use tokio::time::{timeout, Duration};
 use tracing::Instrument;
 
 use super::{run_concurrently, RpcRouter};
@@ -428,8 +429,13 @@ type WsReceiver = mpsc::Receiver<Result<Message, axum::Error>>;
 /// serves to allow easier testing. The sender sends `Result<_, RpcResponse>`
 /// purely for convenience, and the [`RpcResponse`] will be encoded into a
 /// [`Message::Text`].
-pub fn split_ws(ws: WebSocket, version: RpcVersion) -> (WsSender, WsReceiver) {
+pub fn split_ws(
+    ws: WebSocket,
+    version: RpcVersion,
+    egress_timeout: Duration,
+) -> (WsSender, WsReceiver) {
     let (mut ws_sender, mut ws_receiver) = ws.split();
+    let mut send_with_timeout = async move |msg| timeout(egress_timeout, ws_sender.send(msg)).await;
     // Send messages to the websocket using an MPSC channel.
     let (sender_tx, mut sender_rx) = mpsc::channel::<Result<Message, RpcResponse>>(1024);
     util::task::spawn_with_cancel(move |cancellation_token| {
@@ -438,9 +444,9 @@ pub fn split_ws(ws: WebSocket, version: RpcVersion) -> (WsSender, WsReceiver) {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => {
                         // Ignore the error since we're shutting down anyway.
-                        let _ = ws_sender.send(Message::Close(Some(CloseFrame {
+                        let _ = send_with_timeout(Message::Close(Some(CloseFrame {
                             code: close_code::NORMAL,
-                            reason:  Utf8Bytes::from_static("Server shutdown"),
+                            reason: Utf8Bytes::from_static("Server shutdown"),
                         }))).await.ok();
                         break;
                     }
@@ -450,15 +456,14 @@ pub fn split_ws(ws: WebSocket, version: RpcVersion) -> (WsSender, WsReceiver) {
                         };
                         match msg {
                             Ok(msg) => {
-                                if let Err(e) = ws_sender.send(msg).await {
+                                if let Err(e) = send_with_timeout(msg).await {
                                     tracing::debug!(error=?e, "Error sending websocket message");
                                     break;
                                 }
                             }
                             Err(e) => {
                                 let data = serde_json::to_string(&e.serialize(crate::dto::Serializer::new(version)).unwrap()).unwrap();
-                                if let Err(e) = ws_sender
-                                    .send(Message::Text(data.into()))
+                                if let Err(e) = send_with_timeout(Message::Text(data.into()))
                                     .await
                                 {
                                     tracing::debug!(error=?e, "Error sending websocket error message");
@@ -1502,7 +1507,7 @@ mod tests {
             .with_storage(storage)
             .with_notifications(notifications)
             .with_pending_data_cache(pending_data_cache.clone())
-            .with_websockets(WebsocketContext::new(websocket_history, 1024));
+            .with_websockets(WebsocketContext::for_test(websocket_history));
 
         RpcRouter::builder(crate::RpcVersion::V08)
             .register("test", endpoint)
