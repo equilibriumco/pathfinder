@@ -406,9 +406,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -453,9 +450,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -500,9 +494,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -549,9 +540,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -765,9 +753,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -820,9 +805,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -875,9 +857,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -1183,7 +1162,7 @@ mod tests {
 
         let output_json = result
             .serialize(Serializer {
-                version: RpcVersion::V08,
+                version: RpcVersion::V09,
             })
             .unwrap();
         let expected_json = serde_json::json!([
@@ -1244,7 +1223,7 @@ mod tests {
 
         let output_json = result
             .serialize(Serializer {
-                version: RpcVersion::V08,
+                version: RpcVersion::V09,
             })
             .unwrap();
         let expected_json = serde_json::json!([

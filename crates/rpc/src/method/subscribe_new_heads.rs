@@ -168,7 +168,7 @@ mod tests {
     use crate::context::{RpcContext, WebsocketContext};
     use crate::jsonrpc::websocket::WebsocketHistory;
     use crate::jsonrpc::{handle_json_rpc_socket, RpcResponse, RpcRouter};
-    use crate::{v08, Notifications, Reorg, SubscriptionId};
+    use crate::{v09, Notifications, Reorg, SubscriptionId};
 
     #[tokio::test]
     async fn happy_path_with_historic_blocks() {
@@ -545,7 +545,7 @@ mod tests {
             .with_notifications(notifications)
             .with_pending_data_cache(pending_data_cache.clone())
             .with_websockets(WebsocketContext::for_test(WebsocketHistory::Unlimited));
-        v08::register_routes().build(ctx)
+        v09::register_routes().build(ctx)
     }
 
     async fn happy_path_test(

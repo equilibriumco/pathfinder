@@ -128,20 +128,14 @@ pub enum ApplicationError {
 }
 
 impl ApplicationError {
-    pub fn code(&self, version: RpcVersion) -> i32 {
+    pub fn code(&self, _version: RpcVersion) -> i32 {
         match self {
             // Taken from the official starknet json rpc api.
             // https://github.com/starkware-libs/starknet-specs
             ApplicationError::FailedToReceiveTxn => 1,
             ApplicationError::NoTraceAvailable(_) => 10,
             ApplicationError::ContractNotFound => 20,
-            ApplicationError::EntrypointNotFound => {
-                if version >= RpcVersion::V08 {
-                    21
-                } else {
-                    -32603 /* Custom - new code not available */
-                }
-            }
+            ApplicationError::EntrypointNotFound => 21,
             ApplicationError::BlockNotFound => 24,
             ApplicationError::InvalidTxnHash => 25,
             ApplicationError::InvalidBlockHash => 26,
@@ -243,27 +237,11 @@ impl ApplicationError {
         }
     }
 
-    pub fn message(&self, version: RpcVersion) -> String {
-        match self {
-            ApplicationError::EntrypointNotFound => {
-                if version >= RpcVersion::V08 {
-                    self.to_string()
-                } else {
-                    "Invalid message selector".to_string()
-                }
-            }
-            ApplicationError::InsufficientResourcesForValidate => match version {
-                RpcVersion::V06 | RpcVersion::V07 => "Max fee is smaller than the minimal \
-                                                      transaction cost (validation plus fee \
-                                                      transfer)"
-                    .to_string(),
-                _ => self.to_string(),
-            },
-            _ => self.to_string(),
-        }
+    pub fn message(&self, _version: RpcVersion) -> String {
+        self.to_string()
     }
 
-    pub fn data(&self, version: RpcVersion) -> Option<serde_json::Value> {
+    pub fn data(&self, _version: RpcVersion) -> Option<serde_json::Value> {
         // We purposefully don't use a catch-all branch to force us to update
         // here whenever a new variant is added. This will prevent adding a stateful
         // error variant but forgetting to forward its data.
@@ -282,20 +260,11 @@ impl ApplicationError {
             ApplicationError::InvalidContinuationToken => None,
             ApplicationError::InvalidContractClass => None,
             ApplicationError::ClassAlreadyDeclared => None,
-            ApplicationError::InvalidTransactionNonce { data } => {
-                if version >= RpcVersion::V09 {
-                    Some(json!(data))
-                } else {
-                    None
-                }
-            }
+            ApplicationError::InvalidTransactionNonce { data } => Some(json!(data)),
             ApplicationError::InsufficientResourcesForValidate => None,
             ApplicationError::InsufficientAccountBalance => None,
             ApplicationError::ValidationFailure => None,
-            ApplicationError::CompilationFailed { data } => match version {
-                RpcVersion::V06 | RpcVersion::V07 => None,
-                _ => Some(json!(data)),
-            },
+            ApplicationError::CompilationFailed { data } => Some(json!(data)),
             ApplicationError::ContractClassSizeIsTooLarge => None,
             ApplicationError::NonAccount => None,
             ApplicationError::DuplicateTransaction => None,
@@ -316,21 +285,14 @@ impl ApplicationError {
             })),
             ApplicationError::TransactionExecutionError {
                 transaction_index,
-                error,
+                error: _,
                 error_stack,
             } => {
-                if version >= RpcVersion::V08 {
-                    let error_stack = error_stack_frames_to_json(&error_stack.0);
-                    Some(json!({
-                        "transaction_index": transaction_index,
-                        "execution_error": error_stack,
-                    }))
-                } else {
-                    Some(json!({
-                        "transaction_index": transaction_index,
-                        "execution_error": error,
-                    }))
-                }
+                let error_stack = error_stack_frames_to_json(&error_stack.0);
+                Some(json!({
+                    "transaction_index": transaction_index,
+                    "execution_error": error_stack,
+                }))
             }
             ApplicationError::Internal(_) => None,
             ApplicationError::Custom(cause) => {
@@ -347,19 +309,13 @@ impl ApplicationError {
                 "error": error,
             })),
             ApplicationError::ContractError {
-                revert_error,
+                revert_error: _,
                 revert_error_stack,
             } => {
-                if version >= RpcVersion::V08 {
-                    let revert_error_stack = error_stack_frames_to_json(&revert_error_stack.0);
-                    Some(json!({
-                        "revert_error": revert_error_stack
-                    }))
-                } else {
-                    Some(json!({
-                        "revert_error": revert_error
-                    }))
-                }
+                let revert_error_stack = error_stack_frames_to_json(&revert_error_stack.0);
+                Some(json!({
+                    "revert_error": revert_error_stack
+                }))
             }
             ApplicationError::TooManyKeysInFilter { limit, requested } => Some(json!({
                 "limit": limit,

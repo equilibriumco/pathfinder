@@ -7,29 +7,14 @@ impl crate::dto::SerializeForVersion for pathfinder_executor::types::FeeEstimate
     ) -> Result<crate::dto::Ok, crate::dto::Error> {
         let mut serializer = serializer.serialize_struct()?;
 
-        if serializer.version >= crate::dto::RpcVersion::V08 {
-            serializer.serialize_field("l1_gas_consumed", &U256Hex(self.l1_gas_consumed))?;
-            serializer.serialize_field("l1_gas_price", &U256Hex(self.l1_gas_price))?;
-            serializer
-                .serialize_field("l1_data_gas_consumed", &U256Hex(self.l1_data_gas_consumed))?;
-            serializer.serialize_field("l1_data_gas_price", &U256Hex(self.l1_data_gas_price))?;
-            serializer.serialize_field("l2_gas_consumed", &U256Hex(self.l2_gas_consumed))?;
-            serializer.serialize_field("l2_gas_price", &U256Hex(self.l2_gas_price))?;
-            serializer.serialize_field("overall_fee", &U256Hex(self.overall_fee))?;
-            serializer.serialize_field("unit", &self.unit)?;
-        } else if serializer.version >= crate::dto::RpcVersion::V07 {
-            serializer.serialize_field("gas_price", &U256Hex(self.l1_gas_price))?;
-            serializer.serialize_field("gas_consumed", &U256Hex(self.l1_gas_consumed))?;
-            serializer.serialize_field("data_gas_consumed", &U256Hex(self.l1_data_gas_consumed))?;
-            serializer.serialize_field("data_gas_price", &U256Hex(self.l1_data_gas_price))?;
-            serializer.serialize_field("overall_fee", &U256Hex(self.overall_fee))?;
-            serializer.serialize_field("unit", &self.unit)?;
-        } else {
-            serializer.serialize_field("gas_price", &U256Hex(self.l1_gas_price))?;
-            serializer.serialize_field("gas_consumed", &U256Hex(self.l1_gas_consumed))?;
-            serializer.serialize_field("overall_fee", &U256Hex(self.overall_fee))?;
-            serializer.serialize_field("unit", &self.unit)?;
-        }
+        serializer.serialize_field("l1_gas_consumed", &U256Hex(self.l1_gas_consumed))?;
+        serializer.serialize_field("l1_gas_price", &U256Hex(self.l1_gas_price))?;
+        serializer.serialize_field("l1_data_gas_consumed", &U256Hex(self.l1_data_gas_consumed))?;
+        serializer.serialize_field("l1_data_gas_price", &U256Hex(self.l1_data_gas_price))?;
+        serializer.serialize_field("l2_gas_consumed", &U256Hex(self.l2_gas_consumed))?;
+        serializer.serialize_field("l2_gas_price", &U256Hex(self.l2_gas_price))?;
+        serializer.serialize_field("overall_fee", &U256Hex(self.overall_fee))?;
+        serializer.serialize_field("unit", &self.unit)?;
         serializer.end()
     }
 }
@@ -55,7 +40,7 @@ mod tests {
     use crate::dto::SerializeForVersion;
 
     #[test]
-    fn fee_estimate_v06_serialization() {
+    fn fee_estimate_serialization() {
         let fee = FeeEstimate {
             l1_gas_consumed: U256::from(100),
             l1_gas_price: U256::from(50),
@@ -67,13 +52,17 @@ mod tests {
             unit: PriceUnit::Wei,
         };
 
-        let serializer = crate::dto::Serializer::new(crate::dto::RpcVersion::V06);
+        let serializer = crate::dto::Serializer::new(crate::dto::RpcVersion::V09);
         let result = serde_json::to_value(fee.serialize(serializer).unwrap()).unwrap();
 
         let expected = serde_json::json!({
-            "gas_consumed": "0x64",  // 100
-            "gas_price": "0x32",     // 50
-            "overall_fee": "0x3e8",   // 1000
+            "l1_gas_consumed": "0x64",       // 100
+            "l1_gas_price": "0x32",          // 50
+            "l1_data_gas_consumed": "0xc8",  // 200
+            "l1_data_gas_price": "0x19",     // 25
+            "l2_gas_consumed": "0x12c",      // 300
+            "l2_gas_price": "0xa",           // 10
+            "overall_fee": "0x3e8",          // 1000
             "unit": "WEI"
         });
 

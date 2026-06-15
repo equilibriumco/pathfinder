@@ -74,13 +74,9 @@ impl crate::dto::DeserializeForVersion for Option<Params> {
 
                 opt_address
             };
-            let finality_status = if version < RpcVersion::V09 {
-                NewTxnFinalityStatus::default()
-            } else {
-                value
-                    .deserialize_optional("finality_status")?
-                    .unwrap_or_default()
-            };
+            let finality_status = value
+                .deserialize_optional("finality_status")?
+                .unwrap_or_default();
             Ok(Some(Params {
                 from_addresses: HashSet::from_iter(raw_addresses.into_iter().map(ContractAddress)),
                 keys: value.deserialize_optional_array("keys", |value| {
@@ -116,9 +112,7 @@ impl crate::dto::SerializeForVersion for EventWithFinality {
         let mut serializer = serializer.serialize_struct()?;
 
         serializer.flatten(&self.event)?;
-        if serializer.version >= RpcVersion::V09 {
-            serializer.serialize_field("finality_status", &self.finality)?;
-        }
+        serializer.serialize_field("finality_status", &self.finality)?;
 
         serializer.end()
     }
@@ -521,12 +515,12 @@ mod tests {
     use crate::jsonrpc::websocket::WebsocketHistory;
     use crate::jsonrpc::{handle_json_rpc_socket, RpcResponse, RpcRouter, RpcSubscriptionFlow};
     use crate::method::subscribe_events::SubscribeEvents;
-    use crate::{v06, v07, v08, v09, v10, Notifications, Reorg, RpcVersion};
+    use crate::{v09, v10, Notifications, Reorg, RpcVersion};
 
     #[tokio::test]
     async fn no_filtering() {
         let num_blocks = SubscribeEvents::CATCH_UP_BATCH_SIZE + 10;
-        let (router, _pending_data_cache) = setup(num_blocks, RpcVersion::V08).await;
+        let (router, _pending_data_cache) = setup(num_blocks, RpcVersion::V09).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
         handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
@@ -557,7 +551,7 @@ mod tests {
             _ => panic!("Expected text message"),
         };
         for i in 0..num_blocks {
-            let expected = sample_event_message(i, subscription_id, RpcVersion::V08);
+            let expected = sample_event_message(i, subscription_id, RpcVersion::V09);
             let event = sender_rx.recv().await.unwrap().unwrap();
             let json: serde_json::Value = match event {
                 Message::Text(json) => serde_json::from_str(&json).unwrap(),
@@ -575,7 +569,7 @@ mod tests {
             })
             .await
             .unwrap();
-            let expected = sample_event_message(i, subscription_id, RpcVersion::V08);
+            let expected = sample_event_message(i, subscription_id, RpcVersion::V09);
             let event = sender_rx.recv().await.unwrap().unwrap();
             let json: serde_json::Value = match event {
                 Message::Text(json) => serde_json::from_str(&json).unwrap(),
@@ -589,7 +583,7 @@ mod tests {
     #[tokio::test]
     async fn filter_from_address() {
         let (router, _pending_data_cache) =
-            setup(SubscribeEvents::CATCH_UP_BATCH_SIZE + 10, RpcVersion::V08).await;
+            setup(SubscribeEvents::CATCH_UP_BATCH_SIZE + 10, RpcVersion::V09).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
         handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
@@ -622,7 +616,7 @@ mod tests {
             }
             _ => panic!("Expected text message"),
         };
-        let expected = sample_event_message(0x16, subscription_id, RpcVersion::V08);
+        let expected = sample_event_message(0x16, subscription_id, RpcVersion::V09);
         let event = sender_rx.recv().await.unwrap().unwrap();
         let json: serde_json::Value = match event {
             Message::Text(json) => serde_json::from_str(&json).unwrap(),
@@ -644,7 +638,7 @@ mod tests {
             .l2_blocks
             .send(sample_block(0x16).into())
             .unwrap();
-        let expected = sample_event_message(0x16, subscription_id, RpcVersion::V08);
+        let expected = sample_event_message(0x16, subscription_id, RpcVersion::V09);
         let event = sender_rx.recv().await.unwrap().unwrap();
         let json: serde_json::Value = match event {
             Message::Text(json) => serde_json::from_str(&json).unwrap(),
@@ -657,7 +651,7 @@ mod tests {
     #[tokio::test]
     async fn filter_keys() {
         let (router, _pending_data_cache) =
-            setup(SubscribeEvents::CATCH_UP_BATCH_SIZE + 10, RpcVersion::V08).await;
+            setup(SubscribeEvents::CATCH_UP_BATCH_SIZE + 10, RpcVersion::V09).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
         handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
@@ -690,7 +684,7 @@ mod tests {
             }
             _ => panic!("Expected text message"),
         };
-        let expected = sample_event_message(0x16, subscription_id, RpcVersion::V08);
+        let expected = sample_event_message(0x16, subscription_id, RpcVersion::V09);
         let event = sender_rx.recv().await.unwrap().unwrap();
         let json: serde_json::Value = match event {
             Message::Text(json) => serde_json::from_str(&json).unwrap(),
@@ -712,7 +706,7 @@ mod tests {
             .l2_blocks
             .send(sample_block(0x16).into())
             .unwrap();
-        let expected = sample_event_message(0x16, subscription_id, RpcVersion::V08);
+        let expected = sample_event_message(0x16, subscription_id, RpcVersion::V09);
         let event = sender_rx.recv().await.unwrap().unwrap();
         let json: serde_json::Value = match event {
             Message::Text(json) => serde_json::from_str(&json).unwrap(),
@@ -1128,7 +1122,7 @@ mod tests {
     #[tokio::test]
     async fn too_many_keys_filter() {
         let (router, _pending_data_cache) =
-            setup(SubscribeEvents::CATCH_UP_BATCH_SIZE + 10, RpcVersion::V08).await;
+            setup(SubscribeEvents::CATCH_UP_BATCH_SIZE + 10, RpcVersion::V09).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
         handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
@@ -1193,7 +1187,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn reorg() {
-        let (router, _pending_data_cache) = setup(1, RpcVersion::V08).await;
+        let (router, _pending_data_cache) = setup(1, RpcVersion::V09).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
         handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
@@ -1239,7 +1233,8 @@ mod tests {
                         "data": ["0x2", "0x3", "0x5"],
                         "from_address": "0x0",
                         "keys": ["0x0", "0x1", "0x2"],
-                        "transaction_hash": "0x0"
+                        "transaction_hash": "0x0",
+                        "finality_status": "ACCEPTED_ON_L2"
                     },
                     "subscription_id": subscription_id.to_string()
                 }
@@ -1284,7 +1279,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_with_pending_block() {
-        let (router, _pending_data_cache) = setup(1, RpcVersion::V08).await;
+        let (router, _pending_data_cache) = setup(1, RpcVersion::V09).await;
         let (sender_tx, mut sender_rx) = mpsc::channel(1024);
         let (receiver_tx, receiver_rx) = mpsc::channel(1024);
         handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
@@ -1366,9 +1361,6 @@ mod tests {
             .with_pending_data_cache(pending_data_cache.clone())
             .with_websockets(WebsocketContext::for_test(WebsocketHistory::Unlimited));
         match version {
-            RpcVersion::V06 => (v06::register_routes().build(ctx), pending_data_cache),
-            RpcVersion::V07 => (v07::register_routes().build(ctx), pending_data_cache),
-            RpcVersion::V08 => (v08::register_routes().build(ctx), pending_data_cache),
             RpcVersion::V09 => (v09::register_routes().build(ctx), pending_data_cache),
             RpcVersion::V10 => (v10::register_routes().build(ctx), pending_data_cache),
             RpcVersion::PathfinderV01 => {
@@ -1501,9 +1493,7 @@ mod tests {
             "block_hash": Felt::from_u64(100 * block_number),
             "transaction_hash": Felt::from_u64(1000 * block_number),
         });
-        if version >= RpcVersion::V09 {
-            result["finality_status"] = "ACCEPTED_ON_L2".into();
-        }
+        result["finality_status"] = "ACCEPTED_ON_L2".into();
         if version >= RpcVersion::V10 {
             result["transaction_index"] = 0.into();
             result["event_index"] = 0.into();
@@ -1522,7 +1512,7 @@ mod tests {
         block_number: u64,
         subscription_id: u64,
     ) -> serde_json::Value {
-        let mut message = sample_event_message(block_number, subscription_id, RpcVersion::V08);
+        let mut message = sample_event_message(block_number, subscription_id, RpcVersion::V09);
         message["params"]["result"]
             .as_object_mut()
             .unwrap()

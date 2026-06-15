@@ -131,7 +131,7 @@ mod tests {
             ]);
 
             let input =
-                Input::deserialize(crate::dto::Value::new(positional, RpcVersion::V07)).unwrap();
+                Input::deserialize(crate::dto::Value::new(positional, RpcVersion::V09)).unwrap();
             let expected = Input {
                 block_id: block_hash!("0xabcde").into(),
                 contract_address: contract_address!("0x12345"),
@@ -146,7 +146,7 @@ mod tests {
                 "contract_address": "0x12345"
             });
 
-            let input = Input::deserialize(crate::dto::Value::new(named, RpcVersion::V07)).unwrap();
+            let input = Input::deserialize(crate::dto::Value::new(named, RpcVersion::V09)).unwrap();
             let expected = Input {
                 block_id: block_hash!("0xabcde").into(),
                 contract_address: contract_address!("0x12345"),
@@ -158,9 +158,6 @@ mod tests {
     const RPC_VERSION: RpcVersion = RpcVersion::V09;
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -181,9 +178,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -228,9 +222,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -242,25 +233,13 @@ mod tests {
             contract_address: contract_address_bytes!(b"prelatest contract 0 address"),
         };
         let r = get_class_at(context.clone(), input, version).await;
-        if version >= RpcVersion::V09 {
-            r.unwrap();
-        } else {
-            // JSON-RPC version before 0.9 are expected to ignore the pre-latest block.
-            let err = r.unwrap_err();
-            assert_matches!(err, Error::ContractNotFound);
-        }
+        r.unwrap();
 
         let input = Input {
             block_id: BlockId::PreConfirmed,
             contract_address: contract_address_bytes!(b"preconfirmed contract 0 address"),
         };
         let r = get_class_at(context, input, version).await;
-        if version >= RpcVersion::V09 {
-            r.unwrap();
-        } else {
-            // JSON-RPC version before 0.9 are expected to ignore the pre-confirmed block.
-            let err = r.unwrap_err();
-            assert_matches!(err, Error::ContractNotFound);
-        }
+        r.unwrap();
     }
 }
