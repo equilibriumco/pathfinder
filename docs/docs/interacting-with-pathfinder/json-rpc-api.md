@@ -7,14 +7,10 @@ sidebar_position: 1
 The JSON-RPC interface allows you to query Starknet data, send transactions, and perform contract calls without going through a formal transaction on-chain. Pathfinder currently supports multiple API versions and a distinct set of custom extensions.
 
 ## Supported Versions
-- **JSON-RPC v0.6.0**
-  Accessible at the `/rpc/v0_6` endpoint.
-- **JSON-RPC v0.7.1**
-  Accessible at the `/rpc/v0_7` endpoint.
-- **JSON-RPC v0.8.1**
-  Accessible at the `/rpc/v0_8` endpoint.
 - **JSON-RPC v0.9.0**
   Accessible at the `/rpc/v0_9` endpoint.
+- **JSON-RPC v0.10**
+  Accessible at the `/rpc/v0_10` endpoint.
 - **Pathfinder Extension**
   Exposed via `/rpc/pathfinder/v0_1`.
 
@@ -34,13 +30,13 @@ Below is a typical JSON-RPC request structure:
 }
 ```
 
-You’ll receive a response in a similar JSON-RPC 2.0 format containing `result` or `error` fields. For instance, to query the chain ID using v0.8:
+You’ll receive a response in a similar JSON-RPC 2.0 format containing `result` or `error` fields. For instance, to query the chain ID using v0.9:
 
 ```bash
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"starknet_chainId","params":[],"id":1}' \
-  http://127.0.0.1:9545/rpc/v0_8
+  http://127.0.0.1:9545/rpc/v0_9
 ```
 
 A successful response might look like this:
@@ -72,7 +68,7 @@ A successful response might look like this:
           }],
           "id":1
         }' \
-    http://127.0.0.1:9545/rpc/v0_7
+    http://127.0.0.1:9545/rpc/v0_9
   ```
 </details>
 
