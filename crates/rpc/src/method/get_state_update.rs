@@ -158,8 +158,8 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::pending_by_position(json!(["pending"]), BlockId::PreConfirmed)]
-    #[case::pending_by_name(json!({"block_id": "pending"}), BlockId::PreConfirmed)]
+    #[case::pre_confirmed_by_position(json!(["pre_confirmed"]), BlockId::PreConfirmed)]
+    #[case::pre_confirmed_by_name(json!({"block_id": "pre_confirmed"}), BlockId::PreConfirmed)]
     #[case::latest_by_position(json!(["latest"]), BlockId::Latest)]
     #[case::latest_by_name(json!({"block_id": "latest"}), BlockId::Latest)]
     #[case::number_by_position(json!([{"block_number":123}]), BlockNumber::new_or_panic(123).into())]
@@ -167,7 +167,7 @@ mod tests {
     #[case::hash_by_position(json!([{"block_hash": "0xbeef"}]), block_hash!("0xbeef").into())]
     #[case::hash_by_name(json!({"block_id": {"block_hash": "0xbeef"}}), block_hash!("0xbeef").into())]
     fn input_parsing(#[case] input: serde_json::Value, #[case] block_id: BlockId) {
-        let input = Input::deserialize(crate::dto::Value::new(input, RpcVersion::V07)).unwrap();
+        let input = Input::deserialize(crate::dto::Value::new(input, RpcVersion::V09)).unwrap();
 
         let expected = Input {
             block_id,
@@ -423,16 +423,5 @@ mod tests {
             .unwrap()
             .unwrap_pending();
         assert_eq!(result, expected);
-
-        let result = get_state_update(context.clone(), input.clone(), RpcVersion::V08)
-            .await
-            .unwrap()
-            .unwrap_pending();
-        assert_eq!(
-            result,
-            StateUpdate::default()
-                .with_parent_state_commitment(expected.parent_state_commitment)
-                .into()
-        );
     }
 }

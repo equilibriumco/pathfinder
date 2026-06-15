@@ -117,7 +117,7 @@ mod tests {
         fn positional_args() {
             let positional_json = json!(["0xdeadbeef"]);
 
-            let positional = crate::dto::Value::new(positional_json, crate::RpcVersion::V08);
+            let positional = crate::dto::Value::new(positional_json, crate::RpcVersion::V09);
 
             let input = Input::deserialize(positional).unwrap();
             assert_eq!(
@@ -135,7 +135,7 @@ mod tests {
                 "transaction_hash": "0xdeadbeef"
             });
 
-            let named = crate::dto::Value::new(named_args_json, crate::RpcVersion::V08);
+            let named = crate::dto::Value::new(named_args_json, crate::RpcVersion::V09);
 
             let input = Input::deserialize(named).unwrap();
             assert_eq!(
@@ -154,9 +154,6 @@ mod tests {
     use crate::RpcVersion;
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -178,9 +175,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -195,12 +189,6 @@ mod tests {
 
         match version {
             RpcVersion::PathfinderV01 => unreachable!(),
-            RpcVersion::V06 | RpcVersion::V07 | RpcVersion::V08 => {
-                assert_matches::assert_matches!(
-                    result,
-                    Err(GetTransactionByHashError::TxnHashNotFound)
-                );
-            }
             RpcVersion::V09 => {
                 let output_json = result.unwrap().serialize(Serializer { version }).unwrap();
                 let expected_json: serde_json::Value = serde_json::from_str(include_str!(
@@ -221,9 +209,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -238,12 +223,6 @@ mod tests {
 
         match version {
             RpcVersion::PathfinderV01 => unreachable!(),
-            RpcVersion::V06 | RpcVersion::V07 | RpcVersion::V08 => {
-                assert_matches::assert_matches!(
-                    result,
-                    Err(GetTransactionByHashError::TxnHashNotFound)
-                );
-            }
             RpcVersion::V09 => {
                 let output_json = result.unwrap().serialize(Serializer { version }).unwrap();
                 let expected_json: serde_json::Value = serde_json::from_str(include_str!(
@@ -264,9 +243,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[case::v10(RpcVersion::V10)]
     #[tokio::test]
@@ -289,14 +265,6 @@ mod tests {
             response_flags: TransactionResponseFlags::default(),
         };
         let output = get_transaction_by_hash(context, input, version).await;
-
-        if version < RpcVersion::V09 {
-            assert_matches::assert_matches!(
-                output,
-                Err(GetTransactionByHashError::TxnHashNotFound)
-            );
-            return;
-        }
 
         let output_json = output.unwrap().serialize(Serializer { version }).unwrap();
 

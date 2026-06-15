@@ -624,7 +624,7 @@ mod tests {
             }
         )]
         fn parsing_input(#[case] input: serde_json::Value, #[case] expected: Input) {
-            let input = Input::deserialize(crate::dto::Value::new(input, RpcVersion::V07)).unwrap();
+            let input = Input::deserialize(crate::dto::Value::new(input, RpcVersion::V09)).unwrap();
 
             assert_eq!(input, expected);
         }

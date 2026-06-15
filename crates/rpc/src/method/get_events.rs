@@ -801,7 +801,7 @@ mod tests {
         let expected = GetEventsInput { filter };
 
         let input =
-            GetEventsInput::deserialize(crate::dto::Value::new(input, RpcVersion::V07)).unwrap();
+            GetEventsInput::deserialize(crate::dto::Value::new(input, RpcVersion::V09)).unwrap();
         assert_eq!(input, expected);
     }
 

@@ -5,8 +5,8 @@ use pathfinder_common::{BlockHash, BlockNumber, TransactionHash, TransactionVers
 use serde::ser::Error;
 
 use super::H256Hex;
+use crate::dto;
 use crate::dto::{SerializeForVersion, Serializer};
-use crate::{dto, RpcVersion};
 
 #[derive(Copy, Clone)]
 pub enum TxnStatus {
@@ -176,14 +176,8 @@ impl SerializeForVersion for TxnReceiptWithBlockInfo<'_> {
         })?;
 
         serializer.serialize_optional("block_hash", block_hash.cloned())?;
-        // Block number is required for V09 and later versions. For older versions
-        // we only ever serialize it if `block_hash` is present, that is, the block is
-        // finalized.
-        if (serializer.version >= RpcVersion::V09)
-            || (serializer.version < RpcVersion::V09 && block_hash.is_some())
-        {
-            serializer.serialize_field("block_number", block_number)?;
-        }
+        // Block number is required.
+        serializer.serialize_field("block_number", block_number)?;
 
         serializer.end()
     }
@@ -382,37 +376,11 @@ impl SerializeForVersion for MsgToL1<'_> {
 
 impl SerializeForVersion for ExecutionResources<'_> {
     fn serialize(&self, serializer: Serializer) -> Result<crate::dto::Ok, crate::dto::Error> {
-        struct DataAvailability<'a>(&'a pathfinder_common::receipt::L1Gas);
-
-        impl SerializeForVersion for DataAvailability<'_> {
-            fn serialize(
-                &self,
-                serializer: Serializer,
-            ) -> Result<crate::dto::Ok, crate::dto::Error> {
-                let mut serializer = serializer.serialize_struct()?;
-
-                serializer.serialize_field("l1_gas", &self.0.l1_gas)?;
-                serializer.serialize_field("l1_data_gas", &self.0.l1_data_gas)?;
-
-                serializer.end()
-            }
-        }
-
         let mut serializer = serializer.serialize_struct()?;
 
-        if serializer.version < RpcVersion::V08 {
-            serializer.flatten(&ComputationResources(self.0))?;
-            if serializer.version > RpcVersion::V06 {
-                serializer.serialize_field(
-                    "data_availability",
-                    &DataAvailability(&self.0.data_availability),
-                )?;
-            }
-        } else {
-            serializer.serialize_field("l1_gas", &self.0.total_gas_consumed.l1_gas)?;
-            serializer.serialize_field("l1_data_gas", &self.0.total_gas_consumed.l1_data_gas)?;
-            serializer.serialize_field("l2_gas", &self.0.l2_gas)?;
-        }
+        serializer.serialize_field("l1_gas", &self.0.total_gas_consumed.l1_gas)?;
+        serializer.serialize_field("l1_data_gas", &self.0.total_gas_consumed.l1_data_gas)?;
+        serializer.serialize_field("l2_gas", &self.0.l2_gas)?;
 
         serializer.end()
     }

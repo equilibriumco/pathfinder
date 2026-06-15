@@ -34,15 +34,11 @@ pub mod subscribe_events;
 pub mod subscribe_new_heads;
 pub mod subscribe_new_transaction_receipts;
 pub mod subscribe_new_transactions;
-pub mod subscribe_pending_transactions;
 pub mod subscribe_transaction_status;
 pub mod syncing;
 pub mod trace_block_transactions;
 pub mod trace_transaction;
 
-pub use add_declare_transaction::add_declare_transaction;
-pub use add_deploy_account_transaction::add_deploy_account_transaction;
-pub use add_invoke_transaction::add_invoke_transaction;
 pub use block_hash_and_number::block_hash_and_number;
 pub use block_number::block_number;
 pub use call::call;

@@ -82,7 +82,7 @@ mod tests {
             .unwrap();
         let rpc_error = crate::jsonrpc::RpcError::from(error);
         let error_json = rpc_error
-            .serialize(Serializer::new(RpcVersion::V07))
+            .serialize(Serializer::new(RpcVersion::V09))
             .unwrap();
 
         let expected = json!({

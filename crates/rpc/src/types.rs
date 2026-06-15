@@ -1428,7 +1428,7 @@ pub mod request {
                 assert_eq!(
                     SubscriptionBlockId::deserialize(crate::dto::Value::new(
                         input,
-                        crate::RpcVersion::V08
+                        crate::RpcVersion::V09
                     ))
                     .unwrap(),
                     expected
@@ -1440,7 +1440,7 @@ pub mod request {
                 assert_eq!(
                     SubscriptionBlockId::deserialize(crate::dto::Value::new(
                         json!("pending"),
-                        crate::RpcVersion::V08
+                        crate::RpcVersion::V09
                     ))
                     .unwrap_err()
                     .to_string(),
@@ -1694,27 +1694,11 @@ mod tests {
             l1_data_gas: None,
         };
 
-        // Test V07 serialization (should not include l1_data_gas)
-        let v07_serialized = resource_bounds
-            .serialize(crate::dto::Serializer::new(RpcVersion::V07))
+        // Test serialization (should include l1_data_gas)
+        let v09_serialized = resource_bounds
+            .serialize(crate::dto::Serializer::new(RpcVersion::V09))
             .unwrap();
-        let v07_expected = json!({
-            "l1_gas": {
-                "max_amount": "0x64",
-                "max_price_per_unit": "0xc8"
-            },
-            "l2_gas": {
-                "max_amount": "0x64",
-                "max_price_per_unit": "0xc8"
-            }
-        });
-        assert_eq!(v07_serialized, v07_expected);
-
-        // Test V08 serialization (should include l1_data_gas)
-        let v08_serialized = resource_bounds
-            .serialize(crate::dto::Serializer::new(RpcVersion::V08))
-            .unwrap();
-        let v08_expected = json!({
+        let v09_expected = json!({
             "l1_gas": {
                 "max_amount": "0x64",
                 "max_price_per_unit": "0xc8"
@@ -1728,13 +1712,13 @@ mod tests {
                 "max_price_per_unit": "0xc8"
             }
         });
-        assert_eq!(v08_serialized, v08_expected);
+        assert_eq!(v09_serialized, v09_expected);
 
-        // Test V08 serialization with None l1_data_gas (should default to 0,0)
-        let v08_serialized_none = resource_bounds_no_data
-            .serialize(crate::dto::Serializer::new(RpcVersion::V08))
+        // Test serialization with None l1_data_gas (should default to 0,0)
+        let v09_serialized_none = resource_bounds_no_data
+            .serialize(crate::dto::Serializer::new(RpcVersion::V09))
             .unwrap();
-        let v08_expected_none = json!({
+        let v09_expected_none = json!({
             "l1_gas": {
                 "max_amount": "0x64",
                 "max_price_per_unit": "0xc8"
@@ -1748,24 +1732,17 @@ mod tests {
                 "max_price_per_unit": "0x0"
             }
         });
-        assert_eq!(v08_serialized_none, v08_expected_none);
+        assert_eq!(v09_serialized_none, v09_expected_none);
 
-        // Test V07 deserialization
-        let v07_value = Value::new(v07_expected, RpcVersion::V07);
-        let v07_deserialized = ResourceBounds::deserialize(v07_value).unwrap();
-        assert_eq!(v07_deserialized.l1_gas, resource_bound);
-        assert_eq!(v07_deserialized.l2_gas, resource_bound);
-        assert_eq!(v07_deserialized.l1_data_gas, None);
+        // Test deserialization
+        let v09_value = Value::new(v09_expected, RpcVersion::V09);
+        let v09_deserialized = ResourceBounds::deserialize(v09_value).unwrap();
+        assert_eq!(v09_deserialized.l1_gas, resource_bound);
+        assert_eq!(v09_deserialized.l2_gas, resource_bound);
+        assert_eq!(v09_deserialized.l1_data_gas, Some(resource_bound));
 
-        // Test V08 deserialization
-        let v08_value = Value::new(v08_expected, RpcVersion::V08);
-        let v08_deserialized = ResourceBounds::deserialize(v08_value).unwrap();
-        assert_eq!(v08_deserialized.l1_gas, resource_bound);
-        assert_eq!(v08_deserialized.l2_gas, resource_bound);
-        assert_eq!(v08_deserialized.l1_data_gas, Some(resource_bound));
-
-        // Test V08 deserialization fails when l1_data_gas is missing
-        let v08_missing_data = json!({
+        // Test deserialization fails when l1_data_gas is missing
+        let v09_missing_data = json!({
             "l1_gas": {
                 "max_amount": "0x64",
                 "max_price_per_unit": "0xc8"
@@ -1775,7 +1752,7 @@ mod tests {
                 "max_price_per_unit": "0xc8"
             }
         });
-        let v08_missing_value = Value::new(v08_missing_data, RpcVersion::V08);
-        assert!(ResourceBounds::deserialize(v08_missing_value).is_err());
+        let v09_missing_value = Value::new(v09_missing_data, RpcVersion::V09);
+        assert!(ResourceBounds::deserialize(v09_missing_value).is_err());
     }
 }

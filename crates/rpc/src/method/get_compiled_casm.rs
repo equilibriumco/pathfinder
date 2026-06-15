@@ -152,7 +152,7 @@ mod tests {
         let result = get_compiled_casm(rpc, input()).await.unwrap();
         let output = crate::dto::SerializeForVersion::serialize(
             &result,
-            crate::dto::Serializer::new(crate::RpcVersion::V08),
+            crate::dto::Serializer::new(crate::RpcVersion::V09),
         )
         .unwrap();
         let expected_output = serde_json::to_value(expected()).unwrap();

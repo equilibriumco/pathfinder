@@ -44,7 +44,7 @@ impl PendingWatcher {
     }
 
     /// Returns [PendingData] which has been validated against the latest block
-    /// available in storage and the JSON-RPC version.
+    /// available in storage.
     ///
     /// Returns an empty block with gas price and timestamp taken from the
     /// latest block if no valid pending data is available. The block number
@@ -52,20 +52,12 @@ impl PendingWatcher {
     pub fn get(
         &self,
         tx: &Transaction<'_>,
-        rpc_version: RpcVersion,
+        _rpc_version: RpcVersion,
     ) -> Result<PendingData, ReadError> {
         let latest = tx
             .block_header(pathfinder_common::BlockId::Latest)
             .context("Querying latest block header")?
             .unwrap_or_default();
-
-        // The pre-confirmed block is to be only ever used on JSON-RPC 0.9 and up.
-        // Older versions did have the semantics that expected that pending block
-        // contents are L2_ACCEPTED, which is not the case for the pre-confirmed
-        // block.
-        if rpc_version < RpcVersion::V09 {
-            return Ok(PendingData::empty(&latest));
-        }
 
         let watched_pending_data = match self.cache.try_read() {
             Some(data) => data,
@@ -455,62 +447,6 @@ mod tests {
         assert!(!result.pre_confirmed_transactions().is_empty());
         // ..and we did not receive a pre-latest block.
         assert!(result.pre_latest_block().is_none());
-    }
-
-    #[test]
-    fn valid_pre_confirmed_is_not_used_for_old_rpc_versions() {
-        let cache = Arc::new(PendingDataCache::new());
-        let uut = PendingWatcher::new(cache.clone());
-
-        let mut storage = pathfinder_storage::StorageBuilder::in_memory()
-            .unwrap()
-            .connection()
-            .unwrap();
-
-        let latest = latest_block();
-
-        let tx = storage.transaction().unwrap();
-        tx.insert_block_header(&latest).unwrap();
-
-        let pending = valid_pre_confirmed_block(&latest);
-        cache.store(pending.clone());
-
-        let expected_empty_pending_data = PendingData::empty(&latest);
-
-        let result = uut.get(&tx, RpcVersion::V06).unwrap();
-        pretty_assertions_sorted::assert_eq_sorted!(result, expected_empty_pending_data);
-        let result = uut.get(&tx, RpcVersion::V07).unwrap();
-        pretty_assertions_sorted::assert_eq_sorted!(result, expected_empty_pending_data);
-        let result = uut.get(&tx, RpcVersion::V08).unwrap();
-        pretty_assertions_sorted::assert_eq_sorted!(result, expected_empty_pending_data);
-    }
-
-    #[test]
-    fn valid_pre_confirmed_with_pre_latest_is_not_used_for_old_rpc_versions() {
-        let cache = Arc::new(PendingDataCache::new());
-        let uut = PendingWatcher::new(cache.clone());
-
-        let mut storage = pathfinder_storage::StorageBuilder::in_memory()
-            .unwrap()
-            .connection()
-            .unwrap();
-
-        let latest = latest_block();
-
-        let tx = storage.transaction().unwrap();
-        tx.insert_block_header(&latest).unwrap();
-
-        let pending = valid_pre_confirmed_block_with_pre_latest(&latest);
-        cache.store(pending.clone());
-
-        let expected_empty_pending_data = PendingData::empty(&latest);
-
-        let result = uut.get(&tx, RpcVersion::V06).unwrap();
-        pretty_assertions_sorted::assert_eq_sorted!(result, expected_empty_pending_data);
-        let result = uut.get(&tx, RpcVersion::V07).unwrap();
-        pretty_assertions_sorted::assert_eq_sorted!(result, expected_empty_pending_data);
-        let result = uut.get(&tx, RpcVersion::V08).unwrap();
-        pretty_assertions_sorted::assert_eq_sorted!(result, expected_empty_pending_data);
     }
 
     #[test]

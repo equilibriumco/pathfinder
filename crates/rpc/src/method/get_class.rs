@@ -125,7 +125,7 @@ mod tests {
             ]);
 
             let input =
-                Input::deserialize(crate::dto::Value::new(positional, RpcVersion::V07)).unwrap();
+                Input::deserialize(crate::dto::Value::new(positional, RpcVersion::V09)).unwrap();
             let expected = Input {
                 block_id: block_hash!("0xabcde").into(),
                 class_hash: class_hash!("0x12345"),
@@ -140,7 +140,7 @@ mod tests {
                 "class_hash": "0x12345"
             });
 
-            let input = Input::deserialize(crate::dto::Value::new(named, RpcVersion::V07)).unwrap();
+            let input = Input::deserialize(crate::dto::Value::new(named, RpcVersion::V09)).unwrap();
             let expected = Input {
                 block_id: block_hash!("0xabcde").into(),
                 class_hash: class_hash!("0x12345"),
@@ -207,9 +207,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::v06(RpcVersion::V06)]
-    #[case::v07(RpcVersion::V07)]
-    #[case::v08(RpcVersion::V08)]
     #[case::v09(RpcVersion::V09)]
     #[tokio::test]
     async fn pre_latest_and_pre_confirmed(#[case] version: RpcVersion) {
@@ -225,13 +222,7 @@ mod tests {
             version,
         )
         .await;
-        if version >= RpcVersion::V09 {
-            r.unwrap();
-        } else {
-            // JSON-RPC version before 0.9 are expected to ignore the pre-latest block.
-            let err = r.unwrap_err();
-            assert_matches!(err, Error::ClassHashNotFound);
-        }
+        r.unwrap();
 
         let valid_pre_confirmed = class_hash_bytes!(b"preconfirmed class 0 hash");
         let r = super::get_class(
@@ -243,13 +234,7 @@ mod tests {
             version,
         )
         .await;
-        if version >= RpcVersion::V09 {
-            r.unwrap();
-        } else {
-            // JSON-RPC version before 0.9 are expected to ignore the pre-confirmed block.
-            let err = r.unwrap_err();
-            assert_matches!(err, Error::ClassHashNotFound);
-        }
+        r.unwrap();
     }
 
     #[tokio::test]
