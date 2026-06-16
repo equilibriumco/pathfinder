@@ -1,7 +1,7 @@
 #![deny(rust_2018_idioms)]
 
 use std::net::SocketAddr;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -250,6 +250,9 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
         PendingDataCache::new().with_inactivity_timeout(config.pre_confirmed_idle_timeout),
     );
 
+    let compiler_concurrency_limit =
+        determine_compiler_concurrency_limit(&config, available_parallelism)?;
+
     let rpc_config = pathfinder_rpc::context::RpcConfig {
         request_max_size: config.rpc_request_max_size,
         request_timeout: config.rpc_request_timeout,
@@ -268,9 +271,7 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
         submission_tracker_time_limit: config.submission_tracker_time_limit,
         submission_tracker_size_limit: config.submission_tracker_size_limit,
         block_trace_cache_size: config.rpc_block_trace_cache_size,
-        compiler_concurrency_limit: config
-            .compiler_concurrency_limit
-            .unwrap_or(available_parallelism),
+        compiler_concurrency_limit,
         compiler_resource_limits: config.compiler_resource_limits,
         blockifier_libfuncs: config.blockifier_libfuncs,
     };
@@ -610,6 +611,58 @@ fn compile_main(config: CompileConfig) -> anyhow::Result<()> {
     std::io::stdout()
         .write_all(casm.as_slice())
         .context("writing CASM to stdout")
+}
+
+fn determine_compiler_concurrency_limit(
+    config: &config::Config,
+    available_parallelism: std::num::NonZero<usize>,
+) -> Result<std::num::NonZero<usize>, anyhow::Error> {
+    if let Some(limit) = config.compiler_concurrency_limit {
+        return Ok(limit);
+    }
+
+    const PATHFINDER_RAM_SAFE_OPERATION_MARGIN_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+    let mut system = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing()
+            .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
+    );
+    system.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram());
+    let total_memory_bytes = system.total_memory();
+    let compiler_memory_limit_bytes = config.compiler_resource_limits.memory_usage;
+
+    // Concurrency_Limit = min(floor((RAM - 4GiB) / RAM_Limit), n_CPUs)
+    let concurrency_limit = total_memory_bytes
+        .saturating_sub(PATHFINDER_RAM_SAFE_OPERATION_MARGIN_BYTES)
+        / compiler_memory_limit_bytes;
+    let num_cpus = u64::try_from(available_parallelism.get())?;
+    let concurrency_limit = usize::try_from(num_cpus.min(concurrency_limit))?;
+
+    let total_memory_mib = total_memory_bytes / (1024 * 1024);
+    let compiler_memory_limit_mib = compiler_memory_limit_bytes / (1024 * 1024);
+
+    if concurrency_limit == 0 {
+        anyhow::ensure!(
+            !config.is_rpc_enabled,
+            "Computed compiler concurrency limit is 0, which is insufficient for a running RPC \
+             server. Please decrease the compiler memory usage limit ({compiler_memory_limit_mib} \
+             MiB), increase system memory ({total_memory_mib} MiB), set a fixed compiler \
+             concurrency limit via --rpc.compiler.concurrency-limit, or disable the RPC server \
+             via --rpc.enable=false."
+        );
+
+        // Use a dummy value, the RPC server will not be started anyway, yet we need to
+        // construct a valid RPC config beforehand
+        Ok(NonZeroUsize::new(1).expect("1>0"))
+    } else {
+        tracing::info!(
+            "Computed compiler concurrency limit: {concurrency_limit}, based on total memory \
+             ({total_memory_mib} MiB), compiler memory limit ({compiler_memory_limit_mib} MiB), \
+             and number of CPUs ({num_cpus})"
+        );
+
+        Ok(NonZeroUsize::new(concurrency_limit).expect("Nonzero value"))
+    }
 }
 
 #[cfg(feature = "tokio-console")]

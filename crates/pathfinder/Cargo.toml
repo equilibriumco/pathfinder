@@ -70,6 +70,7 @@ sha3 = { workspace = true }
 starknet-gateway-client = { path = "../gateway-client" }
 starknet-gateway-types = { path = "../gateway-types" }
 starknet_api = { workspace = true }
+sysinfo = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tikv-jemallocator = { workspace = true }
