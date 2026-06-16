@@ -621,7 +621,7 @@ fn determine_compiler_concurrency_limit(
         return Ok(limit);
     }
 
-    const PATHFINDER_RAM_SAFE_OPERATION_MARGIN_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+    const PATHFINDER_RAM_SAFE_OPERATION_MARGIN_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
     let mut system = sysinfo::System::new_with_specifics(
         sysinfo::RefreshKind::nothing()
@@ -631,7 +631,7 @@ fn determine_compiler_concurrency_limit(
     let total_memory_bytes = system.total_memory();
     let compiler_memory_limit_bytes = config.compiler_resource_limits.memory_usage;
 
-    // Concurrency_Limit = min(floor((RAM - 4GiB) / RAM_Limit), n_CPUs)
+    // Concurrency_Limit = min(floor((RAM - Margin) / RAM_Limit), n_CPUs)
     let concurrency_limit = total_memory_bytes
         .saturating_sub(PATHFINDER_RAM_SAFE_OPERATION_MARGIN_BYTES)
         / compiler_memory_limit_bytes;
