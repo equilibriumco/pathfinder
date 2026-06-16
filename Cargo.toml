@@ -137,6 +137,7 @@ starknet-types-core = "=0.2.4"
 # This one needs to match the version used by blockifier
 starknet_api = { version = "0.19.0-rc.2" }
 syn = "2.0"
+sysinfo = "0.39.3"
 tempfile = "3.27"
 test-log = { version = "0.2.20", features = ["trace"] }
 thiserror = "2.0.18"
