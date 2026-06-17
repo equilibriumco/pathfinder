@@ -250,6 +250,15 @@ Examples:
     l1_poll_interval: std::num::NonZeroU64,
 
     #[arg(
+        long = "sync.poll-pre-confirmed-threshold",
+        long_help = "Once the node's latest and the actual latest block are within this many \
+                     blocks, the pre-confirmed polling loop will start.",
+        default_value = "6",
+        env = "PATHFINDER_POLL_PRE_CONFIRMED_THRESHOLD"
+    )]
+    poll_pre_confirmed_threshold: u64,
+
+    #[arg(
         long = "sync.pre-confirmed-idle-timeout",
         long_help = "Suspend pre-confirmed block polling after this many seconds without an RPC \
                      reading pending data. The loop resumes on the next read.",
@@ -1127,6 +1136,7 @@ pub struct Config {
     pub rpc_request_timeout: Duration,
     pub poll_interval: Duration,
     pub l1_poll_interval: Duration,
+    pub poll_pre_confirmed_threshold: u64,
     pub pre_confirmed_idle_timeout: Duration,
     pub color: Color,
     pub log_output_json: bool,
@@ -1431,6 +1441,7 @@ impl Config {
             rpc_request_timeout: args.rpc_request_timeout,
             poll_interval: args.poll_interval,
             l1_poll_interval: Duration::from_secs(args.l1_poll_interval.get()),
+            poll_pre_confirmed_threshold: args.poll_pre_confirmed_threshold,
             pre_confirmed_idle_timeout: Duration::from_secs(args.pre_confirmed_idle_timeout.get()),
             color: args.color,
             log_output_json: args.log_output_json,

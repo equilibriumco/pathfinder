@@ -113,6 +113,7 @@ pub struct SyncContext<G, E> {
     pub state: Arc<SyncState>,
     pub head_poll_interval: Duration,
     pub l1_poll_interval: Duration,
+    pub poll_pre_confirmed_threshold: u64,
     pub pending_data_cache: Arc<PendingDataCache>,
     pub submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker,
     pub block_validation_mode: l2::BlockValidationMode,
@@ -194,6 +195,7 @@ where
         state,
         head_poll_interval,
         l1_poll_interval: _,
+        poll_pre_confirmed_threshold,
         pending_data_cache,
         submitted_tx_tracker,
         block_validation_mode: _,
@@ -295,6 +297,7 @@ where
         pending_data_cache.clone(),
         rx_latest.clone(),
         rx_current.clone(),
+        poll_pre_confirmed_threshold,
     ));
 
     loop {
@@ -309,6 +312,7 @@ where
                     pending_data_cache.clone(),
                     rx_latest.clone(),
                     rx_current.clone(),
+                    poll_pre_confirmed_threshold,
                 ));
             },
             _ = &mut latest_handle => {
@@ -484,6 +488,7 @@ where
         state,
         head_poll_interval,
         l1_poll_interval: _,
+        poll_pre_confirmed_threshold: _,
         pending_data_cache,
         submitted_tx_tracker,
         block_validation_mode: _,
