@@ -10,10 +10,6 @@ use tokio::time::Instant;
 
 use crate::state::sync::SyncEvent;
 
-/// Maximum gap, in blocks, between `current` and `latest` for pre-confirmed
-/// polling. Beyond this we skip as the node is still catching up.
-const IN_SYNC_THRESHOLD: u64 = 6;
-
 #[derive(Debug)]
 struct State {
     /// Height we're currently polling.
@@ -128,6 +124,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
     cache: Arc<PendingDataCache>,
     latest: watch::Receiver<(BlockNumber, BlockHash)>,
     current: watch::Receiver<(BlockNumber, BlockHash)>,
+    in_sync_threshold: u64,
 ) {
     let mut state = State::default();
 
@@ -145,7 +142,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
         let (latest_number, latest_hash) = *latest.borrow();
         let current_number = current.borrow().0.get();
 
-        if latest_number.get().abs_diff(current_number) > IN_SYNC_THRESHOLD {
+        if latest_number.get().abs_diff(current_number) > in_sync_threshold {
             tracing::debug!(
                 latest = %latest_number.get(), current = %current_number,
                 "Not in sync yet; skipping pre-confirmed block download"
@@ -383,6 +380,7 @@ mod tests {
     use super::poll_pre_confirmed;
     use crate::state::sync::SyncEvent;
 
+    const TEST_IN_SYNC_THRESHOLD: u64 = 6;
     const PARENT_HASH: BlockHash = block_hash!("0x1234");
     const PARENT_ROOT: StateCommitment = state_commitment_bytes!(b"parent root");
 
@@ -573,6 +571,7 @@ mod tests {
                 Arc::new(PendingDataCache::new()),
                 latest,
                 current,
+                TEST_IN_SYNC_THRESHOLD,
             )
             .await
         });
@@ -671,6 +670,7 @@ mod tests {
                 Arc::new(PendingDataCache::new()),
                 rx_latest,
                 rx_current,
+                TEST_IN_SYNC_THRESHOLD,
             )
             .await
         });
@@ -827,6 +827,7 @@ mod tests {
                 Arc::new(PendingDataCache::new()),
                 rx_latest,
                 rx_current,
+                TEST_IN_SYNC_THRESHOLD,
             )
             .await
         });
@@ -1128,6 +1129,7 @@ mod tests {
                     cache,
                     rx_latest,
                     rx_current,
+                    TEST_IN_SYNC_THRESHOLD,
                 )
                 .await
             }
@@ -1180,6 +1182,7 @@ mod tests {
                     cache,
                     latest,
                     current,
+                    TEST_IN_SYNC_THRESHOLD,
                 )
                 .await
             }
@@ -1222,6 +1225,7 @@ mod tests {
                     cache,
                     latest,
                     current,
+                    TEST_IN_SYNC_THRESHOLD,
                 )
                 .await
             }
@@ -1334,6 +1338,7 @@ mod tests {
                 Arc::new(PendingDataCache::new()),
                 latest,
                 current,
+                TEST_IN_SYNC_THRESHOLD,
             )
             .await
         });
@@ -1420,8 +1425,16 @@ mod tests {
         let _jh = tokio::spawn({
             let cache = cache.clone();
             async move {
-                super::poll_pre_confirmed(tx, sequencer, POLL_INTERVAL, cache, latest, current)
-                    .await
+                super::poll_pre_confirmed(
+                    tx,
+                    sequencer,
+                    POLL_INTERVAL,
+                    cache,
+                    latest,
+                    current,
+                    TEST_IN_SYNC_THRESHOLD,
+                )
+                .await
             }
         });
 

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Pre-confirmed polling start threshold is now configurable with the `--sync.poll-pre-confirmed-threshold` CLI option.
+
 ### Changed
 
 - `CANDIDATE` transaction status is deprecated and will never be returned by gateway or pathfinder. Using it as a filter in `subscribeNewTransactions` will fall back to `PRE_CONFIRMED` with a warning.
