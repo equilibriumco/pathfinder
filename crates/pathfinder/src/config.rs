@@ -25,6 +25,11 @@ pub mod p2p;
 use p2p::cli::{P2PConsensusCli, P2PSyncCli};
 use p2p::{P2PConsensusConfig, P2PSyncConfig};
 
+const COMPILER_CONCURRENCY_LIMIT_DEFAULT_MEMORY_MARGIN_MIB: u64 = 4 * 1024;
+
+const COMPILER_CONCURRENCY_LIMIT_MEMORY_MARGIN_ALLOWED_RANGE: std::ops::RangeFrom<u64> =
+    (COMPILER_CONCURRENCY_LIMIT_DEFAULT_MEMORY_MARGIN_MIB / 2)..;
+
 const COMPILER_MEMORY_USAGE_ALLOWED_RANGE: std::ops::RangeInclusive<u64> =
     (pathfinder_compiler::ResourceLimits::RECOMMENDED_MEMORY_USAGE_LIMIT_MIB / 2)
         ..=(4 * pathfinder_compiler::ResourceLimits::RECOMMENDED_MEMORY_USAGE_LIMIT_MIB);
@@ -511,11 +516,28 @@ This should only be enabled for debugging purposes as it adds substantial proces
 
     #[arg(
         long = "rpc.compiler.concurrency-limit",
-        long_help = "Maximum number of concurrent Sierra to CASM compilations for RPC calls. \
-                     Defaults to the number of CPU cores available.",
+        long_help = "Maximum number of concurrent Sierra to CASM compilations for RPC calls.
+Default value is computed based on the formula:
+                     
+    min(floor((Total_RAM - Margin) / Compiler_Max_Memory_Usage), Num_CPU_Cores)
+                     
+where:
+    Margin is the value of --compiler.concurrency-memory-margin-mib
+    Compiler_Max_Memory_Usage is the value of --compiler.max-memory-usage-mib option.",
         env = "PATHFINDER_RPC_COMPILER_CONCURRENCY_LIMIT"
     )]
     compiler_concurrency_limit: Option<NonZeroUsize>,
+
+    #[arg(
+        long = "compiler.concurrency-memory-margin-mib",
+        long_help = "Memory margin assumed for normal operation when computing compiler concurrency limit in MiB. 
+
+See --rpc.compiler.concurrency-limit for more details.",
+        env = "PATHFINDER_COMPILER_CONCURRENCY_MEMORY_MARGIN_MIB",
+        default_value_t = COMPILER_CONCURRENCY_LIMIT_DEFAULT_MEMORY_MARGIN_MIB,
+        value_parser = clap::value_parser!(u64).range(COMPILER_CONCURRENCY_LIMIT_MEMORY_MARGIN_ALLOWED_RANGE),
+    )]
+    compiler_concurrency_memory_margin_mib: u64,
 
     #[arg(
         long = "compiler.max-memory-usage-mib",
@@ -1159,6 +1181,9 @@ pub struct Config {
     pub state_tries: Option<StateTries>,
     pub versioned_constants_map: VersionedConstantsMap,
     pub compiler_concurrency_limit: Option<NonZeroUsize>,
+    // Margin in bytes to subtract from total RAM when computing default compiler concurrency
+    // limit.
+    pub compiler_concurrency_memory_margin: u64,
     pub compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     pub blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
     pub feeder_gateway_fetch_concurrency: NonZeroUsize,
@@ -1419,6 +1444,8 @@ impl Config {
     pub fn parse(args: Box<NodeArgs>) -> Self {
         let network = NetworkConfig::from_components(args.network);
 
+        const BYTES_IN_MIB: u64 = 1024 * 1024;
+
         Config {
             data_directory: args.data_directory,
             ethereum: Ethereum {
@@ -1472,10 +1499,13 @@ impl Config {
                 .unwrap_or_default(),
             compiler_resource_limits: pathfinder_compiler::ResourceLimits::new(
                 // Convert MiB to bytes for the general config.
-                args.compiler_max_memory_usage_mib * 1024 * 1024,
+                args.compiler_max_memory_usage_mib * BYTES_IN_MIB,
                 args.compiler_max_cpu_time_secs,
             ),
             compiler_concurrency_limit: args.compiler_concurrency_limit,
+            // Convert MiB to bytes for the general config.
+            compiler_concurrency_memory_margin: args.compiler_concurrency_memory_margin_mib
+                * BYTES_IN_MIB,
             blockifier_libfuncs: args.compile_config.blockifier_libfuncs.into(),
             fetch_casm_from_fgw: args.fetch_casm_from_fgw,
             shutdown_grace_period: Duration::from_secs(args.shutdown_grace_period.get()),
