@@ -181,7 +181,7 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
     )?;
 
     let execution_storage_pool_size = config.execution_concurrency.unwrap_or_else(|| {
-        std::num::NonZeroU32::new(available_parallelism.get() as u32)
+        NonZeroU32::new(available_parallelism.get() as u32)
             .expect("The number of CPU cores should be non-zero")
     });
     let execution_storage = storage_manager
@@ -615,8 +615,8 @@ fn compile_main(config: CompileConfig) -> anyhow::Result<()> {
 
 fn determine_compiler_concurrency_limit(
     config: &config::Config,
-    available_parallelism: std::num::NonZero<usize>,
-) -> Result<std::num::NonZero<usize>, anyhow::Error> {
+    available_parallelism: NonZeroUsize,
+) -> anyhow::Result<NonZeroUsize> {
     if let Some(limit) = config.compiler_concurrency_limit {
         return Ok(limit);
     }
@@ -627,11 +627,11 @@ fn determine_compiler_concurrency_limit(
     );
     system.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram());
     let total_memory_bytes = system.total_memory();
-    let compiler_memory_limit_bytes = config.compiler_resource_limits.memory_usage;
 
     compute_compiler_concurrency_limit(
         total_memory_bytes,
-        compiler_memory_limit_bytes,
+        config.compiler_resource_limits.memory_usage,
+        config.compiler_concurrency_memory_margin,
         available_parallelism,
         config.is_rpc_enabled,
     )
@@ -639,7 +639,8 @@ fn determine_compiler_concurrency_limit(
 
 /// Computes the compiler concurrency limit from the available memory and CPUs.
 ///
-/// `Concurrency_Limit = min(floor((RAM - Margin) / RAM_Limit), n_CPUs)`
+/// `Concurrency_Limit = min(floor((System_RAM - Margin) / Compiler_RAM_Limit),
+/// n_CPUs)`
 ///
 /// Returns an error only when the computed limit is 0 and the RPC server is
 /// enabled, since a running RPC server requires at least one compiler. When the
@@ -649,29 +650,31 @@ fn determine_compiler_concurrency_limit(
 fn compute_compiler_concurrency_limit(
     total_memory_bytes: u64,
     compiler_memory_limit_bytes: u64,
-    available_parallelism: std::num::NonZero<usize>,
+    compiler_concurrency_memory_margin_bytes: u64,
+    available_parallelism: NonZeroUsize,
     is_rpc_enabled: bool,
-) -> Result<std::num::NonZero<usize>, anyhow::Error> {
-    const PATHFINDER_RAM_SAFE_OPERATION_MARGIN_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-
-    // Concurrency_Limit = min(floor((RAM - Margin) / RAM_Limit), n_CPUs)
+) -> anyhow::Result<NonZeroUsize> {
+    // Concurrency_Limit = min(floor((System_RAM - Margin) / Compiler_RAM_Limit),
+    // n_CPUs)
     let concurrency_limit = total_memory_bytes
-        .saturating_sub(PATHFINDER_RAM_SAFE_OPERATION_MARGIN_BYTES)
+        .saturating_sub(compiler_concurrency_memory_margin_bytes)
         / compiler_memory_limit_bytes;
     let num_cpus = u64::try_from(available_parallelism.get())?;
     let concurrency_limit = usize::try_from(num_cpus.min(concurrency_limit))?;
 
-    let total_memory_mib = total_memory_bytes / (1024 * 1024);
-    let compiler_memory_limit_mib = compiler_memory_limit_bytes / (1024 * 1024);
+    const BYTES_IN_MIB: u64 = 1024 * 1024;
+    let total_memory_mib = total_memory_bytes / BYTES_IN_MIB;
+    let compiler_memory_limit_mib = compiler_memory_limit_bytes / BYTES_IN_MIB;
+    let margin_mib = compiler_concurrency_memory_margin_bytes / BYTES_IN_MIB;
 
     if concurrency_limit == 0 {
         anyhow::ensure!(
             !is_rpc_enabled,
             "Computed compiler concurrency limit is 0, which is insufficient for a running RPC \
              server. Please decrease the compiler memory usage limit ({compiler_memory_limit_mib} \
-             MiB), increase system memory ({total_memory_mib} MiB), set a fixed compiler \
-             concurrency limit via --rpc.compiler.concurrency-limit, or disable the RPC server \
-             via --rpc.enable=false."
+             MiB), increase system memory ({total_memory_mib} MiB), decrease normal operation \
+             margin ({margin_mib} MiB), set a fixed compiler concurrency limit via \
+             --rpc.compiler.concurrency-limit, or disable the RPC server via --rpc.enable=false."
         );
 
         // Use a dummy value, the RPC server will not be started anyway, yet we need to
@@ -681,7 +684,7 @@ fn compute_compiler_concurrency_limit(
         tracing::info!(
             "Computed compiler concurrency limit: {concurrency_limit}, based on total memory \
              ({total_memory_mib} MiB), compiler memory limit ({compiler_memory_limit_mib} MiB), \
-             and number of CPUs ({num_cpus})"
+             normal operation margin ({margin_mib} MiB), and number of CPUs ({num_cpus})"
         );
 
         Ok(NonZeroUsize::new(concurrency_limit).expect("Nonzero value"))
@@ -1292,57 +1295,67 @@ mod tests {
 
     const GIB: u64 = 1024 * 1024 * 1024;
 
+    /// The default compiler concurrency memory margin in the config.
+    const MARGIN: u64 = 4 * GIB;
+
     fn nonzero(n: usize) -> NonZeroUsize {
         NonZeroUsize::new(n).unwrap()
     }
 
     #[test]
     fn limited_by_memory() {
-        // (31 - 8) / 4 = 5, less than the 32 CPUs.
+        // (31 - 4) / 4 = 6, less than the 32 CPUs.
         let limit =
-            compute_compiler_concurrency_limit(31 * GIB, 4 * GIB, nonzero(32), true).unwrap();
-        assert_eq!(limit.get(), 5);
+            compute_compiler_concurrency_limit(31 * GIB, 4 * GIB, MARGIN, nonzero(32), true)
+                .unwrap();
+        assert_eq!(limit.get(), 6);
     }
 
     #[test]
     fn limited_by_cpus() {
-        // (256 - 8) / 4 = 62, but only 8 CPUs are available.
+        // (256 - 4) / 4 = 63, but only 8 CPUs are available.
         let limit =
-            compute_compiler_concurrency_limit(256 * GIB, 4 * GIB, nonzero(8), true).unwrap();
+            compute_compiler_concurrency_limit(256 * GIB, 4 * GIB, MARGIN, nonzero(8), true)
+                .unwrap();
         assert_eq!(limit.get(), 8);
     }
 
     #[test]
     fn zero_limit_with_rpc_enabled_returns_error() {
-        // (10 - 8) / 4 = 0, and RPC is enabled, so this is an error.
-        compute_compiler_concurrency_limit(10 * GIB, 4 * GIB, nonzero(32), true).unwrap_err();
+        // (5 - 4) / 4 = 0, and RPC is enabled, so this is an error.
+        compute_compiler_concurrency_limit(5 * GIB, 4 * GIB, MARGIN, nonzero(32), true)
+            .unwrap_err();
     }
 
     #[test]
     fn zero_limit_with_rpc_disabled_returns_dummy() {
-        // (10 - 8) / 4 = 0, but RPC is disabled, so a dummy value of 1 is returned.
+        // (5 - 4) / 4 = 0, but RPC is disabled, so a dummy value of 1 is returned.
         let limit =
-            compute_compiler_concurrency_limit(10 * GIB, 4 * GIB, nonzero(32), false).unwrap();
+            compute_compiler_concurrency_limit(5 * GIB, 4 * GIB, MARGIN, nonzero(32), false)
+                .unwrap();
         assert_eq!(limit.get(), 1);
     }
 
     #[test]
     fn memory_below_margin_with_rpc_enabled_returns_error() {
         // Total memory below the margin saturates to 0, yielding a 0 limit.
-        compute_compiler_concurrency_limit(4 * GIB, 4 * GIB, nonzero(32), true).unwrap_err();
+        compute_compiler_concurrency_limit(3 * GIB, 4 * GIB, MARGIN, nonzero(32), true)
+            .unwrap_err();
     }
 
     #[test]
     fn memory_below_margin_with_rpc_disabled_returns_dummy() {
         let limit =
-            compute_compiler_concurrency_limit(4 * GIB, 4 * GIB, nonzero(32), false).unwrap();
+            compute_compiler_concurrency_limit(3 * GIB, 4 * GIB, MARGIN, nonzero(32), false)
+                .unwrap();
         assert_eq!(limit.get(), 1);
     }
 
     #[test]
     fn single_cpu_caps_limit() {
         let limit =
-            compute_compiler_concurrency_limit(256 * GIB, 4 * GIB, nonzero(1), true).unwrap();
+            compute_compiler_concurrency_limit(256 * GIB, 4 * GIB, MARGIN, nonzero(1), true)
+                .unwrap();
         assert_eq!(limit.get(), 1);
     }
 }
