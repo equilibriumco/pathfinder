@@ -168,7 +168,7 @@ pub async fn trace_transaction(
                     .into_iter()
                     .collect::<Vec<_>>();
 
-                (header, transactions.clone(), context.cache.clone())
+                (header, transactions, context.cache.clone())
             };
 
             let hash = header.hash;
@@ -232,7 +232,7 @@ pub async fn trace_transaction(
     let transaction = match local {
         LocalExecution::Success(trace) => {
             return Ok(Output(TransactionTrace {
-                trace: trace.clone(),
+                trace,
                 include_state_diff: false,
             }));
         }
@@ -248,7 +248,7 @@ pub async fn trace_transaction(
     let trace = map_gateway_trace(transaction, trace)?;
 
     Ok(Output(TransactionTrace {
-        trace: trace.clone(),
+        trace,
         // State diffs are not available for traces fetched from the gateway.
         include_state_diff: false,
     }))
