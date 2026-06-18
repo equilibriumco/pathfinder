@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `CANDIDATE` transaction status is deprecated and will never be returned by gateway or pathfinder. Using it as a filter in `subscribeNewTransactions` will fall back to `PRE_CONFIRMED` with a warning.
+- The `blockifier` and `starknet_api` crates have been upgraded to 0.19.0-rc.2.
 
 ## [0.22.5] - 2026-06-08
 
