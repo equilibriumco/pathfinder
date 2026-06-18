@@ -45,7 +45,7 @@ authors = ["Equilibrium Labs <info@equilibrium.co>"]
 [workspace.dependencies]
 anyhow = "1.0.102"
 # This one needs to match the version used by blockifier
-apollo_versioned_constants = { package = "apollo_versioned_constants", git = "https://github.com/starkware-libs/sequencer", tag = "blockifier-v0.19.0-rc.1" }
+apollo_versioned_constants = { package = "apollo_versioned_constants", git = "https://github.com/starkware-libs/sequencer", tag = "blockifier-v0.19.0-rc.2" }
 ark-ff = "0.5.0"
 assert_matches = "1.5.0"
 async-trait = "0.1.89"
@@ -55,14 +55,14 @@ base64 = "0.22.1"
 # TODO: bincode development stopped, we should probably replace it. 3.0.0 is just a compile_error! in lib.rs
 bincode = "=2.0.1"
 bitvec = "1.0.1"
-blockifier = { version = "0.19.0-rc.1", features = [
+blockifier = { version = "0.19.0-rc.2", features = [
     "node_api",
     "reexecution",
 ] }
 bytes = "1.11.1"
 cached = "0.59.0"
 # This one needs to match the version used by blockifier
-cairo-lang-starknet-classes = "=2.19.0-rc.2"
+cairo-lang-starknet-classes = "=2.19.0-rc.3"
 # This one needs to match the version used by blockifier
 cairo-native = "0.9.0-rc.7"
 # This one needs to match the version used by blockifier
@@ -70,7 +70,7 @@ cairo-vm = "=3.2.0"
 casm-compiler-v1_0_0-alpha6 = { package = "cairo-lang-starknet", git = "https://github.com/starkware-libs/cairo", tag = "v1.0.0-alpha.6" }
 casm-compiler-v1_0_0-rc0 = { package = "cairo-lang-starknet", git = "https://github.com/starkware-libs/cairo", tag = "v1.0.0-rc0" }
 casm-compiler-v1_1_1 = { package = "cairo-lang-starknet", version = "=1.1.1" }
-casm-compiler-v2 = { package = "cairo-lang-starknet", version = "=2.19.0-rc.2" }
+casm-compiler-v2 = { package = "cairo-lang-starknet", version = "=2.19.0-rc.3" }
 clap = "4.6.1"
 console-subscriber = "0.5"
 const-decoder = "0.4.0"
@@ -135,7 +135,7 @@ smallvec = "1.15.1"
 # This one needs to match the version used by blockifier
 starknet-types-core = "=0.2.4"
 # This one needs to match the version used by blockifier
-starknet_api = { version = "0.19.0-rc.1" }
+starknet_api = { version = "0.19.0-rc.2" }
 syn = "2.0"
 tempfile = "3.27"
 test-log = { version = "0.2.20", features = ["trace"] }
