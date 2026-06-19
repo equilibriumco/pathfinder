@@ -159,6 +159,7 @@ pub async fn task_syncing(user: &mut GooseUser) -> TransactionResult {
 pub async fn task_call(user: &mut GooseUser) -> TransactionResult {
     call(
         user,
+        // StarkGate: ETH Token
         Felt::from_hex_str("0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7")
             .unwrap(),
         &[
@@ -167,6 +168,8 @@ pub async fn task_call(user: &mut GooseUser) -> TransactionResult {
         ],
         // "balanceOf" entry point
         "0x2e4263afad30923c891518314c3c95dbe830a16874e8abc5777a9a20b54c76e",
+        // token deployed in block 1407
+        1500,
     )
     .await?;
     Ok(())
