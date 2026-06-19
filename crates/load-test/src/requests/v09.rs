@@ -280,7 +280,9 @@ pub async fn get_nonce(user: &mut GooseUser, contract_address: Felt) -> MethodRe
         user,
         "starknet_getNonce",
         json!({
-            "block_id": "pre_confirmed",
+            // same as estimate_fee_for_invoke; "pre_confirmed" will
+            // fail unless the tested server is fully synced
+            "block_id": {"block_number": 499999},
             "contract_address": contract_address
         }),
     )
