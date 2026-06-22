@@ -142,7 +142,7 @@ impl RpcRouter {
         let result = std::panic::AssertUnwindSafe(method).catch_unwind().await;
 
         let duration = start.elapsed();
-        metrics::histogram!("rpc_method_calls_duration_milliseconds", "method" => method_name, "version" => self.version.to_str()).record(duration.as_millis() as f64);
+        metrics::histogram!("rpc_method_calls_duration_milliseconds", "method" => method_name, "version" => self.version.to_str()).record(duration.as_secs_f64() * 1000.0);
 
         let output = match result {
             Ok(output) => output,
