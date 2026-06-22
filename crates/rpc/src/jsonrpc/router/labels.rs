@@ -10,9 +10,11 @@ pub enum BlockTarget {
     Pending,
     ByNumber,
     ByHash,
-    /// No `block_id` parameter (e.g. methods that don't take one).
+    /// No `block_id` parameter: a method that takes none, or an empty
+    /// positional argument list.
     None,
-    /// Positional params, or an unrecognised `block_id` shape.
+    /// A non-empty positional argument list, or an unrecognised `block_id`
+    /// shape.
     Unknown,
 }
 
@@ -35,21 +37,33 @@ pub fn classify_block_target(params: Option<&RawValue>) -> BlockTarget {
     let Some(raw) = params else {
         return BlockTarget::None;
     };
-    // Named params arrive as a JSON object; positional params (array) can't be
-    // classified by field name.
-    let Ok(obj) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(raw.get())
-    else {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw.get()) else {
         return BlockTarget::Unknown;
     };
-    match obj.get("block_id") {
-        None => BlockTarget::None,
-        Some(serde_json::Value::String(s)) if s == "latest" => BlockTarget::Latest,
-        Some(serde_json::Value::String(s)) if s == "pending" => BlockTarget::Pending,
-        Some(serde_json::Value::Object(o)) if o.contains_key("block_number") => {
-            BlockTarget::ByNumber
+    match value {
+        // Positional params: an empty list carries no block_id; a non-empty
+        // list can't be classified by field name.
+        serde_json::Value::Array(items) => {
+            if items.is_empty() {
+                BlockTarget::None
+            } else {
+                BlockTarget::Unknown
+            }
         }
-        Some(serde_json::Value::Object(o)) if o.contains_key("block_hash") => BlockTarget::ByHash,
-        Some(_) => BlockTarget::Unknown,
+        // Named params: classify by the shape of the `block_id` field.
+        serde_json::Value::Object(obj) => match obj.get("block_id") {
+            None => BlockTarget::None,
+            Some(serde_json::Value::String(s)) if s == "latest" => BlockTarget::Latest,
+            Some(serde_json::Value::String(s)) if s == "pending" => BlockTarget::Pending,
+            Some(serde_json::Value::Object(o)) if o.contains_key("block_number") => {
+                BlockTarget::ByNumber
+            }
+            Some(serde_json::Value::Object(o)) if o.contains_key("block_hash") => {
+                BlockTarget::ByHash
+            }
+            Some(_) => BlockTarget::Unknown,
+        },
+        _ => BlockTarget::Unknown,
     }
 }
 
@@ -80,12 +94,14 @@ mod tests {
     }
 
     #[test]
-    fn no_params_is_none() {
+    fn absent_or_empty_params_are_none() {
         assert_eq!(classify_block_target(None), BlockTarget::None);
+        let empty = raw("[]");
+        assert_eq!(classify_block_target(Some(&empty)), BlockTarget::None);
     }
 
     #[test]
-    fn positional_params_are_unknown() {
+    fn non_empty_positional_params_are_unknown() {
         let r = raw(r#"["latest","0x1"]"#);
         assert_eq!(classify_block_target(Some(&r)), BlockTarget::Unknown);
     }
