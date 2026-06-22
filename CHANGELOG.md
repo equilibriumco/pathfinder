@@ -7,6 +7,16 @@ More expansive patch notes and explanations may be found in the specific [pathfi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- RPC metrics now carry a `block_target` label on `rpc_method_calls_total` (how a request targeted a block) and an `error_kind` label on `rpc_method_calls_failed_total` (the error variant name). The bundled Grafana dashboard (`utils/grafana/dashboard.json`) gains an expanded JSON-RPC view, and Prometheus recording rules for RPC latency quantiles are provided in `utils/prometheus/rpc-recording-rules.yml`.
+
+### Changed
+
+- `rpc_method_calls_duration_milliseconds` is now exported as a Prometheus histogram (`_bucket`/`_sum`/`_count`) instead of a summary with a `quantile` label. Alerts or dashboards using `rpc_method_calls_duration_milliseconds{quantile="..."}` must switch to `histogram_quantile(...)` over the `_bucket` series; see `docs/docs/monitoring-and-metrics.md`.
+
 ## [0.22.7] - 2026-06-23
 
 ### Fixed

@@ -84,12 +84,26 @@ The Prometheus Metrics endpoint (`/metrics`) exposes real-time operational data 
     - `process_start_time_seconds` - UNIX timestamp at which Pathfinder started.
   
   **RPC-Related Metrics**  
-    - `rpc_method_calls_total{method="<methodName>", version="<rpcVersion>"}`  
-      Counts how many times each JSON-RPC method is called.
-    - `rpc_method_calls_failed_total{method="<methodName>", version="<rpcVersion>"}`  
-      Counts how many times each method call resulted in an error.
-    - `rpc_method_calls_duration_milliseconds{method="<methodName>", version="<rpcVersion>"}`
-      Histogram of JSON-RPC method call latency.
+    - `rpc_method_calls_total{method="<methodName>", version="<rpcVersion>", block_target="<blockTarget>"}`  
+      Counts how many times each JSON-RPC method is called. `block_target` records how the
+      request targeted a block, derived from its `block_id` parameter: `latest`, `pending`,
+      `by_number`, `by_hash`, `none` (no `block_id` parameter), or `unknown` (positional
+      params or an unrecognised shape).
+    - `rpc_method_calls_failed_total{method="<methodName>", version="<rpcVersion>", error_kind="<errorKind>"}`  
+      Counts how many times each method call resulted in an error. `error_kind` is the error
+      variant name (e.g. `block_not_found`, `contract_not_found`, `invalid_params`,
+      `internal_error`).
+    - `rpc_method_calls_duration_milliseconds{method="<methodName>", version="<rpcVersion>"}` —
+      histogram of JSON-RPC method call latency. Exported as Prometheus histogram buckets
+      (`rpc_method_calls_duration_milliseconds_bucket` / `_sum` / `_count`). Compute quantiles
+      with `histogram_quantile()`:
+
+      ```promql
+      histogram_quantile(0.95, sum by (le, method, version) (rate(rpc_method_calls_duration_milliseconds_bucket[5m])))
+      ```
+
+      Pathfinder ships ready-made recording rules for p50/p95/p99 at
+      `utils/prometheus/rpc-recording-rules.yml`.
 
   **Gateway Request Metrics**  
     - `gateway_requests_total{method="<sequencerRequestType>", tag="<latest|pending>", reason="<optionalFailureReason>"}`  
