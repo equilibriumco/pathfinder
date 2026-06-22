@@ -153,22 +153,6 @@ impl crate::dto::SerializeForVersion for crate::pending::PreConfirmedBlock {
     }
 }
 
-impl crate::dto::SerializeForVersion
-    for (
-        &Option<pathfinder_common::BlockHash>,
-        &crate::pending::PreConfirmedBlock,
-    )
-{
-    fn serialize(
-        &self,
-        serializer: crate::dto::Serializer,
-    ) -> Result<crate::dto::Ok, crate::dto::Error> {
-        let mut serializer = serializer.serialize_struct()?;
-        serializer.flatten(self.1)?;
-        serializer.end()
-    }
-}
-
 #[derive(Debug)]
 struct ResourcePrice {
     pub price_in_wei: GasPrice,
