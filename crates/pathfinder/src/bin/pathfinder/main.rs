@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ::p2p::sync::client::peer_agnostic::Client as P2PSyncClient;
 use anyhow::Context;
 use config::BlockchainHistory;
-use metrics_exporter_prometheus::PrometheusBuilder;
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
 use pathfinder_common::class_definition::SerializedSierraDefinition;
 use pathfinder_common::{BlockNumber, Chain, ChainId, EthereumChain};
 use pathfinder_ethereum::EthereumClient;
@@ -961,6 +961,13 @@ fn start_p2p_sync(
     util::task::spawn(sync.run())
 }
 
+/// Latency buckets (milliseconds) for the RPC duration histogram. Sized for the
+/// range of RPC method latencies from sub-millisecond reads to multi-second
+/// traces.
+const RPC_LATENCY_BUCKETS: &[f64] = &[
+    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0,
+];
+
 /// Spawns the monitoring task at the given address.
 async fn spawn_monitoring(
     network: &str,
@@ -971,6 +978,11 @@ async fn spawn_monitoring(
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     let prometheus_handle = PrometheusBuilder::new()
         .add_global_label("network", network)
+        .set_buckets_for_metric(
+            Matcher::Full("rpc_method_calls_duration_milliseconds".to_owned()),
+            RPC_LATENCY_BUCKETS,
+        )
+        .context("Setting RPC latency histogram buckets")?
         .install_recorder()
         .context("Creating Prometheus recorder")?;
 
