@@ -131,6 +131,11 @@ mod metric_label_tests {
             "parse_error"
         );
         assert_eq!(
+            RpcError::InvalidRequest("x".into()).metric_label(),
+            "invalid_request"
+        );
+        assert_eq!(RpcError::MethodNotFound.metric_label(), "method_not_found");
+        assert_eq!(
             RpcError::InvalidParams("x".into()).metric_label(),
             "invalid_params"
         );
