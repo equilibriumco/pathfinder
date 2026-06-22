@@ -937,10 +937,442 @@
             "panels": [
                 {
                     "datasource": {
-                        "default": true,
                         "type": "prometheus",
                         "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
                     },
+                    "description": "",
+                    "fieldConfig": {
+                        "defaults": {
+                            "color": {
+                                "mode": "thresholds"
+                            },
+                            "mappings": [],
+                            "unit": "reqps",
+                            "thresholds": {
+                                "mode": "absolute",
+                                "steps": [
+                                    {
+                                        "color": "green",
+                                        "value": 0
+                                    }
+                                ]
+                            }
+                        },
+                        "overrides": []
+                    },
+                    "gridPos": {
+                        "h": 4,
+                        "w": 8,
+                        "x": 0,
+                        "y": 3
+                    },
+                    "id": 25,
+                    "options": {
+                        "colorMode": "value",
+                        "graphMode": "area",
+                        "justifyMode": "auto",
+                        "orientation": "auto",
+                        "reduceOptions": {
+                            "calcs": [
+                                "lastNotNull"
+                            ],
+                            "fields": "",
+                            "values": false
+                        },
+                        "textMode": "auto"
+                    },
+                    "pluginVersion": "12.3.0",
+                    "targets": [
+                        {
+                            "datasource": {
+                                "type": "prometheus",
+                                "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                            },
+                            "editorMode": "code",
+                            "expr": "sum(rate(rpc_method_calls_total{network=\"$network\"}[$__rate_interval]))",
+                            "instant": true,
+                            "range": false,
+                            "refId": "A"
+                        }
+                    ],
+                    "title": "RPC request rate",
+                    "type": "stat"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                    },
+                    "description": "",
+                    "fieldConfig": {
+                        "defaults": {
+                            "color": {
+                                "mode": "thresholds"
+                            },
+                            "mappings": [],
+                            "unit": "percent",
+                            "thresholds": {
+                                "mode": "absolute",
+                                "steps": [
+                                    {
+                                        "color": "green",
+                                        "value": 0
+                                    },
+                                    {
+                                        "color": "yellow",
+                                        "value": 1
+                                    },
+                                    {
+                                        "color": "red",
+                                        "value": 5
+                                    }
+                                ]
+                            }
+                        },
+                        "overrides": []
+                    },
+                    "gridPos": {
+                        "h": 4,
+                        "w": 8,
+                        "x": 8,
+                        "y": 3
+                    },
+                    "id": 26,
+                    "options": {
+                        "colorMode": "value",
+                        "graphMode": "area",
+                        "justifyMode": "auto",
+                        "orientation": "auto",
+                        "reduceOptions": {
+                            "calcs": [
+                                "lastNotNull"
+                            ],
+                            "fields": "",
+                            "values": false
+                        },
+                        "textMode": "auto"
+                    },
+                    "pluginVersion": "12.3.0",
+                    "targets": [
+                        {
+                            "datasource": {
+                                "type": "prometheus",
+                                "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                            },
+                            "editorMode": "code",
+                            "expr": "100 * sum(rate(rpc_method_calls_failed_total{network=\"$network\"}[$__rate_interval])) / sum(rate(rpc_method_calls_total{network=\"$network\"}[$__rate_interval]))",
+                            "instant": true,
+                            "range": false,
+                            "refId": "A"
+                        }
+                    ],
+                    "title": "RPC error rate",
+                    "type": "stat"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                    },
+                    "description": "",
+                    "fieldConfig": {
+                        "defaults": {
+                            "color": {
+                                "mode": "thresholds"
+                            },
+                            "mappings": [],
+                            "unit": "ms",
+                            "thresholds": {
+                                "mode": "absolute",
+                                "steps": [
+                                    {
+                                        "color": "green",
+                                        "value": 0
+                                    },
+                                    {
+                                        "color": "yellow",
+                                        "value": 250
+                                    },
+                                    {
+                                        "color": "red",
+                                        "value": 1000
+                                    }
+                                ]
+                            }
+                        },
+                        "overrides": []
+                    },
+                    "gridPos": {
+                        "h": 4,
+                        "w": 8,
+                        "x": 16,
+                        "y": 3
+                    },
+                    "id": 27,
+                    "options": {
+                        "colorMode": "value",
+                        "graphMode": "area",
+                        "justifyMode": "auto",
+                        "orientation": "auto",
+                        "reduceOptions": {
+                            "calcs": [
+                                "lastNotNull"
+                            ],
+                            "fields": "",
+                            "values": false
+                        },
+                        "textMode": "auto"
+                    },
+                    "pluginVersion": "12.3.0",
+                    "targets": [
+                        {
+                            "datasource": {
+                                "type": "prometheus",
+                                "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                            },
+                            "editorMode": "code",
+                            "expr": "histogram_quantile(0.99, sum by (le) (rate(rpc_method_calls_duration_milliseconds_bucket{network=\"$network\"}[$__rate_interval])))",
+                            "instant": true,
+                            "range": false,
+                            "refId": "A"
+                        }
+                    ],
+                    "title": "RPC p99 latency",
+                    "type": "stat"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                    },
+                    "description": "Total time spent per method = rate of the duration histogram _sum, in ms of work per second (wall-clock per call, incl. DB/lock waits; not CPU profiling).",
+                    "fieldConfig": {
+                        "defaults": {
+                            "color": {
+                                "mode": "continuous-GrYlRd"
+                            },
+                            "mappings": [],
+                            "unit": "none",
+                            "thresholds": {
+                                "mode": "absolute",
+                                "steps": [
+                                    {
+                                        "color": "green",
+                                        "value": 0
+                                    }
+                                ]
+                            }
+                        },
+                        "overrides": []
+                    },
+                    "gridPos": {
+                        "h": 9,
+                        "w": 12,
+                        "x": 0,
+                        "y": 7
+                    },
+                    "id": 28,
+                    "options": {
+                        "displayMode": "gradient",
+                        "orientation": "horizontal",
+                        "reduceOptions": {
+                            "calcs": [
+                                "lastNotNull"
+                            ],
+                            "fields": "",
+                            "values": false
+                        },
+                        "showUnfilled": true,
+                        "valueMode": "color"
+                    },
+                    "pluginVersion": "12.3.0",
+                    "targets": [
+                        {
+                            "datasource": {
+                                "type": "prometheus",
+                                "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                            },
+                            "editorMode": "code",
+                            "expr": "topk(15, sum by (method) (rate(rpc_method_calls_duration_milliseconds_sum{network=\"$network\"}[$__rate_interval])))",
+                            "instant": true,
+                            "range": false,
+                            "refId": "A",
+                            "legendFormat": "{{method}}"
+                        }
+                    ],
+                    "title": "Where your time goes (ms/s per method)",
+                    "type": "bargauge"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                    },
+                    "description": "Per-method volume, time cost, latency shape and error rate. Sort any column.",
+                    "fieldConfig": {
+                        "defaults": {
+                            "color": {
+                                "mode": "thresholds"
+                            },
+                            "custom": {
+                                "align": "auto",
+                                "cellOptions": {
+                                    "type": "auto"
+                                },
+                                "inspect": false
+                            },
+                            "mappings": [],
+                            "thresholds": {
+                                "mode": "absolute",
+                                "steps": [
+                                    {
+                                        "color": "green",
+                                        "value": 0
+                                    }
+                                ]
+                            }
+                        },
+                        "overrides": []
+                    },
+                    "gridPos": {
+                        "h": 9,
+                        "w": 12,
+                        "x": 12,
+                        "y": 7
+                    },
+                    "id": 29,
+                    "options": {
+                        "cellHeight": "sm",
+                        "footer": {
+                            "countRows": false,
+                            "fields": "",
+                            "reducer": [
+                                "sum"
+                            ],
+                            "show": false
+                        },
+                        "showHeader": true,
+                        "sortBy": [
+                            {
+                                "desc": true,
+                                "displayName": "time-spent (ms/s)"
+                            }
+                        ]
+                    },
+                    "pluginVersion": "12.3.0",
+                    "targets": [
+                        {
+                            "datasource": {
+                                "type": "prometheus",
+                                "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                            },
+                            "editorMode": "code",
+                            "expr": "sum by (method) (rate(rpc_method_calls_total{network=\"$network\"}[$__rate_interval]))",
+                            "instant": true,
+                            "range": false,
+                            "refId": "A",
+                            "legendFormat": "",
+                            "format": "table"
+                        },
+                        {
+                            "datasource": {
+                                "type": "prometheus",
+                                "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                            },
+                            "editorMode": "code",
+                            "expr": "sum by (method) (rate(rpc_method_calls_duration_milliseconds_sum{network=\"$network\"}[$__rate_interval]))",
+                            "instant": true,
+                            "range": false,
+                            "refId": "B",
+                            "legendFormat": "",
+                            "format": "table"
+                        },
+                        {
+                            "datasource": {
+                                "type": "prometheus",
+                                "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                            },
+                            "editorMode": "code",
+                            "expr": "histogram_quantile(0.50, sum by (le, method) (rate(rpc_method_calls_duration_milliseconds_bucket{network=\"$network\"}[$__rate_interval])))",
+                            "instant": true,
+                            "range": false,
+                            "refId": "C",
+                            "legendFormat": "",
+                            "format": "table"
+                        },
+                        {
+                            "datasource": {
+                                "type": "prometheus",
+                                "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                            },
+                            "editorMode": "code",
+                            "expr": "histogram_quantile(0.90, sum by (le, method) (rate(rpc_method_calls_duration_milliseconds_bucket{network=\"$network\"}[$__rate_interval])))",
+                            "instant": true,
+                            "range": false,
+                            "refId": "D",
+                            "legendFormat": "",
+                            "format": "table"
+                        },
+                        {
+                            "datasource": {
+                                "type": "prometheus",
+                                "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                            },
+                            "editorMode": "code",
+                            "expr": "histogram_quantile(0.99, sum by (le, method) (rate(rpc_method_calls_duration_milliseconds_bucket{network=\"$network\"}[$__rate_interval])))",
+                            "instant": true,
+                            "range": false,
+                            "refId": "E",
+                            "legendFormat": "",
+                            "format": "table"
+                        },
+                        {
+                            "datasource": {
+                                "type": "prometheus",
+                                "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                            },
+                            "editorMode": "code",
+                            "expr": "100 * sum by (method) (rate(rpc_method_calls_failed_total{network=\"$network\"}[$__rate_interval])) / sum by (method) (rate(rpc_method_calls_total{network=\"$network\"}[$__rate_interval]))",
+                            "instant": true,
+                            "range": false,
+                            "refId": "F",
+                            "legendFormat": "",
+                            "format": "table"
+                        }
+                    ],
+                    "transformations": [
+                        {
+                            "id": "merge",
+                            "options": {}
+                        },
+                        {
+                            "id": "organize",
+                            "options": {
+                                "excludeByName": {
+                                    "Time": true
+                                },
+                                "includeByName": {},
+                                "indexByName": {},
+                                "renameByName": {
+                                    "Value #A": "calls/s",
+                                    "Value #B": "time-spent (ms/s)",
+                                    "Value #C": "p50 (ms)",
+                                    "Value #D": "p90 (ms)",
+                                    "Value #E": "p99 (ms)",
+                                    "Value #F": "error %"
+                                }
+                            }
+                        }
+                    ],
+                    "title": "Method detail",
+                    "type": "table"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                    },
+                    "description": "Share of calls by how they target a block. Pinned share (by_number + by_hash) is the archive-pressure signal.",
                     "fieldConfig": {
                         "defaults": {
                             "color": {
@@ -955,7 +1387,7 @@
                                 "barAlignment": 0,
                                 "barWidthFactor": 0.6,
                                 "drawStyle": "line",
-                                "fillOpacity": 0,
+                                "fillOpacity": 35,
                                 "gradientMode": "none",
                                 "hideFrom": {
                                     "legend": false,
@@ -970,11 +1402,10 @@
                                     "type": "linear"
                                 },
                                 "showPoints": "auto",
-                                "showValues": false,
                                 "spanNulls": false,
                                 "stacking": {
                                     "group": "A",
-                                    "mode": "none"
+                                    "mode": "normal"
                                 },
                                 "thresholdsStyle": {
                                     "mode": "off"
@@ -987,23 +1418,20 @@
                                     {
                                         "color": "green",
                                         "value": 0
-                                    },
-                                    {
-                                        "color": "red",
-                                        "value": 80
                                     }
                                 ]
-                            }
+                            },
+                            "unit": "reqps"
                         },
                         "overrides": []
                     },
                     "gridPos": {
                         "h": 8,
-                        "w": 18,
+                        "w": 12,
                         "x": 0,
-                        "y": 3
+                        "y": 16
                     },
-                    "id": 11,
+                    "id": 30,
                     "options": {
                         "legend": {
                             "calcs": [],
@@ -1024,19 +1452,15 @@
                                 "type": "prometheus",
                                 "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
                             },
-                            "disableTextWrap": false,
-                            "editorMode": "builder",
-                            "expr": "rpc_method_calls_duration_milliseconds{network=\"$network\", quantile=\"0.95\"}",
-                            "fullMetaSearch": false,
-                            "includeNullMetadata": true,
+                            "editorMode": "code",
+                            "expr": "sum by (block_target) (rate(rpc_method_calls_total{network=\"$network\"}[$__rate_interval]))",
                             "instant": false,
-                            "legendFormat": "{{method}}",
                             "range": true,
                             "refId": "A",
-                            "useBackend": false
+                            "legendFormat": "{{block_target}}"
                         }
                     ],
-                    "title": "RPC method call 95th percentile",
+                    "title": "Hot-path vs archive (by block_target)",
                     "type": "timeseries"
                 },
                 {
@@ -1044,6 +1468,7 @@
                         "type": "prometheus",
                         "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
                     },
+                    "description": "Failed calls by method and error_kind. block_not_found spikes corroborate the archive panel.",
                     "fieldConfig": {
                         "defaults": {
                             "color": {
@@ -1058,7 +1483,7 @@
                                 "barAlignment": 0,
                                 "barWidthFactor": 0.6,
                                 "drawStyle": "line",
-                                "fillOpacity": 0,
+                                "fillOpacity": 35,
                                 "gradientMode": "none",
                                 "hideFrom": {
                                     "legend": false,
@@ -1073,11 +1498,10 @@
                                     "type": "linear"
                                 },
                                 "showPoints": "auto",
-                                "showValues": false,
                                 "spanNulls": false,
                                 "stacking": {
                                     "group": "A",
-                                    "mode": "none"
+                                    "mode": "normal"
                                 },
                                 "thresholdsStyle": {
                                     "mode": "off"
@@ -1090,23 +1514,20 @@
                                     {
                                         "color": "green",
                                         "value": 0
-                                    },
-                                    {
-                                        "color": "red",
-                                        "value": 80
                                     }
                                 ]
-                            }
+                            },
+                            "unit": "reqps"
                         },
                         "overrides": []
                     },
                     "gridPos": {
                         "h": 8,
-                        "w": 18,
-                        "x": 0,
-                        "y": 11
+                        "w": 12,
+                        "x": 12,
+                        "y": 16
                     },
-                    "id": 2,
+                    "id": 31,
                     "options": {
                         "legend": {
                             "calcs": [],
@@ -1127,20 +1548,87 @@
                                 "type": "prometheus",
                                 "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
                             },
-                            "disableTextWrap": false,
-                            "editorMode": "builder",
-                            "expr": "rate(rpc_method_calls_total{network=\"$network\"}[$__rate_interval])",
-                            "fullMetaSearch": false,
-                            "includeNullMetadata": true,
+                            "editorMode": "code",
+                            "expr": "sum by (method, error_kind) (rate(rpc_method_calls_failed_total{network=\"$network\"}[$__rate_interval]))",
                             "instant": false,
-                            "legendFormat": "{{method}}",
                             "range": true,
                             "refId": "A",
-                            "useBackend": false
+                            "legendFormat": "{{method}} {{error_kind}}"
                         }
                     ],
-                    "title": "RPC request rate",
+                    "title": "Errors by method & kind",
                     "type": "timeseries"
+                },
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                    },
+                    "description": "Share of calls by RPC spec version. Deprecation signal.",
+                    "fieldConfig": {
+                        "defaults": {
+                            "color": {
+                                "mode": "palette-classic"
+                            },
+                            "mappings": [],
+                            "thresholds": {
+                                "mode": "absolute",
+                                "steps": [
+                                    {
+                                        "color": "green",
+                                        "value": 0
+                                    }
+                                ]
+                            },
+                            "unit": "reqps"
+                        },
+                        "overrides": []
+                    },
+                    "gridPos": {
+                        "h": 8,
+                        "w": 12,
+                        "x": 0,
+                        "y": 24
+                    },
+                    "id": 32,
+                    "options": {
+                        "legend": {
+                            "displayMode": "list",
+                            "placement": "right",
+                            "showLegend": true,
+                            "values": []
+                        },
+                        "pieType": "pie",
+                        "reduceOptions": {
+                            "calcs": [
+                                "lastNotNull"
+                            ],
+                            "fields": "",
+                            "values": false
+                        },
+                        "tooltip": {
+                            "hideZeros": false,
+                            "mode": "single",
+                            "sort": "none"
+                        }
+                    },
+                    "pluginVersion": "12.3.0",
+                    "targets": [
+                        {
+                            "datasource": {
+                                "type": "prometheus",
+                                "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
+                            },
+                            "editorMode": "code",
+                            "expr": "sum by (version) (rate(rpc_method_calls_total{network=\"$network\"}[$__rate_interval]))",
+                            "instant": true,
+                            "range": false,
+                            "refId": "A",
+                            "legendFormat": "{{version}}"
+                        }
+                    ],
+                    "title": "RPC version usage",
+                    "type": "piechart"
                 }
             ],
             "title": "JSON-RPC",
