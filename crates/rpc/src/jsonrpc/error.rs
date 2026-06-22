@@ -41,6 +41,19 @@ impl RpcError {
         }
     }
 
+    /// Stable, low-cardinality label for the `error_kind` metric dimension.
+    pub fn metric_label(&self) -> &'static str {
+        match self {
+            RpcError::ParseError(_) => "parse_error",
+            RpcError::InvalidRequest(_) => "invalid_request",
+            RpcError::MethodNotFound => "method_not_found",
+            RpcError::InvalidParams(_) => "invalid_params",
+            RpcError::InternalError(_) => "internal_error",
+            RpcError::ApplicationError(e) => e.metric_label(),
+            RpcError::WebsocketSubscriptionClosed { .. } => "ws_subscription_closed",
+        }
+    }
+
     pub fn message(&self, version: RpcVersion) -> Cow<'_, str> {
         match self {
             RpcError::ParseError(..) => "Parse error".into(),
@@ -103,5 +116,47 @@ where
 impl From<pathfinder_storage::StorageError> for RpcError {
     fn from(value: pathfinder_storage::StorageError) -> Self {
         Self::InternalError(value.into())
+    }
+}
+
+#[cfg(test)]
+mod metric_label_tests {
+    use super::*;
+    use crate::error::ApplicationError;
+
+    #[test]
+    fn rpc_error_categories() {
+        assert_eq!(
+            RpcError::ParseError("x".into()).metric_label(),
+            "parse_error"
+        );
+        assert_eq!(
+            RpcError::InvalidParams("x".into()).metric_label(),
+            "invalid_params"
+        );
+        assert_eq!(
+            RpcError::InternalError(anyhow::anyhow!("x")).metric_label(),
+            "internal_error"
+        );
+        assert_eq!(
+            RpcError::WebsocketSubscriptionClosed {
+                subscription_id: 1,
+                reason: "x".into()
+            }
+            .metric_label(),
+            "ws_subscription_closed"
+        );
+    }
+
+    #[test]
+    fn application_error_uses_variant_name() {
+        assert_eq!(
+            RpcError::ApplicationError(ApplicationError::BlockNotFound).metric_label(),
+            "block_not_found"
+        );
+        assert_eq!(
+            RpcError::ApplicationError(ApplicationError::ContractNotFound).metric_label(),
+            "contract_not_found"
+        );
     }
 }

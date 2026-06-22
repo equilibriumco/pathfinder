@@ -187,6 +187,62 @@ impl ApplicationError {
         }
     }
 
+    /// Stable, low-cardinality label for the `error_kind` metric dimension.
+    pub fn metric_label(&self) -> &'static str {
+        match self {
+            ApplicationError::FailedToReceiveTxn => "failed_to_receive_txn",
+            ApplicationError::ContractNotFound => "contract_not_found",
+            ApplicationError::EntrypointNotFound => "entrypoint_not_found",
+            ApplicationError::BlockNotFound => "block_not_found",
+            ApplicationError::InvalidTxnIndex => "invalid_txn_index",
+            ApplicationError::InvalidTxnHash => "invalid_txn_hash",
+            ApplicationError::InvalidBlockHash => "invalid_block_hash",
+            ApplicationError::ClassHashNotFound => "class_hash_not_found",
+            ApplicationError::TxnHashNotFound => "txn_hash_not_found",
+            ApplicationError::PageSizeTooBig => "page_size_too_big",
+            ApplicationError::NoBlocks => "no_blocks",
+            ApplicationError::NoTraceAvailable(_) => "no_trace_available",
+            ApplicationError::InvalidContinuationToken => "invalid_continuation_token",
+            ApplicationError::TooManyKeysInFilter { .. } => "too_many_keys_in_filter",
+            ApplicationError::ContractError { .. } => "contract_error",
+            ApplicationError::InvalidContractClass => "invalid_contract_class",
+            ApplicationError::ClassAlreadyDeclared => "class_already_declared",
+            ApplicationError::InvalidTransactionNonce { .. } => "invalid_transaction_nonce",
+            ApplicationError::InsufficientResourcesForValidate => {
+                "insufficient_resources_for_validate"
+            }
+            ApplicationError::InsufficientAccountBalance => "insufficient_account_balance",
+            ApplicationError::ValidationFailure => "validation_failure",
+            ApplicationError::ValidationFailureV06(_) => "validation_failure",
+            ApplicationError::CompilationFailed { .. } => "compilation_failed",
+            ApplicationError::ContractClassSizeIsTooLarge => "contract_class_size_too_large",
+            ApplicationError::NonAccount => "non_account",
+            ApplicationError::DuplicateTransaction => "duplicate_transaction",
+            ApplicationError::CompiledClassHashMismatch => "compiled_class_hash_mismatch",
+            ApplicationError::UnsupportedTxVersion => "unsupported_tx_version",
+            ApplicationError::UnsupportedContractClassVersion => {
+                "unsupported_contract_class_version"
+            }
+            ApplicationError::UnexpectedError { .. } => "unexpected_error",
+            ApplicationError::ProofLimitExceeded { .. } => "proof_limit_exceeded",
+            ApplicationError::InvalidProof => "invalid_proof",
+            ApplicationError::GatewayError(_) => "gateway_error",
+            ApplicationError::ForwardedError(_) => "forwarded_error",
+            ApplicationError::TransactionExecutionError { .. } => "transaction_execution_error",
+            ApplicationError::SubscriptionTransactionHashNotFound { .. } => {
+                "subscription_txn_hash_not_found"
+            }
+            ApplicationError::SubscriptionGatewayDown { .. } => "subscription_gateway_down",
+            ApplicationError::StorageProofNotSupported => "storage_proof_not_supported",
+            ApplicationError::ProofMissing => "proof_missing",
+            ApplicationError::InvalidSubscriptionID => "invalid_subscription_id",
+            ApplicationError::TooManyAddressesInFilter => "too_many_addresses_in_filter",
+            ApplicationError::TooManyBlocksBack { .. } => "too_many_blocks_back",
+            ApplicationError::Internal(_) => "internal",
+            ApplicationError::Custom(_) => "custom",
+        }
+    }
+
     pub fn message(&self, version: RpcVersion) -> String {
         match self {
             ApplicationError::EntrypointNotFound => {

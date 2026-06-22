@@ -18,6 +18,7 @@ use crate::jsonrpc::request::RpcRequest;
 use crate::jsonrpc::response::RpcResponse;
 use crate::RpcVersion;
 
+mod labels;
 mod method;
 mod subscription;
 
@@ -124,7 +125,14 @@ impl RpcRouter {
             return Some(RpcResponse::method_not_found(request.id, self.version));
         };
 
-        metrics::counter!("rpc_method_calls_total", "method" => method_name, "version" => self.version.to_str()).increment(1);
+        let block_target = labels::classify_block_target(request.params.0);
+        metrics::counter!(
+            "rpc_method_calls_total",
+            "method" => method_name,
+            "version" => self.version.to_str(),
+            "block_target" => block_target.as_str(),
+        )
+        .increment(1);
 
         let start = std::time::Instant::now();
 
@@ -146,8 +154,14 @@ impl RpcRouter {
             }
         };
 
-        if output.is_err() {
-            metrics::counter!("rpc_method_calls_failed_total", "method" => method_name, "version" => self.version.to_str()).increment(1);
+        if let Err(err) = &output {
+            metrics::counter!(
+                "rpc_method_calls_failed_total",
+                "method" => method_name,
+                "version" => self.version.to_str(),
+                "error_kind" => err.metric_label(),
+            )
+            .increment(1);
         }
 
         Some(RpcResponse {
