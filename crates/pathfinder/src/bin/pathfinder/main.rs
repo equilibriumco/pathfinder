@@ -965,7 +965,8 @@ fn start_p2p_sync(
 /// range of RPC method latencies from sub-millisecond reads to multi-second
 /// traces.
 const RPC_LATENCY_BUCKETS: &[f64] = &[
-    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0,
+    0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+    10000.0,
 ];
 
 /// Spawns the monitoring task at the given address.
