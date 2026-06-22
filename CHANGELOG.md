@@ -17,9 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `CANDIDATE` transaction status is deprecated and will never be returned by gateway or pathfinder. Using it as a filter in `subscribeNewTransactions` will fall back to `PRE_CONFIRMED` with a warning.
 - The `blockifier` and `starknet_api` crates have been upgraded to 0.19.0-rc.2.
-- The default value of `--rpc.compiler.concurrency-limit` is now bound to system memory via this equation: `min(floor((Total_RAM - Margin) / Compiler_Max_Memory_Usage), Num_CPU_Cores)`, where:
-  - `Margin` is the value of the new CLI option `--compiler.concurrency-memory-margin-mib`, which defaults to 4GiB,
-  - `Compiler_Max_Memory_Usage` is the value of the `--compiler.max-memory-usage-mib` CLI option, which defaults to 4GiB.
+- The default value of `--rpc.compiler.concurrency-limit` is now bound to system memory via this equation: `min(floor((total_ram - margin) / compiler_max_memory_usage), num_cpu_cores)`, where:
+  - `margin` is the value of the new CLI option `--compiler.concurrency-memory-margin-mib`, which defaults to 4GiB,
+  - `compiler_max_memory_usage` is the value of the `--compiler.max-memory-usage-mib` CLI option, which defaults to 4GiB.
 
 ## [0.22.5] - 2026-06-08
 

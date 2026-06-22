@@ -639,8 +639,8 @@ fn determine_compiler_concurrency_limit(
 
 /// Computes the compiler concurrency limit from the available memory and CPUs.
 ///
-/// `Concurrency_Limit = min(floor((System_RAM - Margin) / Compiler_RAM_Limit),
-/// n_CPUs)`
+/// `concurrency_limit = min(floor((system_ram - margin) / compiler_ram_limit),
+/// n_cpus)`
 ///
 /// Returns an error only when the computed limit is 0 and the RPC server is
 /// enabled, since a running RPC server requires at least one compiler. When the
@@ -654,8 +654,8 @@ fn compute_compiler_concurrency_limit(
     available_parallelism: NonZeroUsize,
     is_rpc_enabled: bool,
 ) -> anyhow::Result<NonZeroUsize> {
-    // Concurrency_Limit = min(floor((System_RAM - Margin) / Compiler_RAM_Limit),
-    // n_CPUs)
+    // concurrency_limit = min(floor((system_ram - margin) / compiler_ram_limit),
+    // n_cpus)
     let concurrency_limit = total_memory_bytes
         .saturating_sub(compiler_concurrency_memory_margin_bytes)
         / compiler_memory_limit_bytes;

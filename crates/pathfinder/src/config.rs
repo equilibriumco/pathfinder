@@ -519,11 +519,11 @@ This should only be enabled for debugging purposes as it adds substantial proces
         long_help = "Maximum number of concurrent Sierra to CASM compilations for RPC calls.
 Default value is computed based on the formula:
                      
-    min(floor((Total_RAM - Margin) / Compiler_Max_Memory_Usage), Num_CPU_Cores)
+    min(floor((total_ram - margin) / compiler_max_memory_usage), num_cpu_cores)
                      
 where:
-    Margin is the value of --compiler.concurrency-memory-margin-mib
-    Compiler_Max_Memory_Usage is the value of --compiler.max-memory-usage-mib option.",
+    `margin` is the value of --compiler.concurrency-memory-margin-mib
+    `compiler_max_memory_usage` is the value of --compiler.max-memory-usage-mib option.",
         env = "PATHFINDER_RPC_COMPILER_CONCURRENCY_LIMIT"
     )]
     compiler_concurrency_limit: Option<NonZeroUsize>,
