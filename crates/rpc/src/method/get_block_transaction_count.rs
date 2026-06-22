@@ -28,7 +28,7 @@ pub struct Output(u64);
 pub async fn get_block_transaction_count(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, Error> {
     let span = tracing::Span::current();
     util::task::spawn_blocking(move |_| {
@@ -43,7 +43,7 @@ pub async fn get_block_transaction_count(
             BlockId::PreConfirmed => {
                 let count = context
                     .pending_data
-                    .get(&db, rpc_version)?
+                    .get(&db)?
                     .pre_confirmed_transactions()
                     .len() as u64;
                 return Ok(Output(count));

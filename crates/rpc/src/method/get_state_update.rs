@@ -55,7 +55,7 @@ impl dto::SerializeForVersion for Output {
 pub async fn get_state_update(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, Error> {
     let storage = context.storage.clone();
     let span = tracing::Span::current();
@@ -70,7 +70,7 @@ pub async fn get_state_update(
         if input.block_id.is_pending() {
             let mut state_update = context
                 .pending_data
-                .get(&tx, rpc_version)?
+                .get(&tx)?
                 .pre_confirmed_state_update();
             if !input.contract_addresses.is_empty() {
                 let mut own_state_update = state_update.as_ref().clone();

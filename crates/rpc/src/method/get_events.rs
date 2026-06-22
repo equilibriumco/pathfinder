@@ -118,7 +118,7 @@ impl crate::dto::DeserializeForVersion for EventFilter {
 pub async fn get_events(
     context: RpcContext,
     input: GetEventsInput,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<GetEventsResult, GetEventsError> {
     // The [Block::PreConfirmed] in ranges makes things quite complicated. This
     // implementation splits the ranges into the following buckets:
@@ -189,11 +189,11 @@ pub async fn get_events(
 
         // Missing pending data only errs when the request explicitly asked for it.
         let pending: Option<PendingData> = if requires_pre_confirmed {
-            Some(context.pending_data.get(&transaction, rpc_version)?)
+            Some(context.pending_data.get(&transaction)?)
         } else {
             context
                 .pending_data
-                .get_optional(&transaction, rpc_version)?
+                .get_optional(&transaction)?
         };
 
         // Replace from/to blocks with `BlockId::PreConfirmed` if their numbers match

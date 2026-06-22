@@ -45,7 +45,7 @@ pub struct Output {
 pub async fn get_transaction_by_hash(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, GetTransactionByHashError> {
     let include_proof_facts = input
         .response_flags
@@ -64,7 +64,7 @@ pub async fn get_transaction_by_hash(
         let db_tx = db.transaction().context("Creating database transaction")?;
 
         // Pending is an optional first look; a finalized tx lives in the DB regardless.
-        let pending = context.pending_data.get_optional(&db_tx, rpc_version)?;
+        let pending = context.pending_data.get_optional(&db_tx)?;
         if let Some(transaction) = pending
             .as_ref()
             .and_then(|p| p.find_transaction(input.transaction_hash))

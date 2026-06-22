@@ -55,7 +55,7 @@ pub struct Output(Vec<pathfinder_executor::types::FeeEstimate>);
 pub async fn estimate_fee(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, EstimateFeeError> {
     let span = tracing::Span::current();
     if let Some(bad_tx_idx) = input.request.iter().position(calldata_limit_exceeded) {
@@ -101,7 +101,7 @@ pub async fn estimate_fee(
 
         let (header, pending) = match input.block_id {
             BlockId::PreConfirmed => {
-                let pending = context.pending_data.get(&db_tx, rpc_version)?;
+                let pending = context.pending_data.get(&db_tx)?;
 
                 (
                     pending.pre_confirmed_header(),

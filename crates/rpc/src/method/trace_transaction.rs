@@ -48,7 +48,7 @@ impl crate::dto::SerializeForVersion for Output {
 pub async fn trace_transaction(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, TraceTransactionError> {
     #[allow(clippy::large_enum_variant)]
     enum LocalExecution {
@@ -70,7 +70,7 @@ pub async fn trace_transaction(
                 .context("Creating database transaction")?;
 
             // Find the transaction's block.
-            let pending = context.pending_data.get_optional(&db_tx, rpc_version)?;
+            let pending = context.pending_data.get_optional(&db_tx)?;
             let pending = pending.as_ref();
 
             let (header, transactions, pending_state, cache) = if let Some((pending, pending_tx)) =

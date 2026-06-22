@@ -52,7 +52,7 @@ crate::error::generate_rpc_error_subset!(
 pub async fn get_transaction_by_block_id_and_index(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, GetTransactionByBlockIdAndIndexError> {
     let index: usize = input
         .index
@@ -81,7 +81,7 @@ pub async fn get_transaction_by_block_id_and_index(
             BlockId::PreConfirmed => {
                 let result = context
                     .pending_data
-                    .get(&db_tx, rpc_version)?
+                    .get(&db_tx)?
                     .pre_confirmed_transactions()
                     .get(index)
                     .cloned()

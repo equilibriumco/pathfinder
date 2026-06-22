@@ -46,7 +46,7 @@ impl From<ContractClass> for Output {
 pub async fn get_class(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, Error> {
     let span = tracing::Span::current();
     let jh = util::task::spawn_blocking(move |_| -> Result<Output, Error> {
@@ -60,7 +60,7 @@ pub async fn get_class(
         let is_pending = input.block_id.is_pending()
             && context
                 .pending_data
-                .get(&tx, rpc_version)?
+                .get(&tx)?
                 .class_is_declared(input.class_hash);
 
         let block_id = input

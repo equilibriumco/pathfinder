@@ -30,7 +30,7 @@ crate::error::generate_rpc_error_subset!(Error: BlockNotFound, ContractNotFound)
 pub async fn get_nonce(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, Error> {
     let span = tracing::Span::current();
     util::task::spawn_blocking(move |_| -> Result<_, Error> {
@@ -44,7 +44,7 @@ pub async fn get_nonce(
         if input.block_id.is_pending() {
             let nonce = context
                 .pending_data
-                .get(&tx, rpc_version)?
+                .get(&tx)?
                 .find_nonce(input.contract_address);
 
             if let Some(nonce) = nonce {
