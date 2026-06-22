@@ -41,7 +41,7 @@ pub enum Output {
 pub async fn get_block_with_tx_hashes(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, Error> {
     let span = tracing::Span::current();
     util::task::spawn_blocking(move |_| {
@@ -57,7 +57,7 @@ pub async fn get_block_with_tx_hashes(
 
         let block_id = match input.block_id {
             BlockId::PreConfirmed => {
-                let pending = context.pending_data.get(&transaction, rpc_version)?;
+                let pending = context.pending_data.get(&transaction)?;
 
                 let transactions = pending
                     .pre_confirmed_transactions()

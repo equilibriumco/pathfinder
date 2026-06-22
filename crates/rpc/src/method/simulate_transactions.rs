@@ -43,7 +43,7 @@ pub struct Output {
 pub async fn simulate_transactions(
     context: RpcContext,
     input: SimulateTransactionInput,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, SimulateTransactionError> {
     let span = tracing::Span::current();
     if let Some(bad_tx_idx) = input.transactions.iter().position(calldata_limit_exceeded) {
@@ -98,7 +98,7 @@ pub async fn simulate_transactions(
 
         let (header, pending) = match input.block_id {
             BlockId::PreConfirmed => {
-                let pending = context.pending_data.get(&db_tx, rpc_version)?;
+                let pending = context.pending_data.get(&db_tx)?;
 
                 (
                     pending.pre_confirmed_header(),

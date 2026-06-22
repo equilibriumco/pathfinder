@@ -30,7 +30,7 @@ pub struct Output(ClassHash);
 pub async fn get_class_hash_at(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, Error> {
     let span = tracing::Span::current();
     util::task::spawn_blocking(move |_| {
@@ -45,7 +45,7 @@ pub async fn get_class_hash_at(
         if input.block_id.is_pending() {
             let class_hash = context
                 .pending_data
-                .get(&tx, rpc_version)?
+                .get(&tx)?
                 .find_contract_class(input.contract_address);
 
             if let Some(class_hash) = class_hash {

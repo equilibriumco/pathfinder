@@ -57,7 +57,7 @@ crate::error::generate_rpc_error_subset!(Error: ContractNotFound, BlockNotFound)
 pub async fn get_storage_at(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, Error> {
     let span = tracing::Span::current();
     let jh = util::task::spawn_blocking(move |_| {
@@ -77,7 +77,7 @@ pub async fn get_storage_at(
         let tx = db.transaction().context("Creating database transaction")?;
 
         if input.block_id.is_pending() {
-            let pending_data = context.pending_data.get(&tx, rpc_version)?;
+            let pending_data = context.pending_data.get(&tx)?;
             let opt_found = pending_data.find_storage_value(input.contract_address, input.key);
             if let Some(found) = opt_found {
                 let (value, last_update_block) = match found {

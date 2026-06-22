@@ -78,7 +78,7 @@ pub async fn estimate_message_fee(
 
         let (header, pending) = match input.block_id {
             BlockId::PreConfirmed => {
-                let pending = context.pending_data.get(&db_tx, rpc_version)?;
+                let pending = context.pending_data.get(&db_tx)?;
 
                 (
                     pending.pre_confirmed_header(),

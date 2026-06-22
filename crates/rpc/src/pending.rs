@@ -14,8 +14,6 @@ use pathfinder_pending_data::{PendingDataCache, ReadError};
 use pathfinder_storage::Transaction;
 use tokio::sync::watch::Receiver as WatchReceiver;
 
-use crate::RpcVersion;
-
 /// A finalized transaction along with its receipt, events, status and the block
 /// number it was included in.
 pub struct FinalizedTxData {
@@ -49,11 +47,7 @@ impl PendingWatcher {
     /// Returns an empty block with gas price and timestamp taken from the
     /// latest block if no valid pending data is available. The block number
     /// is also incremented.
-    pub fn get(
-        &self,
-        tx: &Transaction<'_>,
-        _rpc_version: RpcVersion,
-    ) -> Result<PendingData, ReadError> {
+    pub fn get(&self, tx: &Transaction<'_>) -> Result<PendingData, ReadError> {
         let latest = tx
             .block_header(pathfinder_common::BlockId::Latest)
             .context("Querying latest block header")?
@@ -180,12 +174,8 @@ impl PendingWatcher {
 
     /// Returns the pending data, or `None` when the cache is unavailable.
     /// Unlike [`Self::get`], an `Unavailable` cache is not an error.
-    pub fn get_optional(
-        &self,
-        tx: &Transaction<'_>,
-        rpc_version: RpcVersion,
-    ) -> Result<Option<PendingData>, ReadError> {
-        match self.get(tx, rpc_version) {
+    pub fn get_optional(&self, tx: &Transaction<'_>) -> Result<Option<PendingData>, ReadError> {
+        match self.get(tx) {
             Ok(data) => Ok(Some(data)),
             Err(ReadError::Unavailable(_)) => Ok(None),
             Err(e @ ReadError::Internal(_)) => Err(e),
@@ -411,7 +401,7 @@ mod tests {
         let pending = valid_pre_confirmed_block(&latest);
         cache.store(pending.clone());
 
-        let result = uut.get(&tx, RpcVersion::V09).unwrap();
+        let result = uut.get(&tx).unwrap();
         pretty_assertions_sorted::assert_eq_sorted!(result, pending);
     }
 
@@ -454,7 +444,7 @@ mod tests {
         let pending = valid_pre_confirmed_block_with_pre_latest(&latest);
         cache.store(pending.clone());
 
-        let result = uut.get(&tx, RpcVersion::V09).unwrap();
+        let result = uut.get(&tx).unwrap();
         pretty_assertions_sorted::assert_eq_sorted!(result, pending);
 
         // Now the pre-latest block (latest + 1) is itself finalized into storage,
@@ -467,7 +457,7 @@ mod tests {
             .finalize_with_hash(block_hash_bytes!(b"child hash"));
         tx.insert_block_header(&child).unwrap();
 
-        let result = uut.get(&tx, RpcVersion::V09).unwrap();
+        let result = uut.get(&tx).unwrap();
         // We got a non-empty pre-confirmed block..
         assert!(!result.pre_confirmed_transactions().is_empty());
         // ..and we did not receive a pre-latest block.
@@ -570,7 +560,7 @@ mod tests {
         tx.insert_block_header(&parent).unwrap();
         tx.insert_block_header(&latest).unwrap();
 
-        let result = uut.get(&tx, RpcVersion::V09).unwrap();
+        let result = uut.get(&tx).unwrap();
 
         let expected = PendingData::empty(&latest);
 
@@ -614,7 +604,7 @@ mod tests {
         let pending = valid_pre_confirmed_block(&parent);
         cache.store(pending.clone());
 
-        let result = uut.get(&tx, RpcVersion::V09).unwrap();
+        let result = uut.get(&tx).unwrap();
 
         let expected = empty_pre_confirmed_block(&latest);
 
@@ -672,7 +662,7 @@ mod tests {
         let pending = valid_pre_confirmed_block_with_pre_latest(&parent1);
         cache.store(pending.clone());
 
-        let result = uut.get(&tx, RpcVersion::V09).unwrap();
+        let result = uut.get(&tx).unwrap();
 
         let expected = empty_pre_confirmed_block(&latest);
 
@@ -711,7 +701,7 @@ mod tests {
 
         let pending = invalid_pre_confirmed_block_with_pre_latest(&latest);
         cache.store(pending.clone());
-        let _ = uut.get(&tx, RpcVersion::V09).unwrap();
+        let _ = uut.get(&tx).unwrap();
     }
 
     fn empty_pre_confirmed_block(latest: &BlockHeader) -> PendingData {

@@ -55,7 +55,7 @@ impl SerializeForVersion for Output {
 pub async fn get_class_at(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, Error> {
     let span = tracing::Span::current();
     let jh = util::task::spawn_blocking(move |_| {
@@ -70,7 +70,7 @@ pub async fn get_class_at(
         let pending_class_hash = if input.block_id.is_pending() {
             context
                 .pending_data
-                .get(&tx, rpc_version)?
+                .get(&tx)?
                 .find_contract_class(input.contract_address)
         } else {
             None

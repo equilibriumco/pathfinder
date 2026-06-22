@@ -85,7 +85,7 @@ crate::error::generate_rpc_error_subset!(Error: TxnHashNotFound);
 pub async fn get_transaction_receipt(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, Error> {
     let span = tracing::Span::current();
     util::task::spawn_blocking(move |_| {
@@ -98,7 +98,7 @@ pub async fn get_transaction_receipt(
         let db_tx = db.transaction().context("Creating database transaction")?;
 
         // Pending is an optional first look; a finalized tx lives in the DB regardless.
-        let pending = context.pending_data.get_optional(&db_tx, rpc_version)?;
+        let pending = context.pending_data.get_optional(&db_tx)?;
 
         if let Some(finalized_tx_data) = pending
             .as_ref()

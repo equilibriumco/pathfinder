@@ -78,7 +78,7 @@ enum TraceOutputFormat {
 pub async fn trace_block_transactions(
     context: RpcContext,
     input: TraceBlockTransactionsInput,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<TraceBlockTransactionsOutput, TraceBlockTransactionsError> {
     enum LocalExecution {
         Success(TraceBlockTransactionsOutput),
@@ -106,7 +106,7 @@ pub async fn trace_block_transactions(
 
         let (block_id, header, transactions, pending_state, cache) = match input.block_id {
             BlockId::PreConfirmed => {
-                let pending = context.pending_data.get(&db_tx, rpc_version)?;
+                let pending = context.pending_data.get(&db_tx)?;
 
                 let header = pending.pre_confirmed_header();
                 let transactions = pending.pre_confirmed_transactions().to_vec();

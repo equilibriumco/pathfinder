@@ -117,7 +117,7 @@ pub struct Output(pub Vec<CallResultValue>);
 pub async fn call(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, CallError> {
     let span = tracing::Span::current();
     if input.request.calldata.len() > CALLDATA_LIMIT {
@@ -138,7 +138,7 @@ pub async fn call(
 
         let (header, pending) = match input.block_id {
             BlockId::PreConfirmed => {
-                let pending = context.pending_data.get(&db_tx, rpc_version)?;
+                let pending = context.pending_data.get(&db_tx)?;
 
                 (
                     pending.pre_confirmed_header(),

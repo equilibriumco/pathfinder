@@ -39,7 +39,7 @@ crate::error::generate_rpc_error_subset!(Error: TxnHashNotFound);
 pub async fn get_transaction_status(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, Error> {
     // Check database.
     let span = tracing::Span::current();
@@ -52,7 +52,7 @@ pub async fn get_transaction_status(
             .context("Opening database connection")?;
         let db_tx = db.transaction().context("Creating database transaction")?;
 
-        let pending_data = context.pending_data.get_optional(&db_tx, rpc_version)?;
+        let pending_data = context.pending_data.get_optional(&db_tx)?;
 
         if let Some(finalized_tx_data) = pending_data
             .as_ref()

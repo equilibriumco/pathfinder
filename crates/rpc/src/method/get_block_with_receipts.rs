@@ -58,7 +58,7 @@ crate::error::generate_rpc_error_subset!(Error: BlockNotFound);
 pub async fn get_block_with_receipts(
     context: RpcContext,
     input: Input,
-    rpc_version: RpcVersion,
+    _rpc_version: RpcVersion,
 ) -> Result<Output, Error> {
     let span = tracing::Span::current();
     util::task::spawn_blocking(move |_| {
@@ -79,7 +79,7 @@ pub async fn get_block_with_receipts(
 
         let block_id = match input.block_id {
             BlockId::PreConfirmed => {
-                let pending = context.pending_data.get(&db, rpc_version)?;
+                let pending = context.pending_data.get(&db)?;
 
                 return Ok(Output::Pending {
                     block: pending.pending_block(),
