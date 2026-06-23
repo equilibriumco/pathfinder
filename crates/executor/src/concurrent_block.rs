@@ -327,7 +327,7 @@ fn create_state_reader_components<S: StorageAdapter + Clone>(
     let block_context = BlockContext::new(
         starknet_block_info,
         chain_info,
-        versioned_constants.into_owned(),
+        versioned_constants.clone(),
         BouncerConfig::max(),
     );
 

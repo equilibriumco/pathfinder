@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -21,146 +20,79 @@ use crate::state_reader::{NativeClassCache, StorageAdapter};
 use crate::types::BlockInfo;
 use crate::IntoStarkFelt;
 
-mod versions {
-    use pathfinder_common::StarknetVersion;
-
-    pub(super) const STARKNET_VERSION_0_13_1: StarknetVersion = StarknetVersion::new(0, 13, 1, 0);
-
-    pub(super) const STARKNET_VERSION_0_13_1_1: StarknetVersion = StarknetVersion::new(0, 13, 1, 1);
-
-    pub(super) const STARKNET_VERSION_0_13_2: StarknetVersion = StarknetVersion::new(0, 13, 2, 0);
-
-    pub(super) const STARKNET_VERSION_0_13_2_1: StarknetVersion = StarknetVersion::new(0, 13, 2, 1);
-
-    pub(super) const STARKNET_VERSION_0_13_3: StarknetVersion = StarknetVersion::new(0, 13, 3, 0);
-
-    pub(super) const STARKNET_VERSION_0_13_4: StarknetVersion = StarknetVersion::new(0, 13, 4, 0);
-
-    pub(super) const STARKNET_VERSION_0_13_5: StarknetVersion = StarknetVersion::new(0, 13, 5, 0);
-
-    pub(super) const STARKNET_VERSION_0_14_0: StarknetVersion = StarknetVersion::new(0, 14, 0, 0);
-
-    pub(super) const STARKNET_VERSION_0_14_1: StarknetVersion = StarknetVersion::new(0, 14, 1, 0);
-
-    pub(super) const STARKNET_VERSION_0_14_2: StarknetVersion = StarknetVersion::new(0, 14, 2, 0);
-
-    pub(super) const STARKNET_VERSION_0_14_3: StarknetVersion = StarknetVersion::new(0, 14, 3, 0);
-}
-
 #[derive(Clone, Debug)]
 pub struct VersionedConstantsMap {
-    data: BTreeMap<StarknetVersion, Cow<'static, VersionedConstants>>,
+    /// Operator-supplied overrides, keyed by the exact Starknet version they
+    /// target. Empty unless `--versioned-constants-file` is configured; every
+    /// other version resolves to the constants bundled with our blockifier
+    /// dependency.
+    overrides: BTreeMap<StarknetVersion, VersionedConstants>,
 }
 
 impl VersionedConstantsMap {
     pub fn new() -> Self {
-        let mut data = BTreeMap::new();
-        Self::fill_default(&mut data);
-        Self { data }
+        Self {
+            overrides: BTreeMap::new(),
+        }
     }
 
-    pub fn custom(mut data: BTreeMap<StarknetVersion, Cow<'static, VersionedConstants>>) -> Self {
-        Self::fill_default(&mut data);
-        Self { data }
+    pub fn custom(overrides: BTreeMap<StarknetVersion, VersionedConstants>) -> Self {
+        Self { overrides }
     }
 
+    /// The latest Starknet version our blockifier dependency ships constants
+    /// for.
     pub fn latest_version() -> StarknetVersion {
-        versions::STARKNET_VERSION_0_14_3
+        starknet_api::block::StarknetVersion::LATEST
+            .to_string()
+            .parse()
+            .expect("blockifier's latest Starknet version is a valid version string")
     }
 
-    fn fill_default(data: &mut BTreeMap<StarknetVersion, Cow<'static, VersionedConstants>>) {
-        use versions::*;
-
-        Self::insert_default(
-            data,
-            &STARKNET_VERSION_0_13_1,
-            VersionedConstants::get(&starknet_api::block::StarknetVersion::V0_13_1)
-                .expect("Failed to get versioned constants for 0.13.1"),
-        );
-        Self::insert_default(
-            data,
-            &STARKNET_VERSION_0_13_1_1,
-            VersionedConstants::get(&starknet_api::block::StarknetVersion::V0_13_1_1)
-                .expect("Failed to get versioned constants for 0.13.1.1"),
-        );
-        Self::insert_default(
-            data,
-            &STARKNET_VERSION_0_13_2,
-            VersionedConstants::get(&starknet_api::block::StarknetVersion::V0_13_2)
-                .expect("Failed to get versioned constants for 0.13.2"),
-        );
-        Self::insert_default(
-            data,
-            &STARKNET_VERSION_0_13_2_1,
-            VersionedConstants::get(&starknet_api::block::StarknetVersion::V0_13_2_1)
-                .expect("Failed to get versioned constants for 0.13.2.1"),
-        );
-        Self::insert_default(
-            data,
-            &STARKNET_VERSION_0_13_3,
-            VersionedConstants::get(&starknet_api::block::StarknetVersion::V0_13_3)
-                .expect("Failed to get versioned constants for 0.13.3"),
-        );
-        Self::insert_default(
-            data,
-            &STARKNET_VERSION_0_13_4,
-            VersionedConstants::get(&starknet_api::block::StarknetVersion::V0_13_4)
-                .expect("Failed to get versioned constants for 0.13.4"),
-        );
-        Self::insert_default(
-            data,
-            &STARKNET_VERSION_0_13_5,
-            VersionedConstants::get(&starknet_api::block::StarknetVersion::V0_13_5)
-                .expect("Failed to get versioned constants for 0.13.5"),
-        );
-        Self::insert_default(
-            data,
-            &STARKNET_VERSION_0_14_0,
-            VersionedConstants::get(&starknet_api::block::StarknetVersion::V0_14_0)
-                .expect("Failed to get versioned constants for 0.14.0"),
-        );
-        Self::insert_default(
-            data,
-            &STARKNET_VERSION_0_14_1,
-            VersionedConstants::get(&starknet_api::block::StarknetVersion::V0_14_1)
-                .expect("Failed to get versioned constants for 0.14.1"),
-        );
-        Self::insert_default(
-            data,
-            &STARKNET_VERSION_0_14_2,
-            VersionedConstants::get(&starknet_api::block::StarknetVersion::V0_14_2)
-                .expect("Failed to get versioned constants for 0.14.2"),
-        );
-        Self::insert_default(
-            data,
-            &STARKNET_VERSION_0_14_3,
-            VersionedConstants::get(&starknet_api::block::StarknetVersion::V0_14_3)
-                .expect("Failed to get versioned constants for 0.14.3"),
-        );
-    }
-
-    fn insert_default(
-        data: &mut BTreeMap<StarknetVersion, Cow<'static, VersionedConstants>>,
-        key: &StarknetVersion,
-        default_value: &'static VersionedConstants,
-    ) {
-        // should be try_insert, but that's still experimental...
-        if !data.contains_key(key) {
-            data.insert(*key, Cow::Borrowed(default_value));
+    pub fn for_version(&self, version: &StarknetVersion) -> &VersionedConstants {
+        // An operator override for this exact version wins.
+        if let Some(constants) = self.overrides.get(version) {
+            return constants;
         }
+        Self::bundled_for_version(version)
     }
 
-    pub fn for_version(&self, version: &StarknetVersion) -> Cow<'static, VersionedConstants> {
-        let mut rng = self.data.range(..=version);
-        if let Some(kv) = rng.next_back() {
-            kv.1.clone()
+    /// Resolves the versioned constants bundled with our blockifier dependency.
+    ///
+    /// Blockifier ships an exact constants set per released Starknet version
+    /// (0.13.0 through [`Self::latest_version`]). For a version it doesn't
+    /// recognise we fall back: blocks older than 0.13.0 use 0.13.0, while
+    /// blocks newer than this dependency use the latest known constants —
+    /// the latter also warns, since execution may be inaccurate until
+    /// Pathfinder is upgraded.
+    fn bundled_for_version(version: &StarknetVersion) -> &'static VersionedConstants {
+        use starknet_api::block::StarknetVersion as ApiVersion;
+
+        if let Some(constants) =
+            Self::api_version(version).and_then(|version| VersionedConstants::get(&version).ok())
+        {
+            return constants;
+        }
+
+        if version > &Self::latest_version() {
+            tracing::warn!(
+                block_version = %version,
+                latest_known = %Self::latest_version(),
+                "Block's Starknet version is newer than this Pathfinder release supports; \
+                 executing with the latest known constants. Upgrade Pathfinder for accurate \
+                 execution."
+            );
+            VersionedConstants::latest_constants()
         } else {
-            // We use 0.13.0 for all blocks before 0.13.1.
-            Cow::Borrowed(
-                VersionedConstants::get(&starknet_api::block::StarknetVersion::V0_13_0)
-                    .expect("Failed to get versioned constants for 0.13.0"),
-            )
+            VersionedConstants::get(&ApiVersion::V0_13_0)
+                .expect("blockifier bundles 0.13.0 versioned constants")
         }
+    }
+
+    /// Maps a Pathfinder Starknet version onto blockifier's version enum, when
+    /// it names a version blockifier knows about.
+    fn api_version(version: &StarknetVersion) -> Option<starknet_api::block::StarknetVersion> {
+        version.to_string().try_into().ok()
     }
 }
 
@@ -296,7 +228,7 @@ impl ExecutionState {
         let block_context = BlockContext::new(
             block_info,
             chain_info,
-            versioned_constants.into_owned(),
+            versioned_constants.clone(),
             BouncerConfig::max(),
         );
 

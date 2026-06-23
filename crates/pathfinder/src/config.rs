@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::net::SocketAddr;
@@ -1100,16 +1099,13 @@ fn parse_versioned_constants(
             })?;
             let abs_path = std::fs::canonicalize(dir_path.join(rel_path))?;
             let constants = VersionedConstants::from_path(&abs_path)?;
-            target.insert(version, Cow::Owned(constants));
+            target.insert(version, constants);
         }
     } else {
         // logging isn't set up yet...
         eprintln!("Unknown versioned constants map file format - trying legacy...");
         let constants = VersionedConstants::from_path(path)?;
-        target.insert(
-            VersionedConstantsMap::latest_version(),
-            Cow::Owned(constants),
-        );
+        target.insert(VersionedConstantsMap::latest_version(), constants);
     }
 
     if target.is_empty() {
