@@ -57,9 +57,9 @@ CRATES=("common" "crypto" "serde" "class-hash" "consensus")
 for crate in "${CRATES[@]}"; do
     file="crates/${crate}/Cargo.toml"
     echo "Updating dependencies for $file..."
-    do_sed "$file" "s/pathfinder-common = { version = \"[^\"]*\"/pathfinder-common = { version = \"${VERSION}\"/"
-    do_sed "$file" "s/pathfinder-crypto = { version = \"[^\"]*\"/pathfinder-crypto = { version = \"${VERSION}\"/"
-    do_sed "$file" "s/pathfinder-serde = { version = \"[^\"]*\"/pathfinder-serde = { version = \"${VERSION}\"/"
+    do_sed "$file" "s/pathfinder-common = \{ version = \"[^\"]*\"/pathfinder-common = { version = \"${VERSION}\"/"
+    do_sed "$file" "s/pathfinder-crypto = \{ version = \"[^\"]*\"/pathfinder-crypto = { version = \"${VERSION}\"/"
+    do_sed "$file" "s/pathfinder-serde = \{ version = \"[^\"]*\"/pathfinder-serde = { version = \"${VERSION}\"/"
 done
 
 # Update Cargo.lock and verify everything still builds
