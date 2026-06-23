@@ -439,20 +439,75 @@ pub enum L1BlobDataAvailability {
 
 #[cfg(test)]
 mod tests {
-    use blockifier::blockifier_versioned_constants::ResourceCost;
+    use std::collections::BTreeMap;
 
-    use super::versions::*;
+    use blockifier::blockifier_versioned_constants::VersionedConstants;
+    use pathfinder_common::StarknetVersion;
+    use starknet_api::block::StarknetVersion as ApiVersion;
+    use starknet_api::transaction::fields::ProofVersion;
+    use starknet_api::versioned_constants_logic::VersionedConstantsTrait;
+
     use super::VersionedConstantsMap;
 
-    #[test]
-    fn query_versioned_constants() {
-        let vcm = VersionedConstantsMap::default();
-        let constants = vcm.for_version(&STARKNET_VERSION_0_13_2);
-        let value = constants.deprecated_l2_resource_gas_costs.gas_per_code_byte;
-        assert_eq!(value, ResourceCost::new(875, 1000));
+    fn bundled(version: ApiVersion) -> &'static VersionedConstants {
+        VersionedConstants::get(&version).unwrap()
+    }
 
-        let constants = vcm.for_version(&STARKNET_VERSION_0_13_2_1);
-        let value = constants.deprecated_l2_resource_gas_costs.gas_per_code_byte;
-        assert_eq!(value, ResourceCost::new(32, 1000));
+    /// Each released version — including patch releases — resolves to its own
+    /// exact bundled constants, never an adjacent version's.
+    #[test]
+    fn resolves_exact_bundled_version() {
+        let vcm = VersionedConstantsMap::default();
+        for version in ["0.14.3", "0.13.2.1"] {
+            let parsed: StarknetVersion = version.parse().unwrap();
+            let api: ApiVersion = version.to_string().try_into().unwrap();
+            assert!(
+                std::ptr::eq(vcm.for_version(&parsed), bundled(api)),
+                "{version} should resolve to its own bundled constants",
+            );
+        }
+    }
+
+    /// Versions outside blockifier's range fall back: older than 0.13.0 to
+    /// 0.13.0, newer than our dependency to the latest known constants.
+    #[test]
+    fn resolves_out_of_range_versions() {
+        let vcm = VersionedConstantsMap::default();
+
+        let ancient = "0.12.0".parse().unwrap();
+        assert!(std::ptr::eq(
+            vcm.for_version(&ancient),
+            bundled(ApiVersion::V0_13_0),
+        ));
+
+        let future = StarknetVersion::new(0, 99, 0, 0);
+        assert!(std::ptr::eq(
+            vcm.for_version(&future),
+            VersionedConstants::latest_constants(),
+        ));
+    }
+
+    /// An operator override wins over the bundled constants for its exact
+    /// version.
+    #[test]
+    fn override_takes_precedence() {
+        let target: StarknetVersion = "0.14.3".parse().unwrap();
+        let proof1 = ProofVersion::V1.as_felt();
+
+        // 0.14.3 normally allows PROOF1...
+        assert!(VersionedConstantsMap::default()
+            .for_version(&target)
+            .os_constants
+            .allowed_proof_versions
+            .contains(&proof1));
+
+        // ...so overriding it with 0.13.0's constants (which allow no proof
+        // versions) proves the override is what gets used.
+        let overrides = BTreeMap::from([(target, bundled(ApiVersion::V0_13_0).clone())]);
+        assert!(!VersionedConstantsMap::custom(overrides)
+            .for_version(&target)
+            .os_constants
+            .allowed_proof_versions
+            .contains(&proof1));
     }
 }
