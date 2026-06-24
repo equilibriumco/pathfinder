@@ -498,6 +498,12 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
         ))
     });
 
+    let get_preconfirmed_block = warp::path("get_preconfirmed_block").then(|| async {
+        let block = include_str!("../fixtures/get_preconfirmed_block.json");
+        let json: serde_json::Value = serde_json::from_str(block).unwrap();
+        warp::reply::json(&json)
+    });
+
     #[derive(Debug, Deserialize)]
     struct ClassHashParam {
         #[serde(rename = "classHash")]
@@ -587,7 +593,8 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
                 .or(get_class_by_hash)
                 .or(get_compiled_class_by_hash)
                 .or(get_signature)
-                .or(get_public_key),
+                .or(get_public_key)
+                .or(get_preconfirmed_block),
         )
         .with(warp::filters::trace::request());
 
