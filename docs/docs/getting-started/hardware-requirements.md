@@ -7,7 +7,7 @@ Pathfinder's hardware requirements depend greatly on your use case. The recommen
 
 * **CPU**: 4 cores
 * **RAM**: 16 GB
-* **Storage**: 500 GB SSD
+* **Storage**: 1 TB SSD
     
 
 If you plan to operate in archive mode for historical queries or run multiple concurrent JSON-RPC requests, consider increasing CPU and memory.

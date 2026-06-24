@@ -22,7 +22,7 @@ You can run Pathfinder using Docker or by building it from source. Detailed inst
 <details>
 <summary><strong>What are the hardware requirements for running Pathfinder?</strong></summary>
 
-The recommended hardware includes 4 CPU cores, 8 GiB RAM, and 250 GiB SSD storage for optimal performance. These requirements are applicable for running Pathfinder on both mainnet and testnet.
+The recommended hardware includes 4 CPU cores, 16 GiB RAM, and 1 TiB SSD storage for optimal performance. These requirements are applicable for running Pathfinder on both mainnet and testnet.
 </details>
 
 <details>
