@@ -308,7 +308,7 @@ where
                 pending_handle = util::task::spawn(pending::poll_pre_confirmed(
                     event_sender.clone(),
                     sequencer.clone(),
-                    Duration::from_secs(2),
+                    head_poll_interval,
                     pending_data_cache.clone(),
                     rx_latest.clone(),
                     rx_current.clone(),
