@@ -961,12 +961,11 @@ fn start_p2p_sync(
     util::task::spawn(sync.run())
 }
 
-/// Latency buckets (milliseconds) for the RPC duration histogram. Sized for the
-/// range of RPC method latencies from sub-millisecond reads to multi-second
-/// traces.
+/// Latency buckets (milliseconds) for the RPC duration histogram, spanning
+/// single-millisecond reads to multi-second traces. Sub-millisecond calls fall
+/// into the first bucket.
 const RPC_LATENCY_BUCKETS: &[f64] = &[
-    0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-    10000.0,
+    1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0,
 ];
 
 /// Spawns the monitoring task at the given address.
