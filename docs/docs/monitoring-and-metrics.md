@@ -93,13 +93,13 @@ The Prometheus Metrics endpoint (`/metrics`) exposes real-time operational data 
       Counts how many times each method call resulted in an error. `error_kind` is the error
       variant name (e.g. `block_not_found`, `contract_not_found`, `invalid_params`,
       `internal_error`).
-    - `rpc_method_calls_duration_milliseconds{method="<methodName>", version="<rpcVersion>"}` —
-      histogram of JSON-RPC method call latency. Exported as Prometheus histogram buckets
-      (`rpc_method_calls_duration_milliseconds_bucket` / `_sum` / `_count`). Compute quantiles
+    - `rpc_method_calls_duration_seconds{method="<methodName>", version="<rpcVersion>"}` —
+      histogram of JSON-RPC method call latency, in seconds. Exported as Prometheus histogram
+      buckets (`rpc_method_calls_duration_seconds_bucket` / `_sum` / `_count`). Compute quantiles
       with `histogram_quantile()`:
 
       ```promql
-      histogram_quantile(0.95, sum by (le, method, version) (rate(rpc_method_calls_duration_milliseconds_bucket[5m])))
+      histogram_quantile(0.95, sum by (le, method, version) (rate(rpc_method_calls_duration_seconds_bucket[5m])))
       ```
 
       Pathfinder ships ready-made recording rules for p50/p95/p99 at

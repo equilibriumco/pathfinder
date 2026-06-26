@@ -1081,7 +1081,7 @@
                                 "mode": "thresholds"
                             },
                             "mappings": [],
-                            "unit": "ms",
+                            "unit": "s",
                             "thresholds": {
                                 "mode": "absolute",
                                 "steps": [
@@ -1091,11 +1091,11 @@
                                     },
                                     {
                                         "color": "yellow",
-                                        "value": 250
+                                        "value": 0.25
                                     },
                                     {
                                         "color": "red",
-                                        "value": 1000
+                                        "value": 1.0
                                     }
                                 ]
                             }
@@ -1131,7 +1131,7 @@
                                 "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
                             },
                             "editorMode": "code",
-                            "expr": "histogram_quantile(0.99, sum by (le) (rate(rpc_method_calls_duration_milliseconds_bucket{network=\"$network\"}[$__rate_interval])))",
+                            "expr": "histogram_quantile(0.99, sum by (le) (rate(rpc_method_calls_duration_seconds_bucket{network=\"$network\"}[$__rate_interval])))",
                             "instant": true,
                             "range": false,
                             "refId": "A"
@@ -1145,7 +1145,7 @@
                         "type": "prometheus",
                         "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
                     },
-                    "description": "Total time spent per method = rate of the duration histogram _sum, in ms of work per second (wall-clock per call, incl. DB/lock waits; not CPU profiling).",
+                    "description": "Total time spent per method = rate of the duration histogram _sum, in seconds of work per second (wall-clock per call, incl. DB/lock waits; not CPU profiling).",
                     "fieldConfig": {
                         "defaults": {
                             "color": {
@@ -1193,14 +1193,14 @@
                                 "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
                             },
                             "editorMode": "code",
-                            "expr": "topk(15, sum by (method) (rate(rpc_method_calls_duration_milliseconds_sum{network=\"$network\"}[$__rate_interval])))",
+                            "expr": "topk(15, sum by (method) (rate(rpc_method_calls_duration_seconds_sum{network=\"$network\"}[$__rate_interval])))",
                             "instant": true,
                             "range": false,
                             "refId": "A",
                             "legendFormat": "{{method}}"
                         }
                     ],
-                    "title": "Where your time goes (ms/s per method)",
+                    "title": "Where your time goes (s/s per method)",
                     "type": "bargauge"
                 },
                 {
@@ -1232,7 +1232,44 @@
                                 ]
                             }
                         },
-                        "overrides": []
+                        "overrides": [
+                            {
+                                "matcher": {
+                                    "id": "byName",
+                                    "options": "p50"
+                                },
+                                "properties": [
+                                    {
+                                        "id": "unit",
+                                        "value": "s"
+                                    }
+                                ]
+                            },
+                            {
+                                "matcher": {
+                                    "id": "byName",
+                                    "options": "p90"
+                                },
+                                "properties": [
+                                    {
+                                        "id": "unit",
+                                        "value": "s"
+                                    }
+                                ]
+                            },
+                            {
+                                "matcher": {
+                                    "id": "byName",
+                                    "options": "p99"
+                                },
+                                "properties": [
+                                    {
+                                        "id": "unit",
+                                        "value": "s"
+                                    }
+                                ]
+                            }
+                        ]
                     },
                     "gridPos": {
                         "h": 9,
@@ -1255,7 +1292,7 @@
                         "sortBy": [
                             {
                                 "desc": true,
-                                "displayName": "time-spent (ms/s)"
+                                "displayName": "time-spent (s/s)"
                             }
                         ]
                     },
@@ -1280,7 +1317,7 @@
                                 "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
                             },
                             "editorMode": "code",
-                            "expr": "sum by (method) (rate(rpc_method_calls_duration_milliseconds_sum{network=\"$network\"}[$__rate_interval]))",
+                            "expr": "sum by (method) (rate(rpc_method_calls_duration_seconds_sum{network=\"$network\"}[$__rate_interval]))",
                             "instant": true,
                             "range": false,
                             "refId": "B",
@@ -1293,7 +1330,7 @@
                                 "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
                             },
                             "editorMode": "code",
-                            "expr": "histogram_quantile(0.50, sum by (le, method) (rate(rpc_method_calls_duration_milliseconds_bucket{network=\"$network\"}[$__rate_interval])))",
+                            "expr": "histogram_quantile(0.50, sum by (le, method) (rate(rpc_method_calls_duration_seconds_bucket{network=\"$network\"}[$__rate_interval])))",
                             "instant": true,
                             "range": false,
                             "refId": "C",
@@ -1306,7 +1343,7 @@
                                 "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
                             },
                             "editorMode": "code",
-                            "expr": "histogram_quantile(0.90, sum by (le, method) (rate(rpc_method_calls_duration_milliseconds_bucket{network=\"$network\"}[$__rate_interval])))",
+                            "expr": "histogram_quantile(0.90, sum by (le, method) (rate(rpc_method_calls_duration_seconds_bucket{network=\"$network\"}[$__rate_interval])))",
                             "instant": true,
                             "range": false,
                             "refId": "D",
@@ -1319,7 +1356,7 @@
                                 "uid": "b8c48888-f6b5-49f2-b734-40b75cae0dbe"
                             },
                             "editorMode": "code",
-                            "expr": "histogram_quantile(0.99, sum by (le, method) (rate(rpc_method_calls_duration_milliseconds_bucket{network=\"$network\"}[$__rate_interval])))",
+                            "expr": "histogram_quantile(0.99, sum by (le, method) (rate(rpc_method_calls_duration_seconds_bucket{network=\"$network\"}[$__rate_interval])))",
                             "instant": true,
                             "range": false,
                             "refId": "E",
@@ -1355,10 +1392,10 @@
                                 "indexByName": {},
                                 "renameByName": {
                                     "Value #A": "calls/s",
-                                    "Value #B": "time-spent (ms/s)",
-                                    "Value #C": "p50 (ms)",
-                                    "Value #D": "p90 (ms)",
-                                    "Value #E": "p99 (ms)",
+                                    "Value #B": "time-spent (s/s)",
+                                    "Value #C": "p50",
+                                    "Value #D": "p90",
+                                    "Value #E": "p99",
                                     "Value #F": "error %"
                                 }
                             }

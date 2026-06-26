@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `rpc_method_calls_duration_milliseconds` is now exported as a Prometheus histogram (`_bucket`/`_sum`/`_count`) instead of a summary with a `quantile` label. Alerts or dashboards using `rpc_method_calls_duration_milliseconds{quantile="..."}` must switch to `histogram_quantile(...)` over the `_bucket` series; see `docs/docs/monitoring-and-metrics.md`.
+- RPC method-call latency is now exported as a Prometheus histogram in seconds, `rpc_method_calls_duration_seconds` (`_bucket`/`_sum`/`_count`), replacing the summary `rpc_method_calls_duration_milliseconds`. Update alerts and dashboards to the new name and derive quantiles with `histogram_quantile(...)` over the `_bucket` series; see `docs/docs/monitoring-and-metrics.md`.
 
 ## [0.22.7] - 2026-06-23
 
