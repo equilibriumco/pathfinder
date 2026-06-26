@@ -371,29 +371,13 @@ async fn fetch_pre_latest<S: GatewayApi + Send + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, LazyLock};
 
-    use assert_matches::assert_matches;
     use pathfinder_common::macro_prelude::*;
     use pathfinder_common::prelude::*;
-    use pathfinder_common::transaction::{
-        DataAvailabilityMode,
-        InvokeTransactionV3,
-        L1HandlerTransaction,
-        Transaction,
-        TransactionVariant,
-    };
+    use pathfinder_common::transaction::{L1HandlerTransaction, Transaction, TransactionVariant};
     use pathfinder_pending_data::PendingDataCache;
     use starknet_gateway_client::MockGatewayApi;
-    use starknet_gateway_types::reply::state_update::{
-        DeclaredSierraClass,
-        DeployedContract,
-        MigratedCompiledClass,
-        ReplacedClass,
-        StateDiff,
-        StorageDiff,
-    };
     use starknet_gateway_types::reply::{
         Block,
         GasPrices,
@@ -405,8 +389,7 @@ mod tests {
     };
     use tokio::sync::watch;
 
-    use super::poll_pre_confirmed;
-    use crate::state::sync::SyncEvent;
+    use super::{complete_previous_block, poll_pre_confirmed, store_pre_confirmed, State};
 
     const TEST_IN_SYNC_THRESHOLD: u64 = 6;
     const PARENT_HASH: BlockHash = block_hash!("0x1234");
@@ -464,287 +447,131 @@ mod tests {
         l1_da_mode: L1DataAvailabilityMode::Calldata,
     });
 
-    pub static PRE_CONFIRMED_BLOCK: LazyLock<PreConfirmedBlock> =
-        LazyLock::new(|| PreConfirmedBlock {
-            l1_gas_price: Default::default(),
-            l1_data_gas_price: Default::default(),
-            l2_gas_price: Default::default(),
-            sequencer_address: sequencer_address_bytes!(b"seqeunecer address"),
-            status: Status::PreConfirmed,
-            timestamp: BlockTimestamp::new_or_panic(30),
-            starknet_version: StarknetVersion::new(0, 14, 0, 0),
-            l1_da_mode: L1DataAvailabilityMode::Blob,
-            transactions: vec![
-                pathfinder_common::transaction::Transaction {
-                    hash: transaction_hash!("0x22"),
-                    variant: pathfinder_common::transaction::TransactionVariant::L1Handler(
-                        L1HandlerTransaction {
-                            contract_address: contract_address!("0x1"),
-                            entry_point_selector: entry_point!("0x55"),
-                            nonce: transaction_nonce!("0x2"),
-                            calldata: Vec::new(),
-                        },
-                    ),
-                },
-                pathfinder_common::transaction::Transaction {
-                    hash: transaction_hash!("0x33"),
-                    variant: pathfinder_common::transaction::TransactionVariant::InvokeV3(
-                        InvokeTransactionV3 {
-                            signature: vec![],
-                            nonce: transaction_nonce!("0x3"),
-                            nonce_data_availability_mode: DataAvailabilityMode::L1,
-                            fee_data_availability_mode: DataAvailabilityMode::L1,
-                            resource_bounds: Default::default(),
-                            tip: Default::default(),
-                            paymaster_data: vec![],
-                            account_deployment_data: vec![],
-                            calldata: vec![],
-                            sender_address: contract_address!("0x2"),
-                            proof_facts: vec![],
-                        },
-                    ),
-                },
-            ],
-            transaction_receipts: vec![
-                Some((
-                    pathfinder_common::receipt::Receipt {
-                        actual_fee: Default::default(),
-                        execution_resources: Default::default(),
-                        l2_to_l1_messages: vec![],
-                        execution_status: pathfinder_common::receipt::ExecutionStatus::Succeeded,
-                        transaction_hash: transaction_hash!("0x22"),
-                        transaction_index: TransactionIndex::new_or_panic(0),
-                    },
-                    vec![],
-                )),
-                None,
-            ],
-            transaction_state_diffs: vec![
-                Some(StateDiff {
-                    storage_diffs: HashMap::from([(
-                        contract_address_bytes!(b"contract 0"),
-                        vec![StorageDiff {
-                            key: storage_address_bytes!(b"storage key 0"),
-                            value: storage_value_bytes!(b"storage val 0"),
-                        }],
-                    )]),
-                    deployed_contracts: vec![DeployedContract {
-                        address: contract_address_bytes!(b"deployed contract"),
-                        class_hash: class_hash_bytes!(b"deployed class"),
-                    }],
-                    old_declared_contracts: HashSet::from([
-                        class_hash_bytes!(b"cairo 0 0"),
-                        class_hash_bytes!(b"cairo 0 1"),
-                    ]),
-                    declared_classes: vec![DeclaredSierraClass {
-                        class_hash: sierra_hash_bytes!(b"sierra class"),
-                        compiled_class_hash: casm_hash_bytes!(b"casm hash"),
-                    }],
-                    nonces: HashMap::from([
-                        (
-                            contract_address_bytes!(b"contract 0"),
-                            contract_nonce_bytes!(b"nonce 0"),
-                        ),
-                        (
-                            contract_address_bytes!(b"contract 10"),
-                            contract_nonce_bytes!(b"nonce 10"),
-                        ),
-                    ]),
-                    replaced_classes: vec![ReplacedClass {
-                        address: contract_address_bytes!(b"contract 0"),
-                        class_hash: class_hash_bytes!(b"replaced class"),
-                    }],
-                    migrated_compiled_classes: vec![MigratedCompiledClass {
-                        class_hash: sierra_hash_bytes!(b"migrated class"),
-                        compiled_class_hash: casm_hash_bytes!(b"migrated casm"),
-                    }],
-                }),
-                None,
-            ],
-        });
-
-    /// Arbitrary timeout for receiving emits on the tokio channel. Otherwise
-    /// failing tests will need to timeout naturally which may be forever.
+    /// Arbitrary upper bound for awaiting a cache update in tests, so a failing
+    /// test fails fast instead of hanging.
     const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-    #[tokio::test]
-    async fn success() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let mut sequencer = MockGatewayApi::new();
+    /// A pre-confirmed block whose every transaction carries a receipt, so the
+    /// `try_from_pre_confirmed_and_pre_latest` conversion accepts it (it
+    /// rejects blocks containing candidate transactions).
+    fn all_receipted_block(n: usize) -> PreConfirmedBlock {
+        let receipted_tx = |i: usize| {
+            let hash = match i {
+                0 => transaction_hash!("0x1"),
+                1 => transaction_hash!("0x2"),
+                2 => transaction_hash!("0x3"),
+                _ => transaction_hash!("0x4"),
+            };
+            Transaction {
+                hash,
+                variant: TransactionVariant::L1Handler(L1HandlerTransaction {
+                    contract_address: contract_address!("0x1"),
+                    entry_point_selector: entry_point!("0x55"),
+                    nonce: transaction_nonce!("0x0"),
+                    calldata: Vec::new(),
+                }),
+            }
+        };
+        let transactions: Vec<_> = (0..n).map(receipted_tx).collect();
+        let transaction_receipts = transactions
+            .iter()
+            .enumerate()
+            .map(|(i, tx)| {
+                Some((
+                    pathfinder_common::receipt::Receipt {
+                        transaction_hash: tx.hash,
+                        transaction_index: TransactionIndex::new_or_panic(i as u64),
+                        ..Default::default()
+                    },
+                    vec![],
+                ))
+            })
+            .collect();
+        PreConfirmedBlock {
+            status: Status::PreConfirmed,
+            transactions,
+            transaction_receipts,
+            transaction_state_diffs: vec![None; n],
+            ..Default::default()
+        }
+    }
 
-        sequencer
-            .expect_pending_block()
-            .returning(|| Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
-        sequencer
-            .expect_preconfirmed_block()
-            .returning(move |_, _, _| {
-                Ok(PreConfirmedPollResponse::Full {
-                    identifier: String::new(),
-                    block_number: Some(BlockNumber::new_or_panic(3)),
-                    block: PRE_CONFIRMED_BLOCK.clone(),
-                })
-            });
-
-        let latest_hash = PRE_LATEST_BLOCK.parent_hash;
-        let latest_block_number = BlockNumber::new_or_panic(1);
-        let (_, latest) = watch::channel((latest_block_number, latest_hash));
-        let (_, current) = watch::channel((latest_block_number, latest_hash));
-
+    /// Spawn the producer polling at a 1ms interval against the given cache.
+    /// The first poll fires immediately, so single-store tests aren't delayed.
+    fn spawn_producer(
+        sequencer: MockGatewayApi,
+        committed: BlockNumber,
+        latest_hash: BlockHash,
+        cache: Arc<PendingDataCache>,
+    ) {
+        let (_latest_tx, latest) = watch::channel((committed, latest_hash));
+        let (_current_tx, current) = watch::channel((committed, latest_hash));
         let sequencer = Arc::new(sequencer);
-        let _jh = tokio::spawn(async move {
+        tokio::spawn(async move {
             poll_pre_confirmed(
-                tx,
                 sequencer,
-                std::time::Duration::ZERO,
-                Arc::new(PendingDataCache::new()),
+                std::time::Duration::from_millis(1),
+                cache,
                 latest,
                 current,
                 TEST_IN_SYNC_THRESHOLD,
             )
             .await
         });
-
-        let result = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
-            .await
-            .expect("Event should be emitted")
-            .unwrap();
-
-        let expected_pre_latest_data = Some(Box::new((
-            latest_block_number + 1,
-            PRE_LATEST_BLOCK.clone(),
-            PENDING_UPDATE.clone(),
-        )));
-
-        assert_matches!(
-            result,
-            SyncEvent::PreConfirmed {
-                number,
-                block,
-                pre_latest_data,
-            } if number == latest_block_number + 2
-                && *block == *PRE_CONFIRMED_BLOCK
-                && pre_latest_data == expected_pre_latest_data
-        );
     }
 
     #[tokio::test]
-    async fn ignores_inconsistent_gateway_blocks() {
-        // In this test the gateway mock sends inconsistent block data.
-        //
-        // It first sends a block with 1 tx, then 0 and then 2.
-        // We expect the function to ignore the middle one since pending data
-        // should be monotonically growing.
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let mut sequencer = MockGatewayApi::new();
+    async fn store_pre_confirmed_stores_and_converts_a_chaining_view() {
+        // Committed head 1; pre-confirmed at 3 chains via a pre-latest at 2.
+        let cache = PendingDataCache::new();
+        let mut rx = cache.subscribe();
+        let _ = rx.borrow_and_update();
 
-        let mut b0 = PRE_CONFIRMED_BLOCK.clone();
-        b0.transactions.push(Transaction {
-            hash: transaction_hash!("0x22"),
-            variant: TransactionVariant::L1Handler(L1HandlerTransaction {
-                contract_address: contract_address!("0x1"),
-                entry_point_selector: entry_point!("0x55"),
-                nonce: transaction_nonce!("0x2"),
-                calldata: Vec::new(),
-            }),
-        });
-        let b0_copy = b0.clone();
-
-        let mut b1 = b0.clone();
-        b1.transactions.push(Transaction {
-            hash: transaction_hash!("0x22"),
-            variant: TransactionVariant::L1Handler(L1HandlerTransaction {
-                contract_address: contract_address!("0x1"),
-                entry_point_selector: entry_point!("0x55"),
-                nonce: transaction_nonce!("0x2"),
-                calldata: Vec::new(),
-            }),
-        });
-        let b1_copy = b1.clone();
-
-        static COUNT: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
-
-        sequencer
-            .expect_pending_block()
-            .returning(move || Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
-        sequencer
-            .expect_preconfirmed_block()
-            .returning(move |_, _, _| {
-                let mut count = COUNT.lock().unwrap();
-                *count += 1;
-
-                let block = match *count {
-                    1 => b0_copy.clone(),
-                    2 => PRE_CONFIRMED_BLOCK.clone(),
-                    _ => b1_copy.clone(),
-                };
-
-                Ok(PreConfirmedPollResponse::Full {
-                    identifier: String::new(),
-                    block_number: Some(BlockNumber::new_or_panic(3)),
-                    block,
-                })
-            });
-
-        let sequencer = Arc::new(sequencer);
-        let latest_hash = PRE_LATEST_BLOCK.parent_hash;
-        let latest_block_number = BlockNumber::new_or_panic(1);
-        let (_, rx_latest) = watch::channel((latest_block_number, latest_hash));
-        let (_, rx_current) = watch::channel((latest_block_number, latest_hash));
-        let _jh = tokio::spawn(async move {
-            poll_pre_confirmed(
-                tx,
-                sequencer,
-                std::time::Duration::ZERO,
-                Arc::new(PendingDataCache::new()),
-                rx_latest,
-                rx_current,
-                TEST_IN_SYNC_THRESHOLD,
-            )
-            .await
-        });
-
-        let result1 = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
-            .await
-            .expect("Event should be emitted")
-            .unwrap();
-
-        let expected_pre_latest_data = Some(Box::new((
-            latest_block_number + 1,
+        let committed = BlockNumber::new_or_panic(1);
+        let pre_latest = Box::new((
+            committed + 1,
             PRE_LATEST_BLOCK.clone(),
             PENDING_UPDATE.clone(),
-        )));
-
-        assert_matches!(
-            result1,
-            SyncEvent::PreConfirmed {
-                number,
-                block,
-                pre_latest_data,
-            } if number == latest_block_number + 2
-                && *block == b0
-                && pre_latest_data == expected_pre_latest_data
+        ));
+        store_pre_confirmed(
+            &cache,
+            committed,
+            BlockNumber::new_or_panic(3),
+            Box::new(all_receipted_block(2)),
+            Some(pre_latest),
         );
 
-        let result2 = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
-            .await
-            .expect("Event should be emitted")
-            .unwrap();
+        assert!(
+            rx.has_changed().unwrap(),
+            "a chaining view should be stored"
+        );
+        let pending = rx.borrow().clone();
+        assert_eq!(
+            pending.pre_confirmed_block_number(),
+            BlockNumber::new_or_panic(3)
+        );
+        assert_eq!(pending.pre_latest_block_number(), Some(committed + 1));
+        assert_eq!(pending.pre_confirmed_transactions().len(), 2);
+    }
 
-        let expected_pre_latest_data = Some(Box::new((
-            latest_block_number + 1,
-            PRE_LATEST_BLOCK.clone(),
-            PENDING_UPDATE.clone(),
-        )));
+    #[tokio::test]
+    async fn store_pre_confirmed_skips_a_non_chaining_view() {
+        // Committed head 1, pre-confirmed at 5: gap > 1, so it doesn't chain.
+        let cache = PendingDataCache::new();
+        let mut rx = cache.subscribe();
+        let _ = rx.borrow_and_update();
 
-        assert_matches!(
-            result2,
-            SyncEvent::PreConfirmed {
-                number,
-                block,
-                pre_latest_data,
-            } if number == latest_block_number + 2
-                && *block == b1
-                && pre_latest_data == expected_pre_latest_data
+        store_pre_confirmed(
+            &cache,
+            BlockNumber::new_or_panic(1),
+            BlockNumber::new_or_panic(5),
+            Box::new(all_receipted_block(2)),
+            None,
+        );
+
+        assert!(
+            !rx.has_changed().unwrap(),
+            "a non-chaining view must not be stored"
         );
     }
 
@@ -790,81 +617,6 @@ mod tests {
             .unwrap();
 
         assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn stale_transactions_is_ignored() {
-        // This test ensures that when `poll_pre_confirmed` receives pre-confirmed
-        // blocks with stale data (same or lower transaction count), no event is
-        // emitted.
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let mut sequencer = MockGatewayApi::new();
-
-        let our_latest_hash = PRE_LATEST_BLOCK.parent_hash;
-
-        let mut stale_pre_confirmed = PRE_CONFIRMED_BLOCK.clone();
-        stale_pre_confirmed.transactions.pop();
-        stale_pre_confirmed.transaction_receipts.pop();
-        stale_pre_confirmed.transaction_state_diffs.pop();
-
-        static COUNT: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
-
-        sequencer
-            .expect_pending_block()
-            .returning(move || Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
-        sequencer
-            .expect_preconfirmed_block()
-            .returning(move |_, _, _| {
-                let mut count = COUNT.lock().unwrap();
-                let block = match *count {
-                    0 => {
-                        *count += 1;
-                        // Polling task has default state at the start, so this should produce an
-                        // event.
-                        PRE_CONFIRMED_BLOCK.clone()
-                    }
-                    1 => {
-                        *count += 1;
-                        // Same transaction count as before, should be ignored.
-                        PRE_CONFIRMED_BLOCK.clone()
-                    }
-                    _ => {
-                        // Lower transaction count than before, should be ignored.
-                        stale_pre_confirmed.clone()
-                    }
-                };
-
-                Ok(PreConfirmedPollResponse::Full {
-                    identifier: String::new(),
-                    block_number: Some(BlockNumber::new_or_panic(12)),
-                    block,
-                })
-            });
-
-        let latest_block_number = BlockNumber::new_or_panic(10);
-
-        let (_, rx_latest) = watch::channel((latest_block_number, our_latest_hash));
-        let (_, rx_current) = watch::channel((latest_block_number, our_latest_hash));
-
-        let sequencer = Arc::new(sequencer);
-        let _jh = tokio::spawn(async move {
-            super::poll_pre_confirmed(
-                tx,
-                sequencer,
-                std::time::Duration::ZERO,
-                Arc::new(PendingDataCache::new()),
-                rx_latest,
-                rx_current,
-                TEST_IN_SYNC_THRESHOLD,
-            )
-            .await
-        });
-
-        let _ = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
-            .await
-            .expect("First event should be emitted");
-        let result = tokio::time::timeout(TEST_TIMEOUT, rx.recv()).await;
-        assert!(result.is_err(), "No event should be emitted for stale data");
     }
 
     mod apply {
@@ -1099,90 +851,67 @@ mod tests {
     }
 
     /// A transient gateway inconsistency could briefly resolve `latest` to a
-    /// lower height than we're already tracking. The polling loop should
-    /// skip those responses without discarding accumulated state.
+    /// lower height than we're already tracking. The polling loop should skip
+    /// those responses without overwriting the cached view.
     ///
     /// See also <https://github.com/equilibriumco/pathfinder/issues/3081>.
     #[tokio::test]
-    async fn skips_poll_when_resolved_height_is_lower() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let mut sequencer = MockGatewayApi::new();
-
-        let our_latest_hash = PRE_LATEST_BLOCK.parent_hash;
-
+    async fn lower_height_is_skipped() {
         static COUNT: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
 
+        let mut sequencer = MockGatewayApi::new();
         sequencer
             .expect_pending_block()
-            .returning(move || Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
-        sequencer
-            .expect_preconfirmed_block()
-            .returning(move |_, _, _| {
-                let mut count = COUNT.lock().unwrap();
-                let block_number = match *count {
-                    0 => {
-                        *count += 1;
-                        // First poll establishes the tracked height at 12.
-                        BlockNumber::new_or_panic(12)
-                    }
-                    _ => {
-                        // Subsequent polls resolve to a lower height (gateway hiccup).
-                        BlockNumber::new_or_panic(11)
-                    }
-                };
-                Ok(PreConfirmedPollResponse::Full {
-                    identifier: String::new(),
-                    block_number: Some(block_number),
-                    block: PRE_CONFIRMED_BLOCK.clone(),
-                })
-            });
-
-        let latest_block_number = BlockNumber::new_or_panic(10);
-
-        let (_, rx_latest) = watch::channel((latest_block_number, our_latest_hash));
-        let (_, rx_current) = watch::channel((latest_block_number, our_latest_hash));
-
-        let sequencer = Arc::new(sequencer);
-        // Pre-stale the cache so the lower-height branch's `mark_fresh()` is
-        // observable: without it the cache would stay stale.
-        let cache = Arc::new(PendingDataCache::new());
-        cache.mark_stale();
-        let _jh = tokio::spawn({
-            let cache = cache.clone();
-            async move {
-                super::poll_pre_confirmed(
-                    tx,
-                    sequencer,
-                    std::time::Duration::ZERO,
-                    cache,
-                    rx_latest,
-                    rx_current,
-                    TEST_IN_SYNC_THRESHOLD,
-                )
-                .await
-            }
+            .returning(|| Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
+        sequencer.expect_preconfirmed_block().returning(|_, _, _| {
+            let mut count = COUNT.lock().unwrap();
+            let block_number = match *count {
+                0 => {
+                    *count += 1;
+                    // First poll establishes the tracked height at 12.
+                    BlockNumber::new_or_panic(12)
+                }
+                // Subsequent polls resolve to a lower height (gateway hiccup).
+                _ => BlockNumber::new_or_panic(11),
+            };
+            Ok(PreConfirmedPollResponse::Full {
+                identifier: String::new(),
+                block_number: Some(block_number),
+                block: all_receipted_block(1),
+            })
         });
 
-        let first = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
+        let committed = BlockNumber::new_or_panic(11);
+        let cache = Arc::new(PendingDataCache::new());
+        let mut sub = cache.subscribe();
+        let _ = sub.borrow_and_update();
+
+        // Unrelated hash so pre-latest is classified absent.
+        spawn_producer(sequencer, committed, block_hash!("0xdead"), cache.clone());
+
+        // The first poll stores block 12.
+        tokio::time::timeout(TEST_TIMEOUT, sub.changed())
             .await
-            .expect("First event should be emitted")
+            .expect("block 12 should be stored")
             .unwrap();
-        assert_matches!(
-            first,
-            SyncEvent::PreConfirmed { number, .. } if number == BlockNumber::new_or_panic(12)
+        assert_eq!(
+            sub.borrow().pre_confirmed_block_number(),
+            BlockNumber::new_or_panic(12)
         );
 
-        let result = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await;
+        // The backwards-resolved poll must not overwrite the cache.
+        let changed =
+            tokio::time::timeout(std::time::Duration::from_millis(100), sub.changed()).await;
         assert!(
-            result.is_err(),
-            "No event should be emitted for a backwards-resolved height"
+            changed.is_err(),
+            "a lower-height poll must not overwrite the cache"
         );
 
-        // The lower-height skip keeps the cache serviceable via `mark_fresh()`,
-        // rather than marking it unavailable.
-        assert!(
-            cache.try_read().is_some(),
-            "lower-height skip should mark the cache fresh, not leave it stale or unavailable"
+        // The skip keeps the cache serviceable and still holding block 12.
+        let retained = cache.try_read().expect("cache should remain serviceable");
+        assert_eq!(
+            retained.pre_confirmed_block_number(),
+            BlockNumber::new_or_panic(12)
         );
     }
 
@@ -1199,12 +928,10 @@ mod tests {
         let (_tx_current, current) = watch::channel((BlockNumber::new_or_panic(0), hash));
 
         let cache = Arc::new(PendingDataCache::new());
-        let (tx, _rx) = tokio::sync::mpsc::channel(8);
         let _jh = tokio::spawn({
             let cache = cache.clone();
             async move {
                 super::poll_pre_confirmed(
-                    tx,
                     sequencer,
                     std::time::Duration::from_secs(1),
                     cache,
@@ -1245,12 +972,10 @@ mod tests {
         let (_tx_current, current) = watch::channel((number, hash));
 
         let cache = Arc::new(PendingDataCache::new());
-        let (tx, _rx) = tokio::sync::mpsc::channel(8);
         let _jh = tokio::spawn({
             let cache = cache.clone();
             async move {
                 super::poll_pre_confirmed(
-                    tx,
                     sequencer,
                     std::time::Duration::from_secs(1),
                     cache,
@@ -1268,29 +993,16 @@ mod tests {
         assert!(err.to_string().contains("gateway error"), "got: {err}");
     }
 
-    /// When the chain advances past the pre-confirmed block we're tracking,
-    /// the loop completes the previous block with one final query (picking up
-    /// any transactions that landed just before it was superseded) before
-    /// moving on to the new height.
-    ///
-    /// Three emissions are expected across two ticks:
-    ///   1. Block N initial
-    ///   2. Block N completed (tail transaction included)
-    ///   3. Block N+1 fresh
+    /// The completion query for a superseded block carries any tail
+    /// transactions that landed just before it advanced; they must reach
+    /// the cache.
     #[tokio::test]
-    async fn completes_previous_block_when_chain_advances() {
-        use starknet_gateway_client::BlockId;
+    async fn complete_previous_block_applies_the_tail_delta() {
+        const BLOCK_ID: &str = "id-11";
 
-        let our_latest_number = BlockNumber::new_or_panic(10);
-        // Pre-latest is absent throughout: our latest hash does not match
-        // PRE_LATEST_BLOCK.parent_hash, so fetch_pre_latest classifies it as None.
-        let our_latest_hash = block_hash!("0xabcd");
-
-        const BLOCK_11_ID: &str = "id-11";
-        const BLOCK_12_ID: &str = "id-12";
-
+        let tail_hash = transaction_hash!("0x012345");
         let tail_tx = Transaction {
-            hash: transaction_hash!("0x012345"),
+            hash: tail_hash,
             variant: TransactionVariant::L1Handler(L1HandlerTransaction {
                 contract_address: contract_address!("0x1"),
                 entry_point_selector: entry_point!("0x55"),
@@ -1298,166 +1010,102 @@ mod tests {
                 calldata: Vec::new(),
             }),
         };
+        let tail_receipt = pathfinder_common::receipt::Receipt {
+            transaction_hash: tail_hash,
+            transaction_index: TransactionIndex::new_or_panic(1),
+            ..Default::default()
+        };
 
-        // Mock gateway
         let mut sequencer = MockGatewayApi::new();
         sequencer
-            .expect_pending_block()
-            .returning(|| Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
-
-        // Pre-confirmed responses are scripted by dispatching on the request's
-        // (BlockId, identifier) — each pattern fires on a specific tick.
-        let tail_for_mock = tail_tx.clone();
-        sequencer
             .expect_preconfirmed_block()
-            .returning(move |block_id, identifier, _tx_count| {
-                match (block_id, identifier.as_deref()) {
-                    // Tick 1: first poll, no cached identifier. Server returns
-                    // pre-confirmed block 11.
-                    (BlockId::Latest, None) => Ok(PreConfirmedPollResponse::Full {
-                        identifier: BLOCK_11_ID.into(),
-                        block_number: Some(BlockNumber::new_or_panic(11)),
-                        block: PRE_CONFIRMED_BLOCK.clone(),
-                    }),
-
-                    // Tick 2: chain has advanced. Server returns pre-confirmed
-                    // block 12 with a fresh identifier.
-                    (BlockId::Latest, Some(id)) if id == BLOCK_11_ID => {
-                        Ok(PreConfirmedPollResponse::Full {
-                            identifier: BLOCK_12_ID.into(),
-                            block_number: Some(BlockNumber::new_or_panic(12)),
-                            block: PRE_CONFIRMED_BLOCK.clone(),
-                        })
-                    }
-
-                    // Completion query for block 11: server returns a delta
-                    // carrying the tail transaction that landed just before
-                    // the chain advanced.
-                    (BlockId::Number(n), Some(id))
-                        if n == BlockNumber::new_or_panic(11) && id == BLOCK_11_ID =>
-                    {
-                        Ok(PreConfirmedPollResponse::Delta {
-                            identifier: BLOCK_11_ID.into(),
-                            new_transactions: vec![tail_for_mock.clone()],
-                            new_receipts: vec![None],
-                            new_state_diffs: vec![None],
-                        })
-                    }
-
-                    // Steady state on block 12: subsequent polls report no change.
-                    (BlockId::Latest, Some(id)) if id == BLOCK_12_ID => {
-                        Ok(PreConfirmedPollResponse::Unchanged)
-                    }
-
-                    _ => panic!(
-                        "unexpected preconfirmed_block call: id={:?} identifier={:?}",
-                        block_id, identifier
-                    ),
-                }
+            .returning(move |_, _, _| {
+                Ok(PreConfirmedPollResponse::Delta {
+                    identifier: BLOCK_ID.into(),
+                    new_transactions: vec![tail_tx.clone()],
+                    new_receipts: vec![Some((tail_receipt.clone(), vec![]))],
+                    new_state_diffs: vec![None],
+                })
             });
 
-        // Spawn the polling loop
-        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-        let (_, latest) = watch::channel((our_latest_number, our_latest_hash));
-        let (_, current) = watch::channel((our_latest_number, our_latest_hash));
-        let sequencer = Arc::new(sequencer);
-        let _jh = tokio::spawn(async move {
-            super::poll_pre_confirmed(
-                tx,
-                sequencer,
-                std::time::Duration::ZERO,
-                Arc::new(PendingDataCache::new()),
-                latest,
-                current,
-                TEST_IN_SYNC_THRESHOLD,
-            )
-            .await
-        });
+        // We're tracking block 11 with one receipted transaction already merged.
+        let mut state = State {
+            block_number: BlockNumber::new_or_panic(11),
+            block_identifier: Some(BLOCK_ID.to_string()),
+            accumulated: Some(all_receipted_block(1)),
+            pre_latest_data_present: false,
+        };
 
-        // Assertions
+        let cache = PendingDataCache::new();
+        let mut rx = cache.subscribe();
+        let _ = rx.borrow_and_update();
 
-        // 1. Initial pre-confirmed at block 11.
-        let initial = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
-            .await
-            .expect("Initial event should be emitted")
-            .unwrap();
-        assert_matches!(
-            initial,
-            SyncEvent::PreConfirmed { number, block, pre_latest_data }
-                if number == BlockNumber::new_or_panic(11)
-                    && block.transactions.len() == PRE_CONFIRMED_BLOCK.transactions.len()
-                    && pre_latest_data.is_none()
+        // Committed head 10, so block 11 still chains and is stored.
+        complete_previous_block(
+            &sequencer,
+            &mut state,
+            &cache,
+            BlockNumber::new_or_panic(10),
+        )
+        .await;
+
+        assert!(
+            rx.has_changed().unwrap(),
+            "the completion should store the block"
         );
-
-        // 2. Block 11 completed: same height, tail transaction appended.
-        let completed = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
-            .await
-            .expect("Completion event should be emitted")
-            .unwrap();
-        let expected_completed_len = PRE_CONFIRMED_BLOCK.transactions.len() + 1;
-        assert_matches!(
-            completed,
-            SyncEvent::PreConfirmed { number, block, pre_latest_data }
-                if number == BlockNumber::new_or_panic(11)
-                    && block.transactions.len() == expected_completed_len
-                    && pre_latest_data.is_none()
+        let pending = rx.borrow().clone();
+        assert_eq!(
+            pending.pre_confirmed_block_number(),
+            BlockNumber::new_or_panic(11)
         );
-
-        // 3. Fresh pre-confirmed at block 12.
-        let advanced = tokio::time::timeout(TEST_TIMEOUT, rx.recv())
-            .await
-            .expect("Advance event should be emitted")
-            .unwrap();
-        assert_matches!(
-            advanced,
-            SyncEvent::PreConfirmed { number, block, pre_latest_data }
-                if number == BlockNumber::new_or_panic(12)
-                    && block.transactions.len() == PRE_CONFIRMED_BLOCK.transactions.len()
-                    && pre_latest_data.is_none()
+        assert!(
+            pending
+                .pre_confirmed_transactions()
+                .iter()
+                .any(|t| t.hash == tail_hash),
+            "the tail transaction should be in the completed block"
         );
     }
 
     #[tokio::test(start_paused = true)]
-    async fn idle_timeout_pauses_polling_until_cache_read() {
-        // Polling runs while the cache keeps being read; once `IDLE_TIMEOUT`
-        // elapses with no reads the loop suspends. A subsequent cache read
-        // wakes it back up.
-
+    async fn idle_pauses_polling_until_cache_read() {
+        // Polling suspends once the inactivity window elapses without a read,
+        // and a cache read resumes it. Activity is observed via the gateway call
+        // counter, since touching the cache would itself reset the window.
         const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
         const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
 
-        // Set up: distinct identifier per call so every poll produces an emission.
-        let counter = Arc::new(std::sync::Mutex::new(0u64));
+        let calls = Arc::new(std::sync::Mutex::new(0u64));
         let mut sequencer = MockGatewayApi::new();
         sequencer
             .expect_pending_block()
             .returning(|| Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
-        sequencer
-            .expect_preconfirmed_block()
-            .returning(move |_, _, _| {
-                let mut c = counter.lock().unwrap();
-                *c += 1;
-                Ok(PreConfirmedPollResponse::Full {
-                    identifier: format!("id-{}", *c),
-                    block_number: Some(BlockNumber::new_or_panic(3)),
-                    block: PRE_CONFIRMED_BLOCK.clone(),
-                })
-            });
+        {
+            let calls = calls.clone();
+            sequencer
+                .expect_preconfirmed_block()
+                .returning(move |_, _, _| {
+                    let mut c = calls.lock().unwrap();
+                    *c += 1;
+                    Ok(PreConfirmedPollResponse::Full {
+                        identifier: format!("id-{}", *c),
+                        block_number: Some(BlockNumber::new_or_panic(2)),
+                        block: all_receipted_block(1),
+                    })
+                });
+        }
 
         let latest_hash = PRE_LATEST_BLOCK.parent_hash;
-        let latest_block_number = BlockNumber::new_or_panic(1);
-        let (_, latest) = watch::channel((latest_block_number, latest_hash));
-        let (_, current) = watch::channel((latest_block_number, latest_hash));
+        let committed = BlockNumber::new_or_panic(1);
+        let (_latest_tx, latest) = watch::channel((committed, latest_hash));
+        let (_current_tx, current) = watch::channel((committed, latest_hash));
 
         let cache = Arc::new(PendingDataCache::new().with_inactivity_timeout(IDLE_TIMEOUT));
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
         let sequencer = Arc::new(sequencer);
-        let _jh = tokio::spawn({
+        tokio::spawn({
             let cache = cache.clone();
             async move {
-                super::poll_pre_confirmed(
-                    tx,
+                poll_pre_confirmed(
                     sequencer,
                     POLL_INTERVAL,
                     cache,
@@ -1469,26 +1117,24 @@ mod tests {
             }
         });
 
-        // Each `recv` either returns the next emission, or times out (which
-        // means the loop has suspended waiting for a cache read).
-        let mut emissions_before_idle = 0;
-        loop {
-            match tokio::time::timeout(IDLE_TIMEOUT * 2, rx.recv()).await {
-                Ok(Some(_)) => emissions_before_idle += 1,
-                Ok(None) => panic!("event channel closed unexpectedly"),
-                Err(_) => break,
-            }
-        }
-        assert!(
-            emissions_before_idle >= 1,
-            "expected at least one emission while Active"
+        // Polls happen for a while, then idle suspends them.
+        tokio::time::sleep(IDLE_TIMEOUT * 3).await;
+        let count_at_idle = *calls.lock().unwrap();
+        assert!(count_at_idle >= 1, "expected at least one poll before idle");
+
+        tokio::time::sleep(IDLE_TIMEOUT * 3).await;
+        assert_eq!(
+            *calls.lock().unwrap(),
+            count_at_idle,
+            "polling should be suspended while idle"
         );
 
-        // A cache read wakes the loop within one poll interval.
+        // A cache read wakes the loop.
         let _ = cache.read().await;
-        tokio::time::timeout(POLL_INTERVAL * 2, rx.recv())
-            .await
-            .expect("loop should resume promptly after cache read")
-            .expect("event channel closed");
+        tokio::time::sleep(POLL_INTERVAL * 3).await;
+        assert!(
+            *calls.lock().unwrap() > count_at_idle,
+            "polling should resume after a cache read"
+        );
     }
 }

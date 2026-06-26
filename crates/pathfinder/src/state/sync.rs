@@ -1608,7 +1608,6 @@ mod tests {
         TransactionVariant,
     };
     use pathfinder_crypto::Felt;
-    use pathfinder_pending_data::PendingDataCache;
     use pathfinder_rpc::SyncState;
     use pathfinder_storage::StorageBuilder;
     use starknet_gateway_types::reply::{self, Block, GasPrices};
@@ -2061,7 +2060,6 @@ mod tests {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data_cache: Arc::new(PendingDataCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2115,7 +2113,6 @@ mod tests {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data_cache: Arc::new(PendingDataCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2183,7 +2180,6 @@ mod tests {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data_cache: Arc::new(PendingDataCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2236,7 +2232,6 @@ mod tests {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data_cache: Arc::new(PendingDataCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2278,7 +2273,6 @@ mod tests {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data_cache: Arc::new(PendingDataCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2328,7 +2322,6 @@ mod tests {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data_cache: Arc::new(PendingDataCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2382,7 +2375,6 @@ mod tests {
             storage,
             state: Arc::new(SyncState::default()),
             submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(10, 10),
-            pending_data_cache: Arc::new(PendingDataCache::new()),
             verify_tree_hashes: false,
             notifications: Default::default(),
             sync_to_consensus_tx: None,
@@ -2594,7 +2586,6 @@ mod tests {
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data_cache: Arc::new(PendingDataCache::new()),
                 verify_tree_hashes: false,
                 notifications,
                 sync_to_consensus_tx: None,
@@ -2653,7 +2644,6 @@ mod tests {
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data_cache: Arc::new(PendingDataCache::new()),
                 verify_tree_hashes: false,
                 notifications: Default::default(),
                 sync_to_consensus_tx: None,
@@ -2754,7 +2744,6 @@ mod tests {
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data_cache: Arc::new(PendingDataCache::new()),
                 verify_tree_hashes: false,
                 notifications,
                 sync_to_consensus_tx: None,
@@ -2780,7 +2769,6 @@ mod tests {
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data_cache: Arc::new(PendingDataCache::new()),
                 verify_tree_hashes: false,
                 notifications,
                 sync_to_consensus_tx: None,
@@ -2811,7 +2799,6 @@ Blockchain history must include the reorg tail and its parent block to perform a
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data_cache: Arc::new(PendingDataCache::new()),
                 verify_tree_hashes: false,
                 notifications,
                 sync_to_consensus_tx: None,
@@ -2858,7 +2845,6 @@ Blockchain history must include the reorg tail and its parent block to perform a
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data_cache: Arc::new(PendingDataCache::new()),
                 verify_tree_hashes: false,
                 notifications,
                 sync_to_consensus_tx: None,
@@ -2887,7 +2873,6 @@ Blockchain history must include the reorg tail and its parent block to perform a
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data_cache: Arc::new(PendingDataCache::new()),
                 verify_tree_hashes: false,
                 notifications,
                 sync_to_consensus_tx: None,
@@ -2944,7 +2929,6 @@ Blockchain history must include the reorg tail and its parent block to perform a
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data_cache: Arc::new(PendingDataCache::new()),
                 verify_tree_hashes: false,
                 notifications: Default::default(),
                 sync_to_consensus_tx: None,
@@ -3064,7 +3048,6 @@ Blockchain history must include the reorg tail and its parent block to perform a
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data_cache: Arc::new(PendingDataCache::new()),
                 verify_tree_hashes: false,
                 notifications: Default::default(),
                 sync_to_consensus_tx: None,
@@ -3159,7 +3142,6 @@ Blockchain history must include the reorg tail and its parent block to perform a
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data_cache: Arc::new(PendingDataCache::new()),
                 verify_tree_hashes: false,
                 notifications: Default::default(),
                 sync_to_consensus_tx: None,
@@ -3196,7 +3178,6 @@ Blockchain history must include the reorg tail and its parent block to perform a
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data_cache: Arc::new(PendingDataCache::new()),
                 verify_tree_hashes: false,
                 notifications: Default::default(),
                 sync_to_consensus_tx: None,
@@ -3295,7 +3276,6 @@ Blockchain history must include the reorg tail and its parent block to perform a
                 submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker::new(
                     10, 10,
                 ),
-                pending_data_cache: Arc::new(PendingDataCache::new()),
                 verify_tree_hashes: false,
                 notifications: Default::default(),
                 sync_to_consensus_tx: None,
