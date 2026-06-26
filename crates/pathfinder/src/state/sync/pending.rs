@@ -152,17 +152,17 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             continue;
         }
 
-        // Pre-confirmed comes first; its height anchors pre-latest below.
-        // The chain can advance between the two HTTP calls, so pre-latest is
-        // only kept if it chains to the pre-confirmed we just received.
-        let response = match sequencer
-            .preconfirmed_block(
+        // Fetch pre-confirmed and pre-latest concurrently.
+        let (response, pre_latest_result) = tokio::join!(
+            sequencer.preconfirmed_block(
                 BlockId::Latest,
                 state.block_identifier.clone(),
                 state.tx_count(),
-            )
-            .await
-        {
+            ),
+            fetch_pre_latest(&sequencer, latest_number, latest_hash),
+        );
+
+        let response = match response {
             Ok(r) => r,
             Err(err) => {
                 tracing::debug!(%err, "Failed to fetch pre-confirmed block");
@@ -207,10 +207,10 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             }
         }
 
-        // Pre-latest. Kept only when it chains to the pre-confirmed above —
-        // a mismatch means the chain advanced between the two fetches, in
-        // which case publishing pre-confirmed alone is the safe move.
-        let pre_latest_data = match fetch_pre_latest(&sequencer, latest_number, latest_hash).await {
+        // Keep pre-latest only when it chains to the pre-confirmed height
+        // resolved above. A mismatch means the chain advanced between the two
+        // fetches, in which case publishing pre-confirmed alone is the safe move.
+        let pre_latest_data = match pre_latest_result {
             Ok(Some(pre_latest)) => {
                 let pre_latest_number = pre_latest.0;
                 if pre_latest_number + 1 == state.block_number {
@@ -1206,6 +1206,9 @@ mod tests {
         sequencer
             .expect_preconfirmed_block()
             .returning(|_, _, _| Err(SequencerError::InvalidResponse("boom".into())));
+        sequencer
+            .expect_pending_block()
+            .returning(|| Err(SequencerError::InvalidResponse("boom".into())));
         let sequencer = Arc::new(sequencer);
 
         let hash = block_hash!("0xabcd");
