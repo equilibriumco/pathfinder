@@ -178,6 +178,10 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             _ => None,
         };
 
+        // Set when the chain advances: the previous block to complete once the
+        // new height has been published (see below).
+        let mut prev_to_complete: Option<State> = None;
+
         if let Some(height) = resolved {
             // A transient (?) lower-height shouldn't discard accumulated state.
             if height < state.block_number && state.block_number != BlockNumber::GENESIS {
@@ -192,16 +196,20 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                 continue;
             }
 
-            // The chain advanced: complete the previous block before resetting state.
+            // The chain advanced. Keep the just superseded block's state so we can attempt
+            // best-effort completion after publishing the new height. We are
+            // keeping it off the critical path of serving the new pre-confirmed block.
             if height > state.block_number {
-                if state.block_identifier.is_some() && state.accumulated.is_some() {
-                    let committed_head = current.borrow().0;
-                    complete_previous_block(&sequencer, &mut state, &cache, committed_head).await;
+                let prev = std::mem::replace(
+                    &mut state,
+                    State {
+                        block_number: height,
+                        ..State::default()
+                    },
+                );
+                if prev.block_identifier.is_some() && prev.accumulated.is_some() {
+                    prev_to_complete = Some(prev);
                 }
-                state = State {
-                    block_number: height,
-                    ..State::default()
-                };
             }
         }
 
@@ -248,6 +256,19 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             cache.mark_fresh();
         }
 
+        // Complete the just-superseded block off the critical path. The new
+        // height is already in the cache, the aim is to capture any tail transactions
+        // that landed before the block was superseded. The store will only
+        // succeed if the new height didn't itself chain to the committed head.
+        if let Some(prev) = prev_to_complete {
+            let sequencer = sequencer.clone();
+            let cache = cache.clone();
+            let committed_head = current.borrow().0;
+            tokio::spawn(async move {
+                complete_previous_block(&sequencer, prev, &cache, committed_head).await;
+            });
+        }
+
         // Wait for the next tick.
         wait_for_next_poll(t_fetch + poll_interval, &cache).await;
     }
@@ -265,7 +286,7 @@ async fn wait_for_next_poll(deadline: Instant, cache: &PendingDataCache) {
 /// transactions that landed before it was superseded. Best-effort.
 async fn complete_previous_block<S: GatewayApi + Send + 'static>(
     sequencer: &S,
-    state: &mut State,
+    mut state: State,
     cache: &PendingDataCache,
     committed_head: BlockNumber,
 ) {
@@ -311,6 +332,16 @@ fn store_pre_confirmed(
     block: Box<PreConfirmedBlock>,
     pre_latest_data: Option<Box<(BlockNumber, PreLatestBlock, StateUpdate)>>,
 ) {
+    // Do not allow the cached height to regress.
+    let cached = cache.pre_confirmed_block_number();
+    if number < cached {
+        tracing::debug!(
+            %number, %cached,
+            "Pre-confirmed store would regress the cached height; skipping store"
+        );
+        return;
+    }
+
     // Reject views that don't chain to the committed head.
     let next_block_number = pre_latest_data
         .as_ref()
@@ -1029,7 +1060,7 @@ mod tests {
             });
 
         // We're tracking block 11 with one receipted transaction already merged.
-        let mut state = State {
+        let state = State {
             block_number: BlockNumber::new_or_panic(11),
             block_identifier: Some(BLOCK_ID.to_string()),
             accumulated: Some(all_receipted_block(1)),
@@ -1041,13 +1072,7 @@ mod tests {
         let _ = rx.borrow_and_update();
 
         // Committed head 10, so block 11 still chains and is stored.
-        complete_previous_block(
-            &sequencer,
-            &mut state,
-            &cache,
-            BlockNumber::new_or_panic(10),
-        )
-        .await;
+        complete_previous_block(&sequencer, state, &cache, BlockNumber::new_or_panic(10)).await;
 
         assert!(
             rx.has_changed().unwrap(),

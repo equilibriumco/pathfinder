@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use pathfinder_common::BlockNumber;
 use tokio::sync::{watch, Notify};
 use tokio::time::Instant;
 
@@ -146,6 +147,15 @@ impl PendingDataCache {
             Status::Fresh => Some(self.data_rx.borrow().clone()),
             Status::Stale | Status::Unavailable(_) => None,
         }
+    }
+
+    /// The pre-confirmed block number currently held in the cache.
+    ///
+    /// Reads without firing the read signal, so it does not affect
+    /// idle/suspend accounting. Intended for protecting against a stale write
+    /// decreasing the cached height.
+    pub fn pre_confirmed_block_number(&self) -> BlockNumber {
+        self.data_rx.borrow().pre_confirmed_block_number()
     }
 
     /// A fresh `watch::Receiver` for awaiting changes directly.
