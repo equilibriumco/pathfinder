@@ -1,14 +1,12 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use pathfinder_common::{BlockHash, BlockNumber};
-use pathfinder_pending_data::PendingDataCache;
+use pathfinder_common::{BlockHash, BlockNumber, StateUpdate};
+use pathfinder_pending_data::{PendingData, PendingDataCache};
 use starknet_gateway_client::{BlockId, GatewayApi};
-use starknet_gateway_types::reply::{PreConfirmedBlock, PreConfirmedPollResponse};
+use starknet_gateway_types::reply::{PreConfirmedBlock, PreConfirmedPollResponse, PreLatestBlock};
 use tokio::sync::watch;
 use tokio::time::Instant;
-
-use crate::state::sync::SyncEvent;
 
 #[derive(Debug)]
 struct State {
@@ -118,7 +116,6 @@ impl State {
 /// Suspends polling once the cache reports itself idle and resumes on the
 /// next read.
 pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
-    tx_event: tokio::sync::mpsc::Sender<SyncEvent>,
     sequencer: S,
     poll_interval: std::time::Duration,
     cache: Arc<PendingDataCache>,
@@ -198,7 +195,8 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             // The chain advanced: complete the previous block before resetting state.
             if height > state.block_number {
                 if state.block_identifier.is_some() && state.accumulated.is_some() {
-                    complete_previous_block(&sequencer, &mut state, &tx_event).await;
+                    let committed_head = current.borrow().0;
+                    complete_previous_block(&sequencer, &mut state, &cache, committed_head).await;
                 }
                 state = State {
                     block_number: height,
@@ -231,28 +229,20 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             }
         };
 
-        // Publish. Each branch is responsible for signalling cache freshness:
-        //   - changed: the emitted event leads to a `cache.store(...)` call, which
-        //     bumps freshness as a side effect.
-        //   - unchanged: nothing is emitted, so we call `cache.mark_fresh()` here to
-        //     unblock cold-start readers with the existing cache contents.
+        // Publish. On a change we store the new view directly; otherwise we mark
+        // the existing contents fresh to unblock cold-start readers.
         if state.apply(response, pre_latest_data.is_some()) {
             let accumulated = state
                 .accumulated
                 .as_ref()
                 .expect("accumulated block present after a successful update");
-            tracing::trace!("Emitting a pre-confirmed update");
-            if let Err(e) = tx_event
-                .send(SyncEvent::PreConfirmed {
-                    number: state.block_number,
-                    block: accumulated.clone().into(),
-                    pre_latest_data,
-                })
-                .await
-            {
-                tracing::error!(error=%e, "Event channel closed unexpectedly. Ending pre-confirmed stream.");
-                break;
-            }
+            store_pre_confirmed(
+                &cache,
+                current.borrow().0,
+                state.block_number,
+                accumulated.clone().into(),
+                pre_latest_data,
+            );
         } else {
             tracing::trace!("No change in pre-confirmed block data");
             cache.mark_fresh();
@@ -276,7 +266,8 @@ async fn wait_for_next_poll(deadline: Instant, cache: &PendingDataCache) {
 async fn complete_previous_block<S: GatewayApi + Send + 'static>(
     sequencer: &S,
     state: &mut State,
-    tx_event: &tokio::sync::mpsc::Sender<SyncEvent>,
+    cache: &PendingDataCache,
+    committed_head: BlockNumber,
 ) {
     let response = match sequencer
         .preconfirmed_block(
@@ -298,15 +289,52 @@ async fn complete_previous_block<S: GatewayApi + Send + 'static>(
             .accumulated
             .as_ref()
             .expect("accumulated present after successful completion apply");
-        if let Err(e) = tx_event
-            .send(SyncEvent::PreConfirmed {
-                number: state.block_number,
-                block: accumulated.clone().into(),
-                pre_latest_data: None,
-            })
-            .await
-        {
-            tracing::error!(error=%e, "Event channel closed during completion emission");
+        store_pre_confirmed(
+            cache,
+            committed_head,
+            state.block_number,
+            accumulated.clone().into(),
+            None,
+        );
+    }
+}
+
+/// Validate a fresh pre-confirmed view against the committed head and, when it
+/// chains, convert it to [`PendingData`] and store it in the cache.
+///
+/// `committed_head` is the latest block already in storage, mirrored by the
+/// `current` watch. A view that doesn't chain to it is dropped.
+fn store_pre_confirmed(
+    cache: &PendingDataCache,
+    committed_head: BlockNumber,
+    number: BlockNumber,
+    block: Box<PreConfirmedBlock>,
+    pre_latest_data: Option<Box<(BlockNumber, PreLatestBlock, StateUpdate)>>,
+) {
+    // Reject views that don't chain to the committed head.
+    let next_block_number = pre_latest_data
+        .as_ref()
+        .map(|pre_latest| pre_latest.0)
+        .unwrap_or(number);
+
+    if next_block_number != committed_head + 1 {
+        tracing::debug!(
+            %number, %committed_head,
+            "Pre-confirmed doesn't chain to committed head; skipping store"
+        );
+        return;
+    }
+
+    // Convert and store.
+    match PendingData::try_from_pre_confirmed_and_pre_latest(block, number, pre_latest_data) {
+        Ok(pending) => {
+            let pre_latest_tx_count = pending.pre_latest_transactions().map(|txs| txs.len());
+            let pre_confirmed_tx_count = pending.pre_confirmed_transactions().len();
+            cache.store(pending);
+            tracing::debug!(block_number = %number, %pre_confirmed_tx_count, ?pre_latest_tx_count, "Updated pre-confirmed data");
+        }
+        Err(e) => {
+            tracing::info!(block_number=%number, error=%e, "Failed to validate pre-confirmed data, skipping update");
         }
     }
 }
