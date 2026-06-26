@@ -31,13 +31,13 @@ use pathfinder_ethereum::{EthereumClient, EthereumStateUpdate};
 use pathfinder_merkle_tree::starknet_state::update_starknet_state;
 use pathfinder_pending_data::PendingDataCache;
 use pathfinder_rpc::types::syncing::{self, NumberedBlock, Syncing};
-use pathfinder_rpc::{Notifications, PendingData, Reorg, SyncState};
+use pathfinder_rpc::{Notifications, Reorg, SyncState};
 use pathfinder_storage::pruning::BlockchainHistoryMode;
 use pathfinder_storage::{Connection, Storage, Transaction, TransactionBehavior};
 use primitive_types::H160;
 use starknet_gateway_client::GatewayApi;
 use starknet_gateway_types::error::{KnownStarknetErrorCode, SequencerError};
-use starknet_gateway_types::reply::{Block, GasPrices, PreConfirmedBlock, PreLatestBlock};
+use starknet_gateway_types::reply::{Block, GasPrices};
 use tokio::sync::mpsc::{self, Receiver};
 use tokio::sync::watch;
 
@@ -93,13 +93,6 @@ pub enum SyncEvent {
         casm_definition: SerializedCasmDefinition,
         casm_hash: CasmHash,
         casm_hash_v2: CasmHash,
-    },
-    /// A new L2 pre-confirmed update was polled. Optionally contains
-    /// [pre latest](PreLatestBlock) data.
-    PreConfirmed {
-        number: BlockNumber,
-        block: Box<PreConfirmedBlock>,
-        pre_latest_data: Option<Box<(BlockNumber, PreLatestBlock, StateUpdate)>>,
     },
 }
 
@@ -282,7 +275,6 @@ where
         storage: storage.clone(),
         state,
         submitted_tx_tracker,
-        pending_data_cache: pending_data_cache.clone(),
         verify_tree_hashes: context.verify_tree_hashes,
         notifications,
         sync_to_consensus_tx: None,
@@ -291,7 +283,6 @@ where
         util::task::spawn(consumer(event_receiver, consumer_context, tx_current));
 
     let mut pending_handle = util::task::spawn(pending::poll_pre_confirmed(
-        event_sender.clone(),
         sequencer.clone(),
         head_poll_interval,
         pending_data_cache.clone(),
@@ -306,7 +297,6 @@ where
                 tracing::error!("Pre-confirmed tracking task ended unexpectedly");
 
                 pending_handle = util::task::spawn(pending::poll_pre_confirmed(
-                    event_sender.clone(),
                     sequencer.clone(),
                     head_poll_interval,
                     pending_data_cache.clone(),
@@ -489,7 +479,7 @@ where
         head_poll_interval,
         l1_poll_interval: _,
         poll_pre_confirmed_threshold: _,
-        pending_data_cache,
+        pending_data_cache: _,
         submitted_tx_tracker,
         block_validation_mode: _,
         notifications,
@@ -580,7 +570,6 @@ where
         storage: storage.clone(),
         state,
         submitted_tx_tracker,
-        pending_data_cache,
         verify_tree_hashes: context.verify_tree_hashes,
         notifications,
         sync_to_consensus_tx: Some(sync_to_consensus_tx.clone()),
@@ -731,7 +720,6 @@ struct ConsumerContext {
     pub storage: Storage,
     pub state: Arc<SyncState>,
     pub submitted_tx_tracker: pathfinder_rpc::tracker::SubmittedTransactionTracker,
-    pub pending_data_cache: Arc<PendingDataCache>,
     pub verify_tree_hashes: bool,
     pub notifications: Notifications,
     pub sync_to_consensus_tx: Option<mpsc::Sender<SyncMessageToConsensus>>,
@@ -746,7 +734,6 @@ async fn consumer(
         storage,
         state,
         submitted_tx_tracker,
-        pending_data_cache,
         verify_tree_hashes,
         mut notifications,
         sync_to_consensus_tx,
@@ -999,44 +986,6 @@ async fn consumer(
                     .context("Inserting sierra class")?;
 
                     tracing::debug!(sierra=%sierra_hash, casm=%casm_hash, "Inserted new Sierra class");
-
-                    (None, None)
-                }
-                PreConfirmed {
-                    number,
-                    block,
-                    pre_latest_data,
-                } => {
-                    tracing::trace!("Updating pre-confirmed data");
-                    let (latest_block_number, _) = tx
-                        .block_id(BlockId::Latest)
-                        .context("Fetching latest block hash")?
-                        .unwrap_or_default();
-
-                    let next_block_number = pre_latest_data
-                        .as_ref()
-                        .map(|pre_latest| pre_latest.0)
-                        .unwrap_or(number);
-
-                    if next_block_number == latest_block_number + 1 {
-                        match PendingData::try_from_pre_confirmed_and_pre_latest(
-                            block,
-                            number,
-                            pre_latest_data,
-                        ) {
-                            Ok(pending) => {
-                                let pre_latest_tx_count =
-                                    pending.pre_latest_transactions().map(|txs| txs.len());
-                                let pre_confirmed_tx_count =
-                                    pending.pre_confirmed_transactions().len();
-                                pending_data_cache.store(pending);
-                                tracing::debug!(block_number = %number, %pre_confirmed_tx_count, ?pre_latest_tx_count, "Updated pre-confirmed data");
-                            }
-                            Err(e) => {
-                                tracing::info!(block_number=%number, error=%e, "Failed to validate pre-confirmed data, skipping update");
-                            }
-                        }
-                    }
 
                     (None, None)
                 }
