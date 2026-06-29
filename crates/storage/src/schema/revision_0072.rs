@@ -1,6 +1,9 @@
 use anyhow::Context;
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tracing::info!("Changing l2_gas_price default value");
 
     tx.execute(

@@ -5,7 +5,10 @@ use std::{mem, thread};
 use anyhow::Context;
 use rusqlite::params;
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tracing::info!("Migrating starknet_transactions to new format");
 
     let mut transformers = Vec::new();

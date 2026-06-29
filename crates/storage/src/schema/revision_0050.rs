@@ -1,6 +1,9 @@
 use anyhow::Context;
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tracing::info!("Adding new columns to block_headers table");
 
     tx.execute_batch(

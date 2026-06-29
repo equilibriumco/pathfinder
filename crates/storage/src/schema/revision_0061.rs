@@ -1,6 +1,9 @@
 use anyhow::Context;
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tracing::info!("Storing parent_hash inline");
 
     // Default of 0x0 so that the genesis block's parent hash is correct.

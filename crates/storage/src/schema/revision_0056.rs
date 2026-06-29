@@ -3,7 +3,10 @@ use std::time::Instant;
 use anyhow::Context;
 use rusqlite::params;
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tx.execute_batch(
         r"
         CREATE UNIQUE INDEX block_headers_number ON block_headers(number);

@@ -1,6 +1,9 @@
 use anyhow::Context;
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tracing::info!("Adding receipt_commitment to block_headers");
 
     // This field is required for p2p, so the default value makes this migration

@@ -5,7 +5,10 @@ use anyhow::Context;
 ///
 /// Because this is the first migration post-base, we are guaranteed that there
 /// is no data to migrate.
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     drop_table(tx, "tree_class").context("Dropping tree_class table")?;
     drop_table(tx, "tree_global").context("Dropping tree_global table")?;
     drop_table(tx, "tree_contracts").context("Dropping tree_contracts table")?;

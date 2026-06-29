@@ -6,7 +6,10 @@ use rusqlite::params;
 
 use crate::params::RowExt;
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tracing::info!("Creating new version column in block_headers");
     tx.execute("ALTER TABLE block_headers ADD COLUMN version INTEGER", [])
         .context("Adding version column to block_headers")?;

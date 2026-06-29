@@ -1,6 +1,9 @@
 use anyhow::Context;
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tracing::info!("Renaming storage_flags table to storage_options and adding value column");
 
     tx.execute("ALTER TABLE storage_flags RENAME TO storage_options", [])

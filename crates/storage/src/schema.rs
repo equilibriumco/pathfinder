@@ -40,7 +40,7 @@ mod revision_0077;
 
 pub(crate) use base::base_schema;
 
-type MigrationFn = fn(&rusqlite::Transaction<'_>) -> anyhow::Result<()>;
+type MigrationFn = fn(&rusqlite::Transaction<'_>, &crate::RocksDBInner) -> anyhow::Result<()>;
 
 /// The full list of pathfinder migrations.
 pub fn migrations() -> &'static [MigrationFn] {

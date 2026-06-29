@@ -7,7 +7,10 @@ use rusqlite::OptionalExtension;
 use crate::bloom::{AggregateBloom, BloomFilter};
 use crate::prelude::{params, RowExt};
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tracing::info!("Creating event_filters table and migrating event Bloom filters");
 
     tx.execute(

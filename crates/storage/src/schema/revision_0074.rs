@@ -26,7 +26,10 @@ use crate::{transaction, AGGREGATE_BLOOM_BLOCK_RANGE_LEN};
 /// Starknet v0.14.0 blocks.
 const FIRST_EVENT_FILTER_TO_REBUILD_FROM_BLOCK: BlockNumber = BlockNumber::new_or_panic(917504);
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tracing::info!("Rebuilding potentially corrupted event filters");
 
     let Some(genesis_hash) = tx

@@ -7,7 +7,10 @@ use rayon::prelude::*;
 
 use crate::prelude::*;
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tracing::info!("Computing CASM v2 class hashes");
 
     tx.execute_batch(

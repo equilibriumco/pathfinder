@@ -123,6 +123,9 @@ reqwest = { version = "0.13.3", default-features = false, features = [
 ] }
 rstest = "0.26.1"
 rusqlite = "0.39.0"
+rust-rocksdb = { version = "0.45.0", default-features = false, features = [
+    "zstd",
+] }
 rustls = "0.23.38"
 semver = "1.0.28"
 serde = "1.0.228"

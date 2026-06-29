@@ -12,7 +12,10 @@ use anyhow::Context;
 
 use crate::prelude::*;
 
-pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> anyhow::Result<()> {
+pub(crate) fn migrate(
+    tx: &rusqlite::Transaction<'_>,
+    _rocksdb: &crate::RocksDBInner,
+) -> anyhow::Result<()> {
     tracing::info!("Setting block numbers for known classes affected by a migration bug to NULL");
 
     let known_affected_class_hashes = [
