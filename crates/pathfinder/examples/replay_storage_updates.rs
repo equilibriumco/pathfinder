@@ -3,6 +3,12 @@
 //! Uses the `bench-skip-hashing` feature to replace hash computations with
 //! no-ops, so storage performance can be measured without hashing overhead.
 
+#[cfg(not(feature = "bench-skip-hashing"))]
+compile_error!(
+    "This example requires the `bench-skip-hashing` feature: cargo run --example \
+     replay_storage_updates --features bench-skip-hashing"
+);
+
 use std::num::NonZeroU32;
 
 use anyhow::Context;

@@ -17,6 +17,7 @@ categories = [
 ]
 
 [features]
+bench-skip-hashing = []
 full-serde = []
 
 [dependencies]

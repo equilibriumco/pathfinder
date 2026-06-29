@@ -1,7 +1,7 @@
 use anyhow::Context;
+use pathfinder_common::hash::{FeltHash, PedersenHash};
 use pathfinder_common::prelude::*;
 use pathfinder_common::state_update::{ReverseContractUpdate, StateUpdateError, StorageRef};
-use pathfinder_crypto::hash::pedersen_hash;
 use pathfinder_crypto::Felt;
 use pathfinder_storage::{Transaction, TrieUpdate};
 
@@ -122,9 +122,9 @@ pub fn calculate_contract_state_hash(
 
     // The contract state hash is defined as H(H(H(hash, root), nonce),
     // CONTRACT_STATE_HASH_VERSION)
-    let hash = pedersen_hash(hash.0, root.0);
-    let hash = pedersen_hash(hash, nonce.0);
-    let hash = pedersen_hash(hash, CONTRACT_STATE_HASH_VERSION);
+    let hash = PedersenHash::hash(hash.0, root.0);
+    let hash = PedersenHash::hash(hash, nonce.0);
+    let hash = PedersenHash::hash(hash, CONTRACT_STATE_HASH_VERSION);
 
     // Compare this with the HashChain construction used in the contract_hash: the
     // number of elements is not hashed to this hash, and this is supposed to be
