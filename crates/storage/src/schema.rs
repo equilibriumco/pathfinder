@@ -39,6 +39,9 @@ mod revision_0076;
 mod revision_0077;
 mod revision_0078;
 mod revision_0079;
+mod revision_0080;
+mod revision_0081;
+mod revision_0082;
 
 pub(crate) use base::base_schema;
 
@@ -95,6 +98,9 @@ const MIGRATIONS: &[MigrationFn] = &[
     revision_0077::migrate,
     revision_0078::migrate,
     revision_0079::migrate,
+    revision_0080::migrate,
+    revision_0081::migrate,
+    revision_0082::migrate,
 ];
 
 // The target version is the number of null migrations which have been replaced
