@@ -10,6 +10,7 @@ use bloom::AggregateBloomCache;
 pub use bloom::AGGREGATE_BLOOM_BLOCK_RANGE_LEN;
 mod columns;
 use connection::pruning::BlockchainHistoryMode;
+use connection::TrieColumn;
 mod connection;
 mod error;
 pub mod fake;
@@ -99,6 +100,23 @@ pub(crate) struct RocksDBInner {
 }
 
 impl RocksDBInner {
+    fn next_trie_storage_index(
+        &self,
+        column: TrieColumn,
+        number_of_indices_to_allocate: usize,
+    ) -> TrieStorageIndex {
+        let counter = match column {
+            TrieColumn::Class => &self.trie_class_next_index,
+            TrieColumn::Contract => &self.trie_contract_next_index,
+            TrieColumn::Storage => &self.trie_storage_next_index,
+        };
+        let next_index = counter.fetch_add(
+            number_of_indices_to_allocate as u64,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        TrieStorageIndex::new(next_index).expect("TrieStorageIndex counter exceeded i64::MAX")
+    }
+
     fn get_column(&self, column: &Column) -> Arc<rust_rocksdb::BoundColumnFamily<'_>> {
         self.rocksdb
             .cf_handle(column.name)
@@ -595,12 +613,15 @@ impl StorageBuilder {
 
         let db = RocksDB::open_cf_descriptors(&options, path, cfs)?;
 
+        let (trie_class_next_index, trie_contract_next_index, trie_storage_next_index) =
+            Self::rocksdb_fetch_next_trie_storage_indices(&db)?;
+
         let db_inner = RocksDBInner {
             rocksdb: db,
             options,
-            trie_class_next_index: std::sync::atomic::AtomicU64::new(0),
-            trie_contract_next_index: std::sync::atomic::AtomicU64::new(0),
-            trie_storage_next_index: std::sync::atomic::AtomicU64::new(0),
+            trie_class_next_index: std::sync::atomic::AtomicU64::new(trie_class_next_index),
+            trie_contract_next_index: std::sync::atomic::AtomicU64::new(trie_contract_next_index),
+            trie_storage_next_index: std::sync::atomic::AtomicU64::new(trie_storage_next_index),
             _tempdir: tempdir,
         };
         Ok(db_inner)
@@ -628,15 +649,51 @@ impl StorageBuilder {
         let db = RocksDB::open_cf_descriptors_read_only(&options, path, cfs, false)
             .with_context(|| format!("Opening RocksDB read-only at {}", path.display()))?;
 
+        let (trie_class_next_index, trie_contract_next_index, trie_storage_next_index) =
+            Self::rocksdb_fetch_next_trie_storage_indices(&db)?;
+
         let db_inner = RocksDBInner {
             rocksdb: db,
             options,
-            trie_class_next_index: std::sync::atomic::AtomicU64::new(0),
-            trie_contract_next_index: std::sync::atomic::AtomicU64::new(0),
-            trie_storage_next_index: std::sync::atomic::AtomicU64::new(0),
+            trie_class_next_index: std::sync::atomic::AtomicU64::new(trie_class_next_index),
+            trie_contract_next_index: std::sync::atomic::AtomicU64::new(trie_contract_next_index),
+            trie_storage_next_index: std::sync::atomic::AtomicU64::new(trie_storage_next_index),
             _tempdir: None,
         };
         Ok(db_inner)
+    }
+
+    fn rocksdb_fetch_next_trie_storage_indices(db: &RocksDB) -> anyhow::Result<(u64, u64, u64)> {
+        let trie_class_last_index =
+            Self::trie_next_index(db, &crate::connection::TRIE_CLASS_COLUMN)?;
+        let trie_contract_last_index =
+            Self::trie_next_index(db, &crate::connection::TRIE_CONTRACT_COLUMN)?;
+        let trie_storage_last_index =
+            Self::trie_next_index(db, &crate::connection::TRIE_STORAGE_COLUMN)?;
+        Ok((
+            trie_class_last_index,
+            trie_contract_last_index,
+            trie_storage_last_index,
+        ))
+    }
+
+    fn trie_next_index(db: &RocksDB, column: &Column) -> anyhow::Result<u64> {
+        let column_handle = db
+            .cf_handle(TRIE_NEXT_INDEX_COLUMN.name)
+            .context("Getting RocksDB column for fetching next trie storage index")?;
+        let next_index = db
+            .get_cf(&column_handle, column.name.as_bytes())?
+            .map(|value| -> anyhow::Result<u64> {
+                let bytes: [u8; 8] = value.as_slice().try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "RocksDB trie storage index value has invalid length: {}",
+                        value.len()
+                    )
+                })?;
+                Ok(u64::from_be_bytes(bytes))
+            })
+            .transpose()?;
+        Ok(next_index.unwrap_or(0))
     }
 
     /// - If there is no explicitly requested configuration, assumes the user

@@ -75,4 +75,10 @@ impl Column {
     }
 }
 
-pub(crate) const COLUMNS: &[Column] = &[];
+pub(crate) const COLUMNS: &[Column] = &[
+    crate::connection::TRIE_CLASS_COLUMN,
+    crate::connection::TRIE_CONTRACT_COLUMN,
+    crate::connection::TRIE_STORAGE_COLUMN,
+    crate::connection::TRIE_NEXT_INDEX_COLUMN,
+    crate::connection::CONTRACT_STATE_HASHES_COLUMN,
+];

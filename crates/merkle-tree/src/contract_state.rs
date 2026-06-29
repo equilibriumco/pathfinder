@@ -71,7 +71,7 @@ pub fn update_contract_state(
         (contract_root, trie_update)
     } else {
         let current_root = transaction
-            .contract_root(block, contract_address)
+            .contract_root(block, &contract_address)
             .context("Querying current contract root")?
             .unwrap_or_default();
 
@@ -195,7 +195,7 @@ pub fn revert_contract_state(
                 root
             } else {
                 transaction
-                    .contract_root(head, contract_address)?
+                    .contract_root(head, &contract_address)?
                     .unwrap_or(ContractRoot::ZERO)
             };
 

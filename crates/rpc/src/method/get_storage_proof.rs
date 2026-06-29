@@ -437,7 +437,7 @@ fn get_contract_proofs(
                 .unwrap_or_default();
 
             let storage_root = tx
-                .contract_root(block_number, address)
+                .contract_root(block_number, &address)
                 .context("Querying contract's storage root")?
                 .unwrap_or_default();
 
@@ -466,7 +466,7 @@ fn get_contract_storage_proofs(
             let mut proofs = vec![];
             for csk in contracts_storage_keys {
                 let root = tx
-                    .contract_root_index(block_number, csk.contract_address)
+                    .contract_root_index(block_number, &csk.contract_address)
                     .context("Querying contract root index")?;
 
                 if let Some(root) = root {

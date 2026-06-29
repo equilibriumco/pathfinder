@@ -47,7 +47,7 @@ impl<'tx> ContractsStorageTree<'tx> {
         block: BlockNumber,
     ) -> anyhow::Result<Self> {
         let root = tx
-            .contract_root_index(block, contract)
+            .contract_root_index(block, &contract)
             .context("Querying contract root index")?;
         let Some(root) = root else {
             return Ok(Self::empty(tx, contract));

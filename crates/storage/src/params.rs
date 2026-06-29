@@ -1,11 +1,10 @@
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::rc::Rc;
 
 use anyhow::Result;
 use pathfinder_common::prelude::*;
 use pathfinder_common::{BlockCommitmentSignatureElem, L1BlockNumber};
 use pathfinder_crypto::Felt;
-use rusqlite::types::{FromSqlError, ToSqlOutput, Value};
+use rusqlite::types::{FromSqlError, ToSqlOutput};
 use rusqlite::RowIndex;
 
 use crate::TrieStorageIndex;
@@ -20,6 +19,8 @@ pub trait TryIntoSqlInt {
 
 impl<Inner: ToSql> ToSql for Option<Inner> {
     fn to_sql(&self) -> ToSqlOutput<'_> {
+        use rusqlite::types::Value;
+
         match self {
             Some(value) => value.to_sql(),
             None => ToSqlOutput::Owned(Value::Null),
@@ -29,12 +30,14 @@ impl<Inner: ToSql> ToSql for Option<Inner> {
 
 impl ToSql for TrieStorageIndex {
     fn to_sql(&self) -> ToSqlOutput<'_> {
+        use rusqlite::types::Value;
         ToSqlOutput::Owned(Value::Integer(self.to_i64()))
     }
 }
 
 impl ToSql for StarknetVersion {
     fn to_sql(&self) -> ToSqlOutput<'_> {
+        use rusqlite::types::Value;
         ToSqlOutput::Owned(Value::Text(self.to_string()))
     }
 }
@@ -45,7 +48,7 @@ impl ToSql for L1DataAvailabilityMode {
             L1DataAvailabilityMode::Calldata => 0,
             L1DataAvailabilityMode::Blob => 1,
         };
-        ToSqlOutput::Owned(Value::Integer(value))
+        ToSqlOutput::Owned(rusqlite::types::Value::Integer(value))
     }
 }
 
@@ -101,7 +104,7 @@ to_sql_builtin!(
     u32,
     u16,
     u8,
-    Rc<Vec<Value>>
+    std::rc::Rc<Vec<rusqlite::types::Value>>
 );
 
 try_into_sql_int!(usize, u64);
@@ -155,14 +158,11 @@ pub trait RowExt {
         &self,
         index: Index,
     ) -> rusqlite::Result<Option<BlockNumber>> {
-        let num = self
-            .get_optional_i64(index)?
-            // Always safe since we are fetching an i64
-            .map(|x| {
-                BlockNumber::new_or_panic(
-                    u64::try_from(x).expect("BlockNumber is non-negative and within i64::MAX"),
-                )
-            });
+        let num = self.get_optional_i64(index)?.map(|x| {
+            BlockNumber::new_or_panic(
+                u64::try_from(x).expect("block numbers in storage are non-negative i64"),
+            )
+        });
         Ok(num)
     }
 
@@ -178,13 +178,6 @@ pub trait RowExt {
         index: Index,
     ) -> rusqlite::Result<Option<StateCommitment>> {
         Ok(self.get_optional_felt(index)?.map(StateCommitment))
-    }
-
-    fn get_optional_class_commitment<Index: RowIndex>(
-        &self,
-        index: Index,
-    ) -> rusqlite::Result<Option<ClassCommitment>> {
-        Ok(self.get_optional_felt(index)?.map(ClassCommitment))
     }
 
     fn get_block_number<Index: RowIndex>(&self, index: Index) -> rusqlite::Result<BlockNumber> {
@@ -310,40 +303,16 @@ pub trait RowExt {
         Ok(mode)
     }
 
-    fn get_trie_storage_index<Index: RowIndex>(
-        &self,
-        index: Index,
-    ) -> rusqlite::Result<TrieStorageIndex> {
-        let idx = self.get_u64(index)?;
-        // Always safe since get_u64 is capped at i64::MAX, just like TrieStorageIndex.
-        Ok(TrieStorageIndex::new(idx)
-            .expect("TrieStorageIndex is non-negative and within i64::MAX"))
-    }
-
-    fn get_optional_trie_storage_index<Index: RowIndex>(
-        &self,
-        index: Index,
-    ) -> rusqlite::Result<Option<TrieStorageIndex>> {
-        let idx = self.get_optional_u64(index)?;
-        // Always safe since get_optional_u64 is capped at i64::MAX, just like
-        // TrieStorageIndex.
-        Ok(idx.map(|idx| {
-            TrieStorageIndex::new(idx)
-                .expect("TrieStorageIndex is non-negative and within i64::MAX")
-        }))
-    }
-
     row_felt_wrapper!(get_block_hash, BlockHash);
     row_felt_wrapper!(get_casm_hash, CasmHash);
     row_felt_wrapper!(get_class_hash, ClassHash);
     row_felt_wrapper!(get_state_commitment, StateCommitment);
     row_felt_wrapper!(get_state_diff_commitment, StateDiffCommitment);
     row_felt_wrapper!(get_sequencer_address, SequencerAddress);
-    row_felt_wrapper!(get_contract_root, ContractRoot);
     row_felt_wrapper!(get_contract_nonce, ContractNonce);
     row_felt_wrapper!(get_storage_value, StorageValue);
     row_felt_wrapper!(get_transaction_hash, TransactionHash);
-    row_felt_wrapper!(get_contract_state_hash, ContractStateHash);
+
     row_felt_wrapper!(get_class_commitment_leaf, ClassCommitmentLeafHash);
     row_felt_wrapper!(
         get_block_commitment_signature_elem,
@@ -471,7 +440,10 @@ macro_rules! to_sql_int_newtype {
         impl ToSql for $target {
             fn to_sql(&self) -> rusqlite::types::ToSqlOutput<'_> {
                 use rusqlite::types::{ToSqlOutput, Value};
-                ToSqlOutput::Owned(Value::Integer(i64::try_from(self.get()).expect("Integer types must be non-negative and <= i64::MAX")))
+                ToSqlOutput::Owned(Value::Integer(
+                    i64::try_from(self.get())
+                        .expect("integer newtype value must fit in i64 for SQLite"),
+                ))
             }
         }
     };
