@@ -334,6 +334,17 @@ async fn complete_previous_block<S: GatewayApi + Send + 'static>(
 ///
 /// `committed_head` is the latest block already in storage, mirrored by the
 /// `current` watch. A view that doesn't chain to it is dropped.
+///
+/// # Why this is safe outside the sync DB write transaction
+///
+/// Pre-confirmed updates used to flow through the sync event channel and were
+/// applied inside the consumer's `Immediate` write transaction. They are now
+/// written straight to the cache from the polling task, with no transaction.
+/// This is OK because:
+/// - `committed_head` is the already storage-committed head,
+/// - [`PendingDataCache`] in in-memory and doesn't write anything to storage,
+/// - data is consistent: there is a chaining check below and ultimately the RPC
+///   read path re-validates the chaining requirement.
 fn store_pre_confirmed(
     cache: &PendingDataCache,
     committed_head: BlockNumber,
