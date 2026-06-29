@@ -248,7 +248,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                 &cache,
                 current.borrow().0,
                 state.block_number,
-                accumulated.clone().into(),
+                accumulated,
                 pre_latest_data,
             );
         } else {
@@ -278,6 +278,17 @@ async fn wait_for_next_poll(deadline: Instant, cache: &PendingDataCache) {
     tokio::select! {
         _ = tokio::time::sleep_until(deadline) => {}
         _ = cache.wait_for_read() => {}
+    }
+}
+
+/// Run a CPU-bound closure without starving the async runtime. Use
+/// `block_in_place` on a multi-threaded runtime, or inline otherwise (for
+/// tests).
+fn run_cpu_bound<R>(f: impl FnOnce() -> R) -> R {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+    match Handle::try_current().map(|h| h.runtime_flavor()) {
+        Ok(RuntimeFlavor::MultiThread) => tokio::task::block_in_place(f),
+        _ => f(),
     }
 }
 
@@ -316,13 +327,14 @@ async fn complete_previous_block<S: GatewayApi + Send + 'static>(
             .accumulated
             .as_ref()
             .expect("accumulated present after successful completion apply");
-        match PendingData::try_from_pre_confirmed_block(
-            accumulated.clone().into(),
-            state.block_number,
-        ) {
+        let number = state.block_number;
+        let converted = run_cpu_bound(|| {
+            PendingData::try_from_pre_confirmed_block(Box::new(accumulated.clone()), number)
+        });
+        match converted {
             Ok(pending) => cache.publish_tail(pending),
             Err(e) => tracing::info!(
-                block_number = %state.block_number, error = %e,
+                block_number = %number, error = %e,
                 "Failed to convert completed pre-confirmed block; skipping tail publish"
             ),
         }
@@ -349,7 +361,7 @@ fn store_pre_confirmed(
     cache: &PendingDataCache,
     committed_head: BlockNumber,
     number: BlockNumber,
-    block: Box<PreConfirmedBlock>,
+    block: &PreConfirmedBlock,
     pre_latest_data: Option<Box<(BlockNumber, PreLatestBlock, StateUpdate)>>,
 ) {
     // Drop only stale views.
@@ -376,8 +388,16 @@ fn store_pre_confirmed(
         return;
     }
 
-    // Convert and store.
-    match PendingData::try_from_pre_confirmed_and_pre_latest(block, number, pre_latest_data) {
+    // Convert and store. The deep clone and state-diff aggregation are offloaded
+    // so they don't stall the async worker for a large block.
+    let converted = run_cpu_bound(|| {
+        PendingData::try_from_pre_confirmed_and_pre_latest(
+            Box::new(block.clone()),
+            number,
+            pre_latest_data,
+        )
+    });
+    match converted {
         Ok(pending) => {
             let pre_latest_tx_count = pending.pre_latest_transactions().map(|txs| txs.len());
             let pre_confirmed_tx_count = pending.pre_confirmed_transactions().len();
@@ -588,7 +608,7 @@ mod tests {
             &cache,
             committed,
             BlockNumber::new_or_panic(3),
-            Box::new(all_receipted_block(2)),
+            &all_receipted_block(2),
             Some(pre_latest),
         );
 
@@ -617,7 +637,7 @@ mod tests {
             &cache,
             BlockNumber::new_or_panic(5),
             BlockNumber::new_or_panic(3),
-            Box::new(all_receipted_block(2)),
+            &all_receipted_block(2),
             None,
         );
 
@@ -639,7 +659,7 @@ mod tests {
             &cache,
             BlockNumber::new_or_panic(1),
             BlockNumber::new_or_panic(5),
-            Box::new(all_receipted_block(2)),
+            &all_receipted_block(2),
             None,
         );
 
