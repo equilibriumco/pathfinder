@@ -105,16 +105,28 @@ impl RocksDBInner {
         column: TrieColumn,
         number_of_indices_to_allocate: usize,
     ) -> TrieStorageIndex {
-        let counter = match column {
-            TrieColumn::Class => &self.trie_class_next_index,
-            TrieColumn::Contract => &self.trie_contract_next_index,
-            TrieColumn::Storage => &self.trie_storage_next_index,
-        };
+        let counter = self.trie_next_index_atomic(column);
         let next_index = counter.fetch_add(
             number_of_indices_to_allocate as u64,
             std::sync::atomic::Ordering::SeqCst,
         );
         TrieStorageIndex::new(next_index).expect("TrieStorageIndex counter exceeded i64::MAX")
+    }
+
+    fn trie_next_index_atomic(&self, column: TrieColumn) -> &std::sync::atomic::AtomicU64 {
+        match column {
+            TrieColumn::Class => &self.trie_class_next_index,
+            TrieColumn::Contract => &self.trie_contract_next_index,
+            TrieColumn::Storage => &self.trie_storage_next_index,
+        }
+    }
+
+    /// Overwrites the in-memory `next_index` atomic for a trie CF. Used by the
+    /// startup reconcile to re-seed the counter after rewinding to the
+    /// confirmed tail or after a fresh-install migration.
+    fn store_next_index(&self, column: TrieColumn, value: u64) {
+        self.trie_next_index_atomic(column)
+            .store(value, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn get_column(&self, column: &Column) -> Arc<rust_rocksdb::BoundColumnFamily<'_>> {
@@ -131,6 +143,13 @@ impl RocksDBInner {
     }
 }
 
+/// Startup pruning deferred until after the connection pool is ready. Populated
+/// when the node restarts with a smaller `num_blocks_kept` than before.
+struct PendingPrune {
+    oldest: u64,
+    num_blocks_to_remove: u64,
+}
+
 pub struct StorageManager {
     database_path: PathBuf,
     journal_mode: JournalMode,
@@ -139,6 +158,7 @@ pub struct StorageManager {
     running_event_filter: Arc<Mutex<RunningEventFilter>>,
     trie_prune_mode: TriePruneMode,
     blockchain_history_mode: BlockchainHistoryMode,
+    pending_prune: Option<PendingPrune>,
 }
 
 pub struct ReadOnlyStorageManager(StorageManager);
@@ -174,8 +194,28 @@ impl StorageManager {
         }))
     }
 
-    pub fn create_pool(&self, capacity: NonZeroU32) -> anyhow::Result<Storage> {
-        self.build_pool(capacity, OpenFlags::default())
+    fn apply_pending_prune(&mut self, storage: &Storage) -> anyhow::Result<()> {
+        let Some(pending) = self.pending_prune.as_ref() else {
+            return Ok(());
+        };
+        let mut connection = storage.connection().context("Getting storage connection")?;
+        let tx = connection
+            .transaction()
+            .context("Creating storage transaction")?;
+        for block in pending.oldest..(pending.oldest + pending.num_blocks_to_remove) {
+            let block = BlockNumber::new_or_panic(block);
+            tx.prune_block(block)
+                .with_context(|| format!("Pruning block {block}"))?;
+        }
+        tx.commit().context("Committing prune transaction")?;
+        self.pending_prune.take();
+        Ok(())
+    }
+
+    pub fn create_pool(&mut self, capacity: NonZeroU32) -> anyhow::Result<Storage> {
+        let storage = self.build_pool(capacity, OpenFlags::default())?;
+        self.apply_pending_prune(&storage)?;
+        Ok(storage)
     }
 
     pub fn create_read_only_pool(&self, capacity: NonZeroU32) -> anyhow::Result<Storage> {
@@ -451,11 +491,14 @@ impl StorageBuilder {
 
         migrate_database(&mut connection, &rocksdb).context("Migrate database")?;
 
+        reconcile_rocksdb_with_sqlite(&mut connection, &rocksdb)
+            .context("Reconciling RocksDB with SQLite after migration")?;
+
         // Set the journal mode to the desired value.
         setup_journal_mode(&mut connection, self.journal_mode).context("Setting journal mode")?;
 
         // Validate that configuration matches database flags.
-        let blockchain_history_mode =
+        let (blockchain_history_mode, pending_prune) =
             self.determine_blockchain_history_mode(&mut connection, is_new_database)?;
         let trie_prune_mode = self.determine_trie_prune_mode(&mut connection, is_new_database)?;
 
@@ -504,6 +547,7 @@ impl StorageBuilder {
             running_event_filter: Arc::new(Mutex::new(running_event_filter)),
             trie_prune_mode,
             blockchain_history_mode,
+            pending_prune,
         })
     }
 
@@ -569,6 +613,51 @@ impl StorageBuilder {
         )?;
         let rocksdb = Arc::new(Self::open_rocksdb_readonly(&rocksdb_path)?);
 
+        // Lightweight consistency check: warn if RocksDB is ahead of SQLite.
+        // Read-only mode reads from last-flushed SST state; catch-up against a
+        // running writer is not supported. If the writer has committed blocks
+        // beyond the last SST flush, this handle will not see them until the
+        // writer flushes and this handle is reopened.
+        {
+            use crate::connection::STATE_UPDATES_COLUMN;
+            let sqlite_highest: Option<u64> = connection
+                .query_row("SELECT MAX(number) FROM block_headers", [], |row| {
+                    row.get_optional_u64(0)
+                })
+                .unwrap_or(None);
+            let state_updates_cf = rocksdb.get_column(&STATE_UPDATES_COLUMN);
+            let mut read_opts = rust_rocksdb::ReadOptions::default();
+            read_opts.set_total_order_seek(true);
+            let mut iter = rocksdb
+                .rocksdb
+                .raw_iterator_cf_opt(&state_updates_cf, read_opts);
+            iter.seek_to_last();
+            let rocksdb_highest = if iter.valid() {
+                iter.key()
+                    .and_then(|k| k.try_into().ok())
+                    .map(u64::from_be_bytes)
+            } else {
+                if let Err(e) = iter.status() {
+                    tracing::warn!(error = %e, "RocksDB iterator error during readonly consistency check");
+                }
+                None
+            };
+            if let Some(rocks_top) = rocksdb_highest {
+                let is_ahead = match sqlite_highest {
+                    Some(sqlite_top) => rocks_top > sqlite_top,
+                    None => true,
+                };
+                if is_ahead {
+                    tracing::warn!(
+                        ?sqlite_highest,
+                        rocks_top,
+                        "RocksDB is ahead of SQLite in readonly mode; data may be inconsistent. \
+                         Run the node in normal mode first to reconcile."
+                    );
+                }
+            }
+        }
+
         let running_event_filter = {
             let dummy_ref = Arc::new(Mutex::new(event::RunningEventFilter {
                 filter: crate::bloom::AggregateBloom::new(BlockNumber::GENESIS),
@@ -597,6 +686,7 @@ impl StorageBuilder {
             running_event_filter: Arc::new(Mutex::new(running_event_filter)),
             trie_prune_mode,
             blockchain_history_mode,
+            pending_prune: None,
         }))
     }
 
@@ -706,22 +796,7 @@ impl StorageBuilder {
     }
 
     fn trie_next_index(db: &RocksDB, column: &Column) -> anyhow::Result<u64> {
-        let column_handle = db
-            .cf_handle(TRIE_NEXT_INDEX_COLUMN.name)
-            .context("Getting RocksDB column for fetching next trie storage index")?;
-        let next_index = db
-            .get_cf(&column_handle, column.name.as_bytes())?
-            .map(|value| -> anyhow::Result<u64> {
-                let bytes: [u8; 8] = value.as_slice().try_into().map_err(|_| {
-                    anyhow::anyhow!(
-                        "RocksDB trie storage index value has invalid length: {}",
-                        value.len()
-                    )
-                })?;
-                Ok(u64::from_be_bytes(bytes))
-            })
-            .transpose()?;
-        Ok(next_index.unwrap_or(0))
+        Ok(read_trie_next_index_from_disk(db, column)?.unwrap_or(0))
     }
 
     /// - If there is no explicitly requested configuration, assumes the user
@@ -798,7 +873,7 @@ impl StorageBuilder {
         &self,
         connection: &mut rusqlite::Connection,
         is_new_database: bool,
-    ) -> anyhow::Result<BlockchainHistoryMode> {
+    ) -> anyhow::Result<(BlockchainHistoryMode, Option<PendingPrune>)> {
         let init_num_blocks_kept = connection
             .query_row(
                 "SELECT value FROM storage_options WHERE option = 'prune_blockchain'",
@@ -816,14 +891,14 @@ impl StorageBuilder {
             }
         });
 
-        let validated_blockchain_history_mode = validate_mode_and_update_db(
+        let (validated_blockchain_history_mode, pending_prune) = validate_mode_and_update_db(
             blockchain_history_mode,
             init_num_blocks_kept,
             is_new_database,
             connection,
         )?;
 
-        Ok(validated_blockchain_history_mode)
+        Ok((validated_blockchain_history_mode, pending_prune))
     }
 }
 
@@ -832,7 +907,7 @@ fn validate_mode_and_update_db(
     init_num_blocks_kept: Option<u64>,
     is_new_database: bool,
     connection: &mut rusqlite::Connection,
-) -> anyhow::Result<BlockchainHistoryMode> {
+) -> anyhow::Result<(BlockchainHistoryMode, Option<PendingPrune>)> {
     match blockchain_history_mode {
         BlockchainHistoryMode::Archive => {
             if init_num_blocks_kept.is_some() {
@@ -868,42 +943,36 @@ fn validate_mode_and_update_db(
 
             if is_new_database {
                 tracing::info!("Created new database with blockchain history pruning enabled.");
-                return Ok(blockchain_history_mode);
+                return Ok((blockchain_history_mode, None));
             }
 
-            // If the blockchain history size got reduced, here we use the opportunity to
-            // prune the now excess blocks. If the size got increased, we don't need to do
-            // anything here since the gap will be filled as new blocks are synced.
+            // If the blockchain history size got reduced, prune the now-excess blocks
+            // once we have a connection pool. If the size increased, we don't need to do
+            // anything since the gap will be filled as new blocks are synced.
             let num_blocks_to_remove = match init_num_blocks_kept.checked_sub(num_blocks_kept) {
                 Some(block_diff) if block_diff > 0 => block_diff,
-                _ => return Ok(blockchain_history_mode),
+                _ => return Ok((blockchain_history_mode, None)),
             };
 
-            let oldest: Option<BlockNumber> = connection
+            let oldest: Option<u64> = connection
                 .query_row(
                     "SELECT number FROM block_headers ORDER BY number ASC LIMIT 1",
                     [],
-                    |row| row.get_block_number(0),
+                    |row| row.get_u64(0),
                 )
                 .optional()
                 .context("Fetching oldest block number")?;
 
-            let Some(oldest) = oldest else {
-                return Ok(blockchain_history_mode);
-            };
+            let pending_prune = oldest.map(|oldest| PendingPrune {
+                oldest,
+                num_blocks_to_remove,
+            });
 
-            let tx = connection
-                .transaction()
-                .context("Creating database transaction")?;
-            for block in oldest.get()..(oldest.get() + num_blocks_to_remove) {
-                let block = BlockNumber::new_or_panic(block);
-                pruning::prune_block(&tx, block).context(format!("Pruning block {block}"))?;
-            }
-            tx.commit().context("Committing database transaction")?;
+            return Ok((blockchain_history_mode, pending_prune));
         }
     }
 
-    Ok(blockchain_history_mode)
+    Ok((blockchain_history_mode, None))
 }
 
 impl Storage {
@@ -931,6 +1000,11 @@ impl Storage {
             ._tempdir
             .as_ref()
             .map(|d| d.path().to_path_buf())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rocksdb_inner(&self) -> &Arc<RocksDBInner> {
+        &self.0.rocksdb
     }
 
     pub fn is_migrated(&self) -> Result<bool, StorageError> {
@@ -1079,6 +1153,447 @@ fn migrate_database(
     Ok(())
 }
 
+/// Reads the on-disk `TRIE_NEXT_INDEX_COLUMN` entry for `column`. Missing
+/// key returns `Ok(None)` — callers that want "0 when absent" apply
+/// `.unwrap_or(0)`. An unexpected byte length errors rather than silently
+/// truncating.
+fn read_trie_next_index_from_disk(db: &RocksDB, column: &Column) -> anyhow::Result<Option<u64>> {
+    let column_handle = db
+        .cf_handle(TRIE_NEXT_INDEX_COLUMN.name)
+        .context("Getting RocksDB column for fetching next trie storage index")?;
+    db.get_cf(&column_handle, column.name.as_bytes())?
+        .map(|value| -> anyhow::Result<u64> {
+            let bytes: [u8; 8] = value.as_slice().try_into().map_err(|_| {
+                anyhow::anyhow!(
+                    "TRIE_NEXT_INDEX_COLUMN[{}] value has invalid length: {}",
+                    column.name,
+                    value.len()
+                )
+            })?;
+            Ok(u64::from_be_bytes(bytes))
+        })
+        .transpose()
+}
+
+/// Walks the trie subtree rooted at `root_idx` and returns the highest
+/// storage index reached — the confirmed batch's tail. Returns `Ok(None)`
+/// if a node is missing or undecodable; the caller must then leave orphans
+/// in place rather than fire a `delete_range_cf` against a corrupt DB.
+fn dfs_confirmed_tail(
+    rocksdb: &RocksDBInner,
+    cf_handle: &Arc<rust_rocksdb::BoundColumnFamily<'_>>,
+    cf_name: &str,
+    root_idx: TrieStorageIndex,
+    counter: u64,
+) -> anyhow::Result<Option<TrieStorageIndex>> {
+    use std::collections::HashSet;
+
+    let mut stack = vec![root_idx];
+    let mut visited = HashSet::new();
+    let mut max_reached = root_idx;
+
+    while let Some(idx) = stack.pop() {
+        // Skip below-batch subtrees; they belong to earlier commits and are
+        // not relevant to the tail calculation for this batch.
+        if idx.get() < root_idx.get() {
+            continue;
+        }
+        if !visited.insert(idx) {
+            continue;
+        }
+        if idx.get() > max_reached.get() {
+            max_reached = idx;
+        }
+        // Early exit: the confirmed batch aligns with the counter, so
+        // there's nothing to reconcile for this CF.
+        if max_reached.get().saturating_add(1) == counter {
+            return Ok(Some(max_reached));
+        }
+
+        let cf_key = idx.get().to_be_bytes();
+        let Some(raw) = rocksdb
+            .rocksdb
+            .get_pinned_cf(cf_handle, cf_key)
+            .context("Reading trie node during DFS")?
+        else {
+            tracing::warn!(
+                cf = cf_name,
+                index = idx.get(),
+                "DFS aborted: missing trie node in confirmed batch"
+            );
+            return Ok(None);
+        };
+
+        let node = match decode_stored_node_with_hash(raw.as_ref()) {
+            Ok(node) => node,
+            Err(err) => {
+                tracing::warn!(
+                    cf = cf_name,
+                    index = idx.get(),
+                    error = %err,
+                    "DFS aborted: undecodable trie node in confirmed batch"
+                );
+                return Ok(None);
+            }
+        };
+
+        match node {
+            StoredNode::Binary { left, right } => {
+                stack.push(left);
+                stack.push(right);
+            }
+            StoredNode::Edge { child, .. } => {
+                stack.push(child);
+            }
+            StoredNode::LeafBinary | StoredNode::LeafEdge { .. } => {}
+        }
+    }
+
+    Ok(Some(max_reached))
+}
+
+/// Per-CF trie-orphan reconcile. Detects orphaned trie indices from a
+/// crashed commit, stages the range-delete + counter rewrite into `batch`,
+/// and re-seeds the in-memory `next_index` atomic.
+///
+/// The atomic is always overwritten — either with the rewound value (when
+/// reconcile found orphans) or with the on-disk counter (when it didn't).
+/// One code path handles both the crash-recovery rewind and the stale
+/// atomic left over from a fresh-install migration boot.
+fn reconcile_trie_column(
+    rocksdb: &RocksDBInner,
+    connection: &rusqlite::Connection,
+    sqlite_top: u64,
+    trie_col: TrieColumn,
+    root_index_sql: &'static str,
+    batch: &mut crate::RocksDBBatch,
+) -> anyhow::Result<()> {
+    let trie_cf = trie_col.column();
+    let cf_handle = rocksdb.get_column(trie_cf);
+    let idx_cf = rocksdb.get_column(&TRIE_NEXT_INDEX_COLUMN);
+
+    // Missing key means the CF has no writes yet; treat as 0 so the
+    // early-return below skips the reconcile.
+    let counter = read_trie_next_index_from_disk(&rocksdb.rocksdb, trie_cf)
+        .context("Reading TRIE_NEXT_INDEX_COLUMN for reconcile")?
+        .unwrap_or(0);
+
+    // The value we hand back to the in-memory atomic at the end. Reconcile
+    // may rewind it below `counter`; every early-return path keeps this at
+    // the on-disk value.
+    let mut final_counter = counter;
+
+    if counter == 0 {
+        rocksdb.store_next_index(trie_col, final_counter);
+        return Ok(());
+    }
+
+    let row: Option<(u64, u64)> = connection
+        .query_row(
+            root_index_sql,
+            rusqlite::params![sqlite_top as i64],
+            |row| {
+                let idx: i64 = row.get(0)?;
+                let block: i64 = row.get(1)?;
+                Ok((idx as u64, block as u64))
+            },
+        )
+        .optional()
+        .context("Querying MAX(root_index) for reconcile")?;
+
+    let Some((root_idx_u64, block_num)) = row else {
+        tracing::warn!(
+            cf = trie_cf.name,
+            counter,
+            "Trie reconcile: no confirmed root row found; leaving orphans in place"
+        );
+        rocksdb.store_next_index(trie_col, final_counter);
+        return Ok(());
+    };
+
+    // Defensive block-distance guard: if pruning has stripped the last
+    // real-index row and the surviving MAX row is far below `sqlite_top`,
+    // skip reconcile for this CF. The invariant "no live intermediate
+    // batch above MAX row's batch" still holds (see spec), so this is
+    // belt-and-braces.
+    const MAX_BLOCK_DISTANCE: u64 = 100;
+    if sqlite_top.saturating_sub(block_num) > MAX_BLOCK_DISTANCE {
+        tracing::warn!(
+            cf = trie_cf.name,
+            sqlite_top,
+            max_row_block = block_num,
+            "Trie reconcile: MAX(root_index) row is >100 blocks below sqlite_top; skipping \
+             range-delete for this CF"
+        );
+        rocksdb.store_next_index(trie_col, final_counter);
+        return Ok(());
+    }
+
+    let Some(root_idx) = TrieStorageIndex::new(root_idx_u64) else {
+        tracing::warn!(
+            cf = trie_cf.name,
+            root_index = root_idx_u64,
+            "Trie reconcile: MAX(root_index) value is out of TrieStorageIndex range; leaving \
+             orphans in place"
+        );
+        rocksdb.store_next_index(trie_col, final_counter);
+        return Ok(());
+    };
+
+    let Some(confirmed_tail) =
+        dfs_confirmed_tail(rocksdb, &cf_handle, trie_cf.name, root_idx, counter)?
+    else {
+        // DFS aborted; leave orphans in place, warning already logged.
+        rocksdb.store_next_index(trie_col, final_counter);
+        return Ok(());
+    };
+
+    let new_counter = confirmed_tail.get() + 1;
+    // DFS invariants guarantee `new_counter <= counter`: indices grow
+    // monotonically and the DFS early-exits on `max_reached + 1 == counter`,
+    // so `new_counter > counter` is unreachable.
+    debug_assert!(new_counter <= counter);
+    if new_counter < counter {
+        batch.delete_range_cf(&cf_handle, new_counter.to_be_bytes(), counter.to_be_bytes());
+        batch.put_cf(&idx_cf, trie_cf.name.as_bytes(), new_counter.to_be_bytes());
+        final_counter = new_counter;
+
+        tracing::info!(
+            cf = trie_cf.name,
+            deleted_from = new_counter,
+            deleted_to = counter,
+            "Reconciled orphan trie indices from crashed commit"
+        );
+    }
+
+    rocksdb.store_next_index(trie_col, final_counter);
+    Ok(())
+}
+
+/// Deletes RocksDB rows for any block number that is ahead of the highest
+/// SQLite block header. This handles the crash window between `Transaction::
+/// commit`'s RocksDB write and its SQLite commit.
+pub(crate) fn reconcile_rocksdb_with_sqlite(
+    connection: &mut rusqlite::Connection,
+    rocksdb: &RocksDBInner,
+) -> anyhow::Result<()> {
+    use crate::connection::state_update::{nonce_update_key, storage_update_key};
+    use crate::connection::{
+        contract_state_hashes_key,
+        CONTRACT_STATE_HASHES_COLUMN,
+        EVENTS_COLUMN,
+        NONCE_UPDATES_COLUMN,
+        STATE_UPDATES_COLUMN,
+        STORAGE_UPDATES_COLUMN,
+        TRANSACTIONS_AND_RECEIPTS_COLUMN,
+        TRANSACTION_HASHES_COLUMN,
+    };
+
+    // 1. Highest SQLite block.
+    let sqlite_highest: Option<u64> = connection
+        .query_row("SELECT MAX(number) FROM block_headers", [], |row| {
+            row.get_optional_u64(0)
+        })
+        .context("Querying highest SQLite block")?;
+
+    // 2. Highest RocksDB block in STATE_UPDATES_COLUMN.
+    let state_updates_cf = rocksdb.get_column(&STATE_UPDATES_COLUMN);
+    let rocksdb_highest = {
+        let mut read_opts = rust_rocksdb::ReadOptions::default();
+        read_opts.set_total_order_seek(true);
+        let mut iter = rocksdb
+            .rocksdb
+            .raw_iterator_cf_opt(&state_updates_cf, read_opts);
+        iter.seek_to_last();
+        if iter.valid() {
+            let key = iter.key().context("RocksDB iterator key missing")?;
+            let bytes: [u8; 8] = key
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("Invalid STATE_UPDATES_COLUMN key length"))?;
+            Some(u64::from_be_bytes(bytes))
+        } else {
+            iter.status()
+                .context("RocksDB iterator error in reconcile")?;
+            None
+        }
+    };
+
+    // Shared batch: block-orphan deletes AND trie-orphan deletes both stage
+    // into this batch, so one atomic write covers the whole reconcile.
+    let mut batch = crate::RocksDBBatch::default();
+
+    // 3. Block-orphan cleanup (unchanged semantics: skip when RocksDB has no
+    // rows, or when `rocks_top <= sqlite_top`).
+    if let Some(rocks_top) = rocksdb_highest {
+        let purge_from = match sqlite_highest {
+            Some(sqlite_top) if rocks_top <= sqlite_top => None,
+            Some(sqlite_top) => Some(sqlite_top + 1),
+            None => Some(0u64),
+        };
+        if let Some(from) = purge_from {
+            tracing::warn!(
+                ?sqlite_highest,
+                rocks_top,
+                "RocksDB is ahead of SQLite -- purging orphaned blocks"
+            );
+
+            let txs_cf = rocksdb.get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
+            let events_cf = rocksdb.get_column(&EVENTS_COLUMN);
+            let hashes_cf = rocksdb.get_column(&TRANSACTION_HASHES_COLUMN);
+            let nonce_cf = rocksdb.get_column(&NONCE_UPDATES_COLUMN);
+            let storage_cf = rocksdb.get_column(&STORAGE_UPDATES_COLUMN);
+            let csh_cf = rocksdb.get_column(&CONTRACT_STATE_HASHES_COLUMN);
+
+            for block_number in from..=rocks_top {
+                let key = block_number.to_be_bytes();
+
+                if let Some(blob) = rocksdb
+                    .rocksdb
+                    .get_pinned_cf(&txs_cf, key)
+                    .context("Reading orphaned transactions blob")?
+                {
+                    if let Err(e) = (|| -> anyhow::Result<()> {
+                        let decompressed =
+                            crate::connection::transaction::compression::decompress_transactions(
+                                &blob,
+                            )
+                            .context("Decompressing orphaned transactions blob")?;
+                        let (txs, _): (
+                            crate::connection::transaction::dto::TransactionsWithReceiptsForBlock,
+                            _,
+                        ) = bincode::serde::decode_from_slice(
+                            &decompressed,
+                            bincode::config::standard(),
+                        )
+                        .context("Decoding orphaned transactions blob")?;
+                        for tx in txs.transactions_with_receipts() {
+                            let common_tx: pathfinder_common::transaction::Transaction =
+                                tx.transaction.into();
+                            batch.delete_cf(&hashes_cf, common_tx.hash.0.as_be_bytes());
+                        }
+                        Ok(())
+                    })() {
+                        tracing::warn!(
+                            block_number,
+                            error = %e,
+                            "Failed to decode orphaned transactions blob; transaction hash entries \
+                             for this block will remain as orphans in TRANSACTION_HASHES_COLUMN. \
+                             The `transaction_block_hash` reader cross-checks the embedded block \
+                             number against `block_headers`, so an orphan returns `Ok(None)` \
+                             rather than a phantom block reference."
+                        );
+                    }
+                }
+
+                if let Some(blob) = rocksdb
+                    .rocksdb
+                    .get_pinned_cf(&state_updates_cf, key)
+                    .context("Reading orphaned state update blob")?
+                {
+                    if let Err(e) = (|| -> anyhow::Result<()> {
+                        let (data, _): (crate::connection::state_update::dto::StateUpdateData, _) =
+                            bincode::serde::decode_from_slice(&blob, bincode::config::standard())
+                                .context("Decoding orphaned state update blob")?;
+                        let block_number =
+                            pathfinder_common::BlockNumber::new_or_panic(block_number);
+                        let data = pathfinder_common::state_update::StateUpdateData::from(data);
+                        for (address, update) in &data.contract_updates {
+                            if update.nonce.is_some() {
+                                batch.delete_cf(&nonce_cf, nonce_update_key(block_number, address));
+                            }
+                            for storage_key in update.storage.keys() {
+                                batch.delete_cf(
+                                    &storage_cf,
+                                    storage_update_key(block_number, address, storage_key),
+                                );
+                            }
+                        }
+                        for (address, update) in &data.system_contract_updates {
+                            for storage_key in update.storage.keys() {
+                                batch.delete_cf(
+                                    &storage_cf,
+                                    storage_update_key(block_number, address, storage_key),
+                                );
+                            }
+                        }
+                        for address in data.contract_updates.keys() {
+                            batch.delete_cf(
+                                &csh_cf,
+                                contract_state_hashes_key(block_number, address),
+                            );
+                        }
+                        for address in data.system_contract_updates.keys() {
+                            batch.delete_cf(
+                                &csh_cf,
+                                contract_state_hashes_key(block_number, address),
+                            );
+                        }
+                        Ok(())
+                    })() {
+                        // TODO: defensive range-delete for composite-keyed
+                        // orphans (NONCE_UPDATES_COLUMN, STORAGE_UPDATES_COLUMN) when the
+                        // decode above fails. The block-keyed CF deletes below still fire, but
+                        // composite-keyed rows tied to this block remain leaked until a proper
+                        // range-delete lands.
+                        tracing::warn!(
+                            block_number,
+                            error = %e,
+                            "Failed to decode orphaned state update blob for targeted \
+                             nonce/storage cleanup; falling back to block-keyed CF deletion only"
+                        );
+                    }
+                }
+
+                batch.delete_cf(&state_updates_cf, key);
+                batch.delete_cf(&txs_cf, key);
+                batch.delete_cf(&events_cf, key);
+            }
+        }
+    }
+
+    // 4. Trie-orphan reconcile. Runs on every startup, not nested under the
+    // block-orphan guard: a reorg-crash leaves rocks_top < sqlite_top and
+    // would skip the guard, and the atomic re-seed inside each per-CF call
+    // also needs to fire after a fresh-install migration boot.
+    let sqlite_top_u64 = sqlite_highest.unwrap_or(0);
+
+    reconcile_trie_column(
+        rocksdb,
+        connection,
+        sqlite_top_u64,
+        TrieColumn::Class,
+        "SELECT root_index, block_number FROM class_roots WHERE root_index IS NOT NULL AND \
+         block_number <= ? ORDER BY root_index DESC LIMIT 1",
+        &mut batch,
+    )?;
+    reconcile_trie_column(
+        rocksdb,
+        connection,
+        sqlite_top_u64,
+        TrieColumn::Contract,
+        "SELECT root_index, block_number FROM contract_roots WHERE root_index IS NOT NULL AND \
+         block_number <= ? ORDER BY root_index DESC LIMIT 1",
+        &mut batch,
+    )?;
+    reconcile_trie_column(
+        rocksdb,
+        connection,
+        sqlite_top_u64,
+        TrieColumn::Storage,
+        "SELECT root_index, block_number FROM storage_roots WHERE root_index IS NOT NULL AND \
+         block_number <= ? ORDER BY root_index DESC LIMIT 1",
+        &mut batch,
+    )?;
+
+    // 5. Single atomic write covering block-orphan and trie-orphan.
+    rocksdb
+        .rocksdb
+        .write(&batch)
+        .context("Writing reconcile batch to RocksDB")?;
+
+    Ok(())
+}
+
 /// Returns the current schema version of the existing database,
 /// or `0` if database does not yet exist.
 fn schema_version(connection: &rusqlite::Connection) -> anyhow::Result<usize> {
@@ -1103,6 +1618,170 @@ mod tests {
     use super::*;
     static EVENT_FILTERS_BLOCK_RANGE_LIMIT: LazyLock<NonZeroUsize> =
         LazyLock::new(|| NonZeroUsize::new(100).unwrap());
+
+    use crate::connection::{
+        encode_stored_node_for_test,
+        StoredNode,
+        TrieStorageIndex,
+        STATE_UPDATES_COLUMN,
+        TRIE_CLASS_COLUMN,
+        TRIE_CONTRACT_COLUMN,
+        TRIE_NEXT_INDEX_COLUMN,
+        TRIE_STORAGE_COLUMN,
+    };
+
+    /// Builds a RocksDBInner + fresh in-memory SQLite connection with all
+    /// migrations applied. Returns the tempdir owner alongside so callers can
+    /// keep it alive for the duration of the test.
+    fn setup_trie_reconcile_scaffold(
+    ) -> (tempfile::TempDir, Arc<RocksDBInner>, rusqlite::Connection) {
+        let rocksdb_dir = tempfile::tempdir().unwrap();
+        let rocksdb = Arc::new(StorageBuilder::open_rocksdb(rocksdb_dir.path(), None).unwrap());
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        setup_connection(&mut conn, JournalMode::Rollback).unwrap();
+        migrate_database(&mut conn, &rocksdb).unwrap();
+        (rocksdb_dir, rocksdb, conn)
+    }
+
+    /// Seeds a minimum `block_headers` row for the given block number.
+    fn seed_block_header(conn: &mut rusqlite::Connection, block: u64) {
+        // Derive a unique hash per block number so callers that seed
+        // multi-block windows do not trip the UNIQUE constraint on
+        // `block_headers.hash`.
+        let mut hash_bytes = [0u8; 32];
+        hash_bytes[24..].copy_from_slice(&block.to_be_bytes());
+        let tx = conn.transaction().unwrap();
+        tx.execute(
+            "INSERT INTO block_headers (number, hash, parent_hash, timestamp, eth_l1_gas_price, \
+             strk_l1_gas_price, eth_l1_data_gas_price, strk_l1_data_gas_price, eth_l2_gas_price, \
+             strk_l2_gas_price, sequencer_address, version, transaction_commitment, \
+             event_commitment, state_commitment, transaction_count, event_count, l1_da_mode, \
+             receipt_commitment, state_diff_commitment, state_diff_length) VALUES (?, ?, \
+             zeroblob(32), 0, zeroblob(16), NULL, NULL, NULL, NULL, NULL, zeroblob(32), NULL, \
+             zeroblob(32), zeroblob(32), zeroblob(32), 0, 0, 0, zeroblob(32), NULL, 0)",
+            rusqlite::params![block as i64, hash_bytes.to_vec()],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    /// Inserts (or replaces) one row in `{table}_roots`. `root_idx = None`
+    /// seeds a `TrieEmpty` row (root_index IS NULL). `contract_roots` has an
+    /// extra `contract_address BLOB NOT NULL` column that the reconcile SQL
+    /// never reads, so we plug a zero-filled 32-byte placeholder.
+    fn seed_root_row(
+        conn: &mut rusqlite::Connection,
+        table: &str,
+        block: u64,
+        root_idx: Option<u64>,
+    ) {
+        let tx = conn.transaction().unwrap();
+        if table == "contract" {
+            tx.execute(
+                "INSERT INTO contract_roots (block_number, contract_address, root_index) VALUES \
+                 (?, zeroblob(32), ?)",
+                rusqlite::params![block as i64, root_idx.map(|v| v as i64)],
+            )
+            .unwrap();
+        } else {
+            let sql = format!(
+                "INSERT OR REPLACE INTO {table}_roots (block_number, root_index) VALUES (?, ?)"
+            );
+            tx.execute(
+                &sql,
+                rusqlite::params![block as i64, root_idx.map(|v| v as i64)],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    }
+
+    /// Stores a `StoredNode` at the given index in the given trie CF. Layout
+    /// matches `write_trie_entry`: 32 bytes of zeroed hash prefix followed
+    /// by the encoded node body.
+    fn write_stored_node(
+        rocksdb: &RocksDBInner,
+        trie_cf: &crate::columns::Column,
+        idx: u64,
+        node: &StoredNode,
+    ) {
+        let mut buf = vec![0u8; 32 + 4096];
+        let written = encode_stored_node_for_test(node, &mut buf[32..])
+            .expect("encoding stored node for test");
+        buf.truncate(32 + written);
+        let cf = rocksdb.get_column(trie_cf);
+        let mut batch = crate::RocksDBBatch::default();
+        batch.put_cf(&cf, idx.to_be_bytes(), &buf);
+        rocksdb.rocksdb.write(&batch).unwrap();
+    }
+
+    /// Writes the on-disk `TRIE_NEXT_INDEX_COLUMN` value for a trie CF.
+    fn seed_trie_next_index(rocksdb: &RocksDBInner, trie_cf: &crate::columns::Column, value: u64) {
+        let idx_cf = rocksdb.get_column(&TRIE_NEXT_INDEX_COLUMN);
+        let mut batch = crate::RocksDBBatch::default();
+        batch.put_cf(&idx_cf, trie_cf.name.as_bytes(), value.to_be_bytes());
+        rocksdb.rocksdb.write(&batch).unwrap();
+    }
+
+    /// Reads the on-disk `TRIE_NEXT_INDEX_COLUMN` value for a trie CF.
+    fn read_trie_next_index(rocksdb: &RocksDBInner, trie_cf: &crate::columns::Column) -> u64 {
+        let idx_cf = rocksdb.get_column(&TRIE_NEXT_INDEX_COLUMN);
+        let raw = rocksdb
+            .rocksdb
+            .get_pinned_cf(&idx_cf, trie_cf.name.as_bytes())
+            .unwrap()
+            .expect("counter present");
+        let bytes: [u8; 8] = raw.as_ref().try_into().unwrap();
+        u64::from_be_bytes(bytes)
+    }
+
+    /// Reads the in-memory atomic counter for a trie CF.
+    fn read_atomic_counter(rocksdb: &RocksDBInner, trie_cf: &crate::columns::Column) -> u64 {
+        let trie_col = TrieColumn::from_column(trie_cf)
+            .unwrap_or_else(|| panic!("not a trie CF: {}", trie_cf.name));
+        let counter = match trie_col {
+            TrieColumn::Class => &rocksdb.trie_class_next_index,
+            TrieColumn::Contract => &rocksdb.trie_contract_next_index,
+            TrieColumn::Storage => &rocksdb.trie_storage_next_index,
+        };
+        counter.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Assert a raw node is absent (proves `delete_range_cf` fired against it).
+    fn assert_trie_index_missing(
+        rocksdb: &RocksDBInner,
+        trie_cf: &crate::columns::Column,
+        idx: u64,
+    ) {
+        let cf = rocksdb.get_column(trie_cf);
+        let raw = rocksdb
+            .rocksdb
+            .get_pinned_cf(&cf, idx.to_be_bytes())
+            .unwrap();
+        assert!(
+            raw.is_none(),
+            "expected index {idx} to be absent from {}",
+            trie_cf.name
+        );
+    }
+
+    /// Assert a raw node is present (proves it survived reconcile).
+    fn assert_trie_index_present(
+        rocksdb: &RocksDBInner,
+        trie_cf: &crate::columns::Column,
+        idx: u64,
+    ) {
+        let cf = rocksdb.get_column(trie_cf);
+        let raw = rocksdb
+            .rocksdb
+            .get_pinned_cf(&cf, idx.to_be_bytes())
+            .unwrap();
+        assert!(
+            raw.is_some(),
+            "expected index {idx} to be present in {}",
+            trie_cf.name
+        );
+    }
 
     #[test]
     fn schema_version_defaults_to_zero() {
@@ -1335,6 +2014,644 @@ mod tests {
         for e in events_before {
             assert!(events_after.contains(&e));
         }
+    }
+
+    #[test]
+    fn reconcile_rocksdb_purges_orphaned_blocks() {
+        use pathfinder_common::macro_prelude::*;
+        use pathfinder_common::{BlockHeader, BlockNumber};
+
+        use crate::connection::{
+            EVENTS_COLUMN,
+            STATE_UPDATES_COLUMN,
+            TRANSACTIONS_AND_RECEIPTS_COLUMN,
+            TRANSACTION_HASHES_COLUMN,
+        };
+
+        // Construct a raw SQLite connection and a RocksDBInner directly,
+        // following the same pattern as the `full_migration` test.
+        let rocksdb_dir = tempfile::tempdir().unwrap();
+        let rocksdb = StorageBuilder::open_rocksdb(rocksdb_dir.path(), None).unwrap();
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        setup_connection(&mut conn, JournalMode::Rollback).unwrap();
+        migrate_database(&mut conn, &rocksdb).unwrap();
+
+        // Seed SQLite with block 5 header.
+        let header5 = BlockHeader::builder()
+            .number(BlockNumber::new_or_panic(5))
+            .finalize_with_hash(block_hash!("0x5"));
+        {
+            let tx = conn.transaction().unwrap();
+            tx.execute(
+                "INSERT INTO block_headers (number, hash, parent_hash, timestamp, \
+                 eth_l1_gas_price, strk_l1_gas_price, eth_l1_data_gas_price, \
+                 strk_l1_data_gas_price, eth_l2_gas_price, strk_l2_gas_price, sequencer_address, \
+                 version, transaction_commitment, event_commitment, state_commitment, \
+                 transaction_count, event_count, l1_da_mode, receipt_commitment, \
+                 state_diff_commitment, state_diff_length) VALUES (5, ?, zeroblob(32), 0, \
+                 zeroblob(16), NULL, NULL, NULL, NULL, NULL, zeroblob(32), NULL, zeroblob(32), \
+                 zeroblob(32), zeroblob(32), 0, 0, 0, zeroblob(32), NULL, 0)",
+                [header5.hash.0.as_be_bytes().to_vec()],
+            )
+            .unwrap();
+            // Write block 5 state update to RocksDB so the reconciler sees it.
+            let state_cf = rocksdb.get_column(&STATE_UPDATES_COLUMN);
+            let mut batch = crate::RocksDBBatch::default();
+            batch.put_cf(&state_cf, 5u64.to_be_bytes(), b"dummy5");
+            rocksdb.rocksdb.write(&batch).unwrap();
+            tx.commit().unwrap();
+        }
+
+        // Write block 6 data directly to RocksDB (no SQLite header), simulating
+        // the post-RocksDB / pre-SQLite-commit crash state.
+        {
+            let mut batch = crate::RocksDBBatch::default();
+            let key = 6u64.to_be_bytes();
+            batch.put_cf(&rocksdb.get_column(&STATE_UPDATES_COLUMN), key, b"dummy");
+            batch.put_cf(
+                &rocksdb.get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN),
+                key,
+                b"dummy",
+            );
+            batch.put_cf(&rocksdb.get_column(&EVENTS_COLUMN), key, b"dummy");
+            let tx_hash = transaction_hash!("0xabc");
+            let mut value = [0u8; 10];
+            value[..8].copy_from_slice(&key);
+            value[8..].copy_from_slice(&0u16.to_be_bytes());
+            batch.put_cf(
+                &rocksdb.get_column(&TRANSACTION_HASHES_COLUMN),
+                tx_hash.0.as_be_bytes(),
+                value,
+            );
+            rocksdb.rocksdb.write(&batch).unwrap();
+        }
+
+        crate::reconcile_rocksdb_with_sqlite(&mut conn, &rocksdb).unwrap();
+
+        // Block 6 must be gone from every CF the reconciler covers; block 5 stays.
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(
+                &rocksdb.get_column(&STATE_UPDATES_COLUMN),
+                6u64.to_be_bytes()
+            )
+            .unwrap()
+            .is_none());
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(
+                &rocksdb.get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN),
+                6u64.to_be_bytes()
+            )
+            .unwrap()
+            .is_none());
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(&rocksdb.get_column(&EVENTS_COLUMN), 6u64.to_be_bytes())
+            .unwrap()
+            .is_none());
+        // Block 5 state update must still be present.
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(
+                &rocksdb.get_column(&STATE_UPDATES_COLUMN),
+                5u64.to_be_bytes()
+            )
+            .unwrap()
+            .is_some());
+
+        // Tx hash entry survives because the transactions blob (b"dummy") can't
+        // be decoded, so the reconciler falls back to block-keyed CF deletion
+        // only. This is a known limitation: orphaned tx_hash entries from
+        // corrupt crash blobs are harmless since read paths validate against
+        // SQLite.
+        let tx_hash = transaction_hash!("0xabc");
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(
+                &rocksdb.get_column(&TRANSACTION_HASHES_COLUMN),
+                tx_hash.0.as_be_bytes()
+            )
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn reconciles_orphan_trie_indices_across_all_three_cfs() {
+        // Confirmed blocks at 5 for each trie CF, pointing at a valid 2-node
+        // batch [K, K+1] per CF. Crashed batch would have allocated
+        // [K+2..K+5). Counter is bumped past that. Reconcile must range-
+        // delete indices in [K+2..K+5) for every CF and rewind the
+        // counter to K+2.
+        let (_dir, rocksdb, mut conn) = setup_trie_reconcile_scaffold();
+        seed_block_header(&mut conn, 5);
+
+        let root_k: u64 = 10;
+        let child_k = root_k + 1;
+        let counter_after_crash = root_k + 5; // 3 orphan indices [K+2..K+5).
+
+        for (table, trie_cf) in [
+            ("class", &TRIE_CLASS_COLUMN),
+            ("contract", &TRIE_CONTRACT_COLUMN),
+            ("storage", &TRIE_STORAGE_COLUMN),
+        ] {
+            // Confirmed batch: Binary(root -> child, LeafBinary).
+            write_stored_node(
+                &rocksdb,
+                trie_cf,
+                root_k,
+                &StoredNode::Binary {
+                    left: TrieStorageIndex::new(child_k).unwrap(),
+                    right: TrieStorageIndex::new(child_k).unwrap(),
+                },
+            );
+            write_stored_node(&rocksdb, trie_cf, child_k, &StoredNode::LeafBinary);
+            // Orphan nodes at [K+2..K+5).
+            for i in 0..3u64 {
+                write_stored_node(&rocksdb, trie_cf, root_k + 2 + i, &StoredNode::LeafBinary);
+            }
+            seed_root_row(&mut conn, table, 5, Some(root_k));
+            seed_trie_next_index(&rocksdb, trie_cf, counter_after_crash);
+        }
+
+        reconcile_rocksdb_with_sqlite(&mut conn, &rocksdb).unwrap();
+
+        for trie_cf in [
+            &TRIE_CLASS_COLUMN,
+            &TRIE_CONTRACT_COLUMN,
+            &TRIE_STORAGE_COLUMN,
+        ] {
+            assert_trie_index_present(&rocksdb, trie_cf, root_k);
+            assert_trie_index_present(&rocksdb, trie_cf, child_k);
+            for i in 0..3u64 {
+                assert_trie_index_missing(&rocksdb, trie_cf, root_k + 2 + i);
+            }
+            assert_eq!(read_trie_next_index(&rocksdb, trie_cf), child_k + 1);
+            assert_eq!(read_atomic_counter(&rocksdb, trie_cf), child_k + 1);
+        }
+    }
+
+    #[test]
+    fn crash_affects_only_one_cf() {
+        // Confirmed rows in all three CFs. Only TRIE_STORAGE has a bumped
+        // counter with orphans; TRIE_CLASS and TRIE_CONTRACT are aligned.
+        let (_dir, rocksdb, mut conn) = setup_trie_reconcile_scaffold();
+        seed_block_header(&mut conn, 5);
+
+        let clean_root = 10u64;
+        for (table, trie_cf) in [
+            ("class", &TRIE_CLASS_COLUMN),
+            ("contract", &TRIE_CONTRACT_COLUMN),
+        ] {
+            write_stored_node(&rocksdb, trie_cf, clean_root, &StoredNode::LeafBinary);
+            seed_root_row(&mut conn, table, 5, Some(clean_root));
+            seed_trie_next_index(&rocksdb, trie_cf, clean_root + 1);
+        }
+
+        // Storage: confirmed at [10], orphans at [11..14).
+        write_stored_node(
+            &rocksdb,
+            &TRIE_STORAGE_COLUMN,
+            clean_root,
+            &StoredNode::LeafBinary,
+        );
+        for i in 0..3u64 {
+            write_stored_node(
+                &rocksdb,
+                &TRIE_STORAGE_COLUMN,
+                11 + i,
+                &StoredNode::LeafBinary,
+            );
+        }
+        seed_root_row(&mut conn, "storage", 5, Some(clean_root));
+        seed_trie_next_index(&rocksdb, &TRIE_STORAGE_COLUMN, 14);
+
+        reconcile_rocksdb_with_sqlite(&mut conn, &rocksdb).unwrap();
+
+        // Class + contract untouched.
+        for trie_cf in [&TRIE_CLASS_COLUMN, &TRIE_CONTRACT_COLUMN] {
+            assert_trie_index_present(&rocksdb, trie_cf, clean_root);
+            assert_eq!(read_trie_next_index(&rocksdb, trie_cf), clean_root + 1);
+            assert_eq!(read_atomic_counter(&rocksdb, trie_cf), clean_root + 1);
+        }
+        // Storage orphans gone; counter rewound.
+        assert_trie_index_present(&rocksdb, &TRIE_STORAGE_COLUMN, clean_root);
+        for i in 0..3u64 {
+            assert_trie_index_missing(&rocksdb, &TRIE_STORAGE_COLUMN, 11 + i);
+        }
+        assert_eq!(read_trie_next_index(&rocksdb, &TRIE_STORAGE_COLUMN), 11);
+        assert_eq!(read_atomic_counter(&rocksdb, &TRIE_STORAGE_COLUMN), 11);
+    }
+
+    #[test]
+    fn clean_shutdown_dfs_finds_aligned_tail() {
+        // Every CF is exactly aligned; counter = tail + 1. Reconcile is a
+        // no-op for the trie CFs and the atomics land equal to the disk value.
+        let (_dir, rocksdb, mut conn) = setup_trie_reconcile_scaffold();
+        seed_block_header(&mut conn, 5);
+
+        let root = 42u64;
+        for (table, trie_cf) in [
+            ("class", &TRIE_CLASS_COLUMN),
+            ("contract", &TRIE_CONTRACT_COLUMN),
+            ("storage", &TRIE_STORAGE_COLUMN),
+        ] {
+            write_stored_node(
+                &rocksdb,
+                trie_cf,
+                root,
+                &StoredNode::Edge {
+                    child: TrieStorageIndex::new(root + 1).unwrap(),
+                    path: bitvec::bitvec![u8, bitvec::order::Msb0; 1, 0, 1],
+                },
+            );
+            write_stored_node(&rocksdb, trie_cf, root + 1, &StoredNode::LeafBinary);
+            seed_root_row(&mut conn, table, 5, Some(root));
+            seed_trie_next_index(&rocksdb, trie_cf, root + 2);
+        }
+
+        // STATE_UPDATES[5] present, matches block_headers top.
+        {
+            let cf = rocksdb.get_column(&STATE_UPDATES_COLUMN);
+            let mut batch = crate::RocksDBBatch::default();
+            batch.put_cf(&cf, 5u64.to_be_bytes(), b"dummy5");
+            rocksdb.rocksdb.write(&batch).unwrap();
+        }
+
+        reconcile_rocksdb_with_sqlite(&mut conn, &rocksdb).unwrap();
+
+        for trie_cf in [
+            &TRIE_CLASS_COLUMN,
+            &TRIE_CONTRACT_COLUMN,
+            &TRIE_STORAGE_COLUMN,
+        ] {
+            assert_trie_index_present(&rocksdb, trie_cf, root);
+            assert_trie_index_present(&rocksdb, trie_cf, root + 1);
+            assert_eq!(read_trie_next_index(&rocksdb, trie_cf), root + 2);
+            assert_eq!(read_atomic_counter(&rocksdb, trie_cf), root + 2);
+        }
+    }
+
+    #[test]
+    fn reorg_crash_reconciles_orphans() {
+        // Reorg-crash aftermath: block_headers retains 0..=10, STATE_UPDATES
+        // retains 0..=5 (blocks 6..=10 were staged-deleted by purge_block).
+        // Trie CFs contain orphans at [K..K+3). Counter is durably bumped.
+        // rocks_top (5) < sqlite_top (10), so the block-orphan guard would
+        // skip — trie reconcile must still fire.
+        let (_dir, rocksdb, mut conn) = setup_trie_reconcile_scaffold();
+        for b in 0..=10u64 {
+            seed_block_header(&mut conn, b);
+        }
+        {
+            let cf = rocksdb.get_column(&STATE_UPDATES_COLUMN);
+            let mut batch = crate::RocksDBBatch::default();
+            for b in 0..=5u64 {
+                batch.put_cf(&cf, b.to_be_bytes(), b"dummy");
+            }
+            rocksdb.rocksdb.write(&batch).unwrap();
+        }
+
+        let k = 100u64;
+        for (table, trie_cf) in [
+            ("class", &TRIE_CLASS_COLUMN),
+            ("contract", &TRIE_CONTRACT_COLUMN),
+            ("storage", &TRIE_STORAGE_COLUMN),
+        ] {
+            write_stored_node(&rocksdb, trie_cf, k, &StoredNode::LeafBinary);
+            for i in 0..3u64 {
+                write_stored_node(&rocksdb, trie_cf, k + 1 + i, &StoredNode::LeafBinary);
+            }
+            seed_root_row(&mut conn, table, 10, Some(k));
+            seed_trie_next_index(&rocksdb, trie_cf, k + 4);
+        }
+
+        reconcile_rocksdb_with_sqlite(&mut conn, &rocksdb).unwrap();
+
+        for trie_cf in [
+            &TRIE_CLASS_COLUMN,
+            &TRIE_CONTRACT_COLUMN,
+            &TRIE_STORAGE_COLUMN,
+        ] {
+            assert_trie_index_present(&rocksdb, trie_cf, k);
+            for i in 0..3u64 {
+                assert_trie_index_missing(&rocksdb, trie_cf, k + 1 + i);
+            }
+            assert_eq!(read_trie_next_index(&rocksdb, trie_cf), k + 1);
+            assert_eq!(read_atomic_counter(&rocksdb, trie_cf), k + 1);
+        }
+    }
+
+    #[test]
+    fn null_max_root_falls_back_safely() {
+        // Confirmed row for class_roots at block 5 has root_index = NULL
+        // (TrieEmpty). The SQL query filters `root_index IS NOT NULL`, so
+        // no row matches: fallback engaged, orphans persist, atomic reflects
+        // the still-bumped disk value.
+        let (_dir, rocksdb, mut conn) = setup_trie_reconcile_scaffold();
+        seed_block_header(&mut conn, 5);
+
+        seed_root_row(&mut conn, "class", 5, None);
+        for i in 1..3u64 {
+            write_stored_node(&rocksdb, &TRIE_CLASS_COLUMN, i, &StoredNode::LeafBinary);
+        }
+        seed_trie_next_index(&rocksdb, &TRIE_CLASS_COLUMN, 3);
+
+        reconcile_rocksdb_with_sqlite(&mut conn, &rocksdb).unwrap();
+
+        for i in 1..3u64 {
+            assert_trie_index_present(&rocksdb, &TRIE_CLASS_COLUMN, i);
+        }
+        assert_eq!(read_trie_next_index(&rocksdb, &TRIE_CLASS_COLUMN), 3);
+        assert_eq!(read_atomic_counter(&rocksdb, &TRIE_CLASS_COLUMN), 3);
+    }
+
+    #[test]
+    fn corrupt_node_aborts_dfs_safely() {
+        // Two branches: (a) missing node at root; (b) 20-byte value shorter
+        // than the 32-byte hash prefix. Both must abort the DFS and leave
+        // orphans in place.
+        let (_dir, rocksdb, mut conn) = setup_trie_reconcile_scaffold();
+        seed_block_header(&mut conn, 5);
+
+        // (a) MAX(root_index) = 10, but no node at index 10.
+        seed_root_row(&mut conn, "class", 5, Some(10));
+        seed_trie_next_index(&rocksdb, &TRIE_CLASS_COLUMN, 15);
+        // Seed an orphan-shaped node at 12 so we can prove it survives.
+        write_stored_node(&rocksdb, &TRIE_CLASS_COLUMN, 12, &StoredNode::LeafBinary);
+
+        reconcile_rocksdb_with_sqlite(&mut conn, &rocksdb).unwrap();
+
+        assert_trie_index_missing(&rocksdb, &TRIE_CLASS_COLUMN, 10); // still absent
+        assert_trie_index_present(&rocksdb, &TRIE_CLASS_COLUMN, 12);
+        assert_eq!(read_trie_next_index(&rocksdb, &TRIE_CLASS_COLUMN), 15);
+        assert_eq!(read_atomic_counter(&rocksdb, &TRIE_CLASS_COLUMN), 15);
+
+        // (b) Now seed a bogus 20-byte value at index 10 to exercise the
+        // length-guard branch, using a separate scaffold.
+        let (_dir2, rocksdb2, mut conn2) = setup_trie_reconcile_scaffold();
+        seed_block_header(&mut conn2, 5);
+        seed_root_row(&mut conn2, "class", 5, Some(10));
+        seed_trie_next_index(&rocksdb2, &TRIE_CLASS_COLUMN, 15);
+        {
+            let cf = rocksdb2.get_column(&TRIE_CLASS_COLUMN);
+            let mut batch = crate::RocksDBBatch::default();
+            batch.put_cf(&cf, 10u64.to_be_bytes(), [0u8; 20]);
+            rocksdb2.rocksdb.write(&batch).unwrap();
+        }
+
+        reconcile_rocksdb_with_sqlite(&mut conn2, &rocksdb2).unwrap();
+
+        // The 20-byte value at 10 persists — no range-delete fired.
+        let cf = rocksdb2.get_column(&TRIE_CLASS_COLUMN);
+        assert!(rocksdb2
+            .rocksdb
+            .get_pinned_cf(&cf, 10u64.to_be_bytes())
+            .unwrap()
+            .is_some());
+        assert_eq!(read_trie_next_index(&rocksdb2, &TRIE_CLASS_COLUMN), 15);
+        assert_eq!(read_atomic_counter(&rocksdb2, &TRIE_CLASS_COLUMN), 15);
+    }
+
+    #[test]
+    fn genesis_window_empty_roots_non_zero_counter() {
+        // Roots tables empty; counter = 5. Represents a pre-genesis migration
+        // write or a genesis-window crash. Fallback engages, orphans persist.
+        let (_dir, rocksdb, mut conn) = setup_trie_reconcile_scaffold();
+        // No block_headers row: sqlite_highest = None => sqlite_top_u64 = 0.
+        seed_trie_next_index(&rocksdb, &TRIE_CLASS_COLUMN, 5);
+        for i in 0..5u64 {
+            write_stored_node(&rocksdb, &TRIE_CLASS_COLUMN, i, &StoredNode::LeafBinary);
+        }
+
+        reconcile_rocksdb_with_sqlite(&mut conn, &rocksdb).unwrap();
+
+        for i in 0..5u64 {
+            assert_trie_index_present(&rocksdb, &TRIE_CLASS_COLUMN, i);
+        }
+        assert_eq!(read_trie_next_index(&rocksdb, &TRIE_CLASS_COLUMN), 5);
+        assert_eq!(read_atomic_counter(&rocksdb, &TRIE_CLASS_COLUMN), 5);
+    }
+
+    #[test]
+    fn end_to_end_via_real_insert_trie() {
+        // Exercise the DFS against real writer bytes: run three real
+        // insert_class_trie calls, then simulate a crashed batch by writing
+        // three dummy nodes above the counter and bumping it. Reconcile
+        // rewinds cleanly.
+        use std::num::NonZeroU32;
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("test.sqlite");
+
+        let (post_counter, storage_manager) = {
+            let mut mgr = crate::StorageBuilder::file(db_path.clone())
+                .journal_mode(JournalMode::Rollback)
+                .migrate()
+                .unwrap();
+            let db = mgr.create_pool(NonZeroU32::new(2).unwrap()).unwrap();
+            // Run three real inserts across three blocks — one leaf-root
+            // per block suffices to bump the counter.
+            for b in 0..3u64 {
+                // Unique per-block hash so the `block_headers.hash` UNIQUE
+                // constraint doesn't fire across the three iterations.
+                let mut hash_bytes = [0u8; 32];
+                hash_bytes[24..].copy_from_slice(&b.to_be_bytes());
+                let block_hash = pathfinder_common::BlockHash(
+                    pathfinder_crypto::Felt::from_be_slice(&hash_bytes).unwrap(),
+                );
+                let header = pathfinder_common::BlockHeader::builder()
+                    .number(pathfinder_common::BlockNumber::new_or_panic(b))
+                    .finalize_with_hash(block_hash);
+                let mut conn = db.connection().unwrap();
+                let tx = conn.transaction().unwrap();
+                tx.insert_block_header(&header).unwrap();
+                let update = crate::connection::TrieUpdate {
+                    nodes_added: vec![(
+                        pathfinder_common::macro_prelude::felt!("0x1"),
+                        crate::connection::Node::LeafBinary,
+                    )],
+                    nodes_removed: vec![],
+                    root_commitment: pathfinder_common::macro_prelude::felt!("0x1"),
+                };
+                let root_update = tx.insert_class_trie(&update, header.number).unwrap();
+                tx.insert_class_root(header.number, root_update).unwrap();
+                tx.commit().unwrap();
+            }
+            // Cache the counter observed after three real inserts.
+            let counter = read_trie_next_index(db.rocksdb_inner(), &TRIE_CLASS_COLUMN);
+            (counter, db)
+        };
+
+        assert!(
+            post_counter >= 3,
+            "post-insert counter must be >= 3, got {post_counter}"
+        );
+
+        // Simulate a crashed batch: three dummy nodes + counter bump by 3.
+        let db = &storage_manager;
+        let inner = db.rocksdb_inner();
+        for i in 0..3u64 {
+            write_stored_node(
+                inner,
+                &TRIE_CLASS_COLUMN,
+                post_counter + i,
+                &StoredNode::LeafBinary,
+            );
+        }
+        seed_trie_next_index(inner, &TRIE_CLASS_COLUMN, post_counter + 3);
+
+        // Re-invoke reconcile directly.
+        let mut raw_conn = rusqlite::Connection::open(&db_path).unwrap();
+        setup_connection(&mut raw_conn, JournalMode::Rollback).unwrap();
+        reconcile_rocksdb_with_sqlite(&mut raw_conn, inner).unwrap();
+
+        for i in 0..3u64 {
+            assert_trie_index_missing(inner, &TRIE_CLASS_COLUMN, post_counter + i);
+        }
+        assert_eq!(
+            read_trie_next_index(inner, &TRIE_CLASS_COLUMN),
+            post_counter
+        );
+        assert_eq!(read_atomic_counter(inner, &TRIE_CLASS_COLUMN), post_counter);
+    }
+
+    #[test]
+    fn idempotent_across_double_run() {
+        // Same seed as `reconciles_orphan_trie_indices_across_all_three_cfs`;
+        // reconcile invoked twice back-to-back. Post-condition matches the
+        // canonical test's single-run post-condition.
+        let (_dir, rocksdb, mut conn) = setup_trie_reconcile_scaffold();
+        seed_block_header(&mut conn, 5);
+
+        let root_k: u64 = 10;
+        let child_k = root_k + 1;
+        let counter_after_crash = root_k + 5;
+
+        for (table, trie_cf) in [
+            ("class", &TRIE_CLASS_COLUMN),
+            ("contract", &TRIE_CONTRACT_COLUMN),
+            ("storage", &TRIE_STORAGE_COLUMN),
+        ] {
+            write_stored_node(
+                &rocksdb,
+                trie_cf,
+                root_k,
+                &StoredNode::Binary {
+                    left: TrieStorageIndex::new(child_k).unwrap(),
+                    right: TrieStorageIndex::new(child_k).unwrap(),
+                },
+            );
+            write_stored_node(&rocksdb, trie_cf, child_k, &StoredNode::LeafBinary);
+            for i in 0..3u64 {
+                write_stored_node(&rocksdb, trie_cf, root_k + 2 + i, &StoredNode::LeafBinary);
+            }
+            seed_root_row(&mut conn, table, 5, Some(root_k));
+            seed_trie_next_index(&rocksdb, trie_cf, counter_after_crash);
+        }
+
+        reconcile_rocksdb_with_sqlite(&mut conn, &rocksdb).unwrap();
+        reconcile_rocksdb_with_sqlite(&mut conn, &rocksdb).unwrap();
+
+        for trie_cf in [
+            &TRIE_CLASS_COLUMN,
+            &TRIE_CONTRACT_COLUMN,
+            &TRIE_STORAGE_COLUMN,
+        ] {
+            assert_trie_index_present(&rocksdb, trie_cf, root_k);
+            assert_trie_index_present(&rocksdb, trie_cf, child_k);
+            for i in 0..3u64 {
+                assert_trie_index_missing(&rocksdb, trie_cf, root_k + 2 + i);
+            }
+            assert_eq!(read_trie_next_index(&rocksdb, trie_cf), child_k + 1);
+            assert_eq!(read_atomic_counter(&rocksdb, trie_cf), child_k + 1);
+        }
+    }
+
+    #[test]
+    fn empty_rocksdb_and_empty_sqlite_are_noop() {
+        // Fresh temp-dir Storage, nothing written. Reconcile must not
+        // panic, must not stage any writes, and atomics stay at 0.
+        let (_dir, rocksdb, mut conn) = setup_trie_reconcile_scaffold();
+
+        reconcile_rocksdb_with_sqlite(&mut conn, &rocksdb).unwrap();
+
+        for trie_cf in [
+            &TRIE_CLASS_COLUMN,
+            &TRIE_CONTRACT_COLUMN,
+            &TRIE_STORAGE_COLUMN,
+        ] {
+            assert_eq!(read_atomic_counter(&rocksdb, trie_cf), 0);
+        }
+    }
+
+    #[test]
+    fn stale_atomic_refreshed_after_migration_write() {
+        // Simulates fresh-install migration boot: disk counter =
+        // MAX(idx)+1, atomic still 0 (stale). Reconcile refreshes the
+        // atomic to match disk. No range-delete fires (DFS finds an
+        // aligned tail).
+        let (_dir, rocksdb, mut conn) = setup_trie_reconcile_scaffold();
+        seed_block_header(&mut conn, 5);
+
+        let batch_base = 1229u64;
+        let batch_size = 5u64;
+
+        // Write a 5-node batch: root at 1233 -> LeafBinary at 1229..=1232.
+        // Use a Binary root with two children pointing at 1231 and 1230, then
+        // an Edge at 1232 pointing at 1229; wire so DFS reaches all five.
+        write_stored_node(&rocksdb, &TRIE_CLASS_COLUMN, 1229, &StoredNode::LeafBinary);
+        write_stored_node(&rocksdb, &TRIE_CLASS_COLUMN, 1230, &StoredNode::LeafBinary);
+        write_stored_node(
+            &rocksdb,
+            &TRIE_CLASS_COLUMN,
+            1231,
+            &StoredNode::Edge {
+                child: TrieStorageIndex::new(1229).unwrap(),
+                path: bitvec::bitvec![u8, bitvec::order::Msb0; 1],
+            },
+        );
+        write_stored_node(
+            &rocksdb,
+            &TRIE_CLASS_COLUMN,
+            1232,
+            &StoredNode::Edge {
+                child: TrieStorageIndex::new(1230).unwrap(),
+                path: bitvec::bitvec![u8, bitvec::order::Msb0; 0],
+            },
+        );
+        write_stored_node(
+            &rocksdb,
+            &TRIE_CLASS_COLUMN,
+            1233,
+            &StoredNode::Binary {
+                left: TrieStorageIndex::new(1231).unwrap(),
+                right: TrieStorageIndex::new(1232).unwrap(),
+            },
+        );
+
+        seed_root_row(&mut conn, "class", 5, Some(1233));
+        seed_trie_next_index(&rocksdb, &TRIE_CLASS_COLUMN, batch_base + batch_size);
+        // Force the atomic stale (simulate migration boot before reconcile).
+        rocksdb
+            .trie_class_next_index
+            .store(0, std::sync::atomic::Ordering::SeqCst);
+
+        reconcile_rocksdb_with_sqlite(&mut conn, &rocksdb).unwrap();
+
+        // Counter unchanged on disk, no range-delete.
+        for i in 0..batch_size {
+            assert_trie_index_present(&rocksdb, &TRIE_CLASS_COLUMN, batch_base + i);
+        }
+        assert_eq!(
+            read_trie_next_index(&rocksdb, &TRIE_CLASS_COLUMN),
+            batch_base + batch_size
+        );
+        // Atomic refreshed to disk value.
+        assert_eq!(
+            read_atomic_counter(&rocksdb, &TRIE_CLASS_COLUMN),
+            batch_base + batch_size
+        );
     }
 
     #[test]

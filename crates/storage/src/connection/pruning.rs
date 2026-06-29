@@ -2,28 +2,30 @@
 //! number of blocks stored in the database, thus keeping the size of the
 //! database in check. The latest block is always stored.
 //!
-//! Database tables that are subject to pruning are:
-//! - `transactions`
-//! - `transaction_hashes`
+//! SQLite tables subject to pruning:
 //! - `block_headers`
 //! - `block_signatures`
 //! - `event_filters`
 //! - `contract_updates` (a row can be pruned if there is another row with the
 //!   same `contract_address` and a higher `block_number`)
-//! - `nonce_updates` (a row can be pruned if there is another row with the same
-//!   `contract_address_id` and a higher `block_number`)
-//! - `storage_updates` (a row can be pruned if there is another row with the
-//!   same `contract_address_id`, same `storage_address_id` and a higher
-//!   `block_number`)
+//!
+//! RocksDB column families subject to pruning:
+//! - `nonce_updates` (keyed by contract address prefix + inverted block number)
+//! - `storage_updates` (keyed by contract+storage address prefix + inverted
+//!   block number)
+//! - `transactions_and_receipts` (keyed by block number)
+//! - `events` (keyed by block number)
+//! - `transaction_hashes` (keyed by tx hash, deleted by reading the
+//!   transactions blob to discover which hashes belong to the pruned block)
 //!
 //! It is forbidden to enable pruning on a database that was created with it
 //! disabled (and vice versa). However, it is possible to change the number of
 //! blocks that are kept in the database between runs.
 
 use anyhow::Context;
-use pathfinder_common::BlockNumber;
+use pathfinder_common::{BlockNumber, ContractAddress, StorageAddress};
 
-use super::Transaction;
+use super::{Transaction, NONCE_UPDATES_COLUMN, STORAGE_UPDATES_COLUMN};
 use crate::prelude::{named_params, params, RowExt};
 use crate::AGGREGATE_BLOOM_BLOCK_RANGE_LEN;
 
@@ -38,14 +40,13 @@ pub enum BlockchainHistoryMode {
 
 impl Transaction<'_> {
     pub fn prune_block(&self, block_to_prune: BlockNumber) -> anyhow::Result<()> {
-        prune_block(self.inner(), block_to_prune)
+        prune_block(self, block_to_prune)
     }
 }
 
-pub(crate) fn prune_block(
-    db: &rusqlite::Transaction<'_>,
-    block: BlockNumber,
-) -> anyhow::Result<()> {
+pub(crate) fn prune_block(tx: &super::Transaction<'_>, block: BlockNumber) -> anyhow::Result<()> {
+    let db = tx.inner();
+
     // Prune block and transaction (via FOREIGN KEY + ON DELETE CASCADE) data.
     let mut block_headers_delete_stmt = db.prepare_cached(
         r"
@@ -78,25 +79,13 @@ pub(crate) fn prune_block(
             .context("Deleting filter from event_filters")?;
     }
 
-    // Prune state update data (where possible).
+    // Prune SQLite contract_updates rows that have a newer entry.
+    let last_kept_block = block + 1;
+
     let mut contract_updates_select_stmt = db.prepare_cached(
         r"
         SELECT contract_address
         FROM contract_updates
-        WHERE block_number = :last_kept_block
-        ",
-    )?;
-    let mut nonce_updates_select_stmt = db.prepare_cached(
-        r"
-        SELECT contract_address_id
-        FROM nonce_updates
-        WHERE block_number = :last_kept_block
-        ",
-    )?;
-    let mut storage_updates_select_stmt = db.prepare_cached(
-        r"
-        SELECT contract_address_id, storage_address_id
-        FROM storage_updates
         WHERE block_number = :last_kept_block
         ",
     )?;
@@ -109,23 +98,6 @@ pub(crate) fn prune_block(
         ORDER BY block_number ASC
         ",
     )?;
-    let mut blocks_with_same_nonce_update = db.prepare_cached(
-        r"
-        SELECT block_number
-        FROM nonce_updates
-        WHERE contract_address_id = ?
-        AND block_number < ?
-        ",
-    )?;
-    let mut blocks_with_same_storage_update = db.prepare_cached(
-        r"
-        SELECT block_number
-        FROM storage_updates
-        WHERE contract_address_id = ?
-        AND storage_address_id = ?
-        AND block_number < ?
-        ",
-    )?;
     let mut contract_updates_delete_stmt = db.prepare_cached(
         r"
         DELETE FROM contract_updates
@@ -133,25 +105,7 @@ pub(crate) fn prune_block(
         AND block_number = ?
         ",
     )?;
-    let mut nonce_updates_delete_stmt = db.prepare_cached(
-        r"
-        DELETE FROM nonce_updates
-        WHERE contract_address_id = ?
-        AND block_number = ?
-        ",
-    )?;
-    let mut storage_updates_delete_stmt = db.prepare_cached(
-        r"
-        DELETE FROM storage_updates
-        WHERE contract_address_id = ?
-        AND storage_address_id = ?
-        AND block_number = ?
-        ",
-    )?;
 
-    let last_kept_block = block + 1;
-
-    // Find and delete state updates that are no longer needed.
     let contract_updates_addresses = contract_updates_select_stmt
         .query_map(
             named_params!(
@@ -161,24 +115,7 @@ pub(crate) fn prune_block(
         )
         .context("Querying contract_updates")?
         .collect::<Result<Vec<_>, _>>()?;
-    let nonce_updates_ids = nonce_updates_select_stmt
-        .query_map(
-            named_params! {
-                ":last_kept_block": &last_kept_block,
-            },
-            |row| row.get(0),
-        )
-        .context("Querying nonce_updates")?
-        .collect::<Result<Vec<i64>, _>>()?;
-    let storage_updates_ids = storage_updates_select_stmt
-        .query_map(
-            named_params! {
-                ":last_kept_block": &last_kept_block,
-            },
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .context("Querying storage_updates")?
-        .collect::<Result<Vec<(i64, i64)>, _>>()?;
+
     for address in &contract_updates_addresses {
         let blocks_with_same_update = blocks_with_same_contract_update
             .query_map(params![address, &last_kept_block], |row| {
@@ -186,37 +123,355 @@ pub(crate) fn prune_block(
             })
             .context("Querying blocks with same contract update")?
             .collect::<Result<Vec<_>, _>>()?;
-        for block in blocks_with_same_update {
+        for old_block in blocks_with_same_update {
             contract_updates_delete_stmt
-                .execute(params![address, &block])
-                .context("Deleting storage updates")?;
-        }
-    }
-    for id in &nonce_updates_ids {
-        let blocks_with_same_update = blocks_with_same_nonce_update
-            .query_map(params![id, &last_kept_block], |row| row.get_block_number(0))
-            .context("Querying blocks with same nonce update")?
-            .collect::<Result<Vec<_>, _>>()?;
-        for block in blocks_with_same_update {
-            nonce_updates_delete_stmt
-                .execute(params![id, &block])
-                .context("Deleting nonce updates")?;
-        }
-    }
-    for (contract_address_id, storage_address_id) in &storage_updates_ids {
-        let blocks_with_same_update = blocks_with_same_storage_update
-            .query_map(
-                params![contract_address_id, storage_address_id, &last_kept_block],
-                |row| row.get_block_number(0),
-            )
-            .context("Querying blocks with same storage update")?
-            .collect::<Result<Vec<_>, _>>()?;
-        for block in blocks_with_same_update {
-            storage_updates_delete_stmt
-                .execute(params![contract_address_id, storage_address_id, &block])
-                .context("Deleting storage updates")?;
+                .execute(params![address, &old_block])
+                .context("Deleting contract updates")?;
         }
     }
 
+    // Prune RocksDB nonce/storage entries for the block being removed.
+    if let Some(state_update) = tx.state_update_data(last_kept_block)? {
+        let mut batch = tx.batch.lock().expect("Batch lock poisoned");
+        let nonce_updates_column = tx.rocksdb_get_column(&NONCE_UPDATES_COLUMN);
+        let storage_updates_column = tx.rocksdb_get_column(&STORAGE_UPDATES_COLUMN);
+
+        for (address, update) in &state_update.contract_updates {
+            if update.nonce.is_some() {
+                delete_prior_block_entries(
+                    &mut batch,
+                    tx.rocksdb(),
+                    &nonce_updates_column,
+                    address.0.as_be_bytes(),
+                    last_kept_block,
+                )?;
+            }
+            for storage_key in update.storage.keys() {
+                delete_prior_block_entries(
+                    &mut batch,
+                    tx.rocksdb(),
+                    &storage_updates_column,
+                    &storage_prefix(address, storage_key),
+                    last_kept_block,
+                )?;
+            }
+        }
+        for (address, update) in &state_update.system_contract_updates {
+            for storage_key in update.storage.keys() {
+                delete_prior_block_entries(
+                    &mut batch,
+                    tx.rocksdb(),
+                    &storage_updates_column,
+                    &storage_prefix(address, storage_key),
+                    last_kept_block,
+                )?;
+            }
+        }
+    }
+
+    // Prune RocksDB transaction/receipt/event/hash/state-update data for the pruned
+    // block.
+    {
+        let txs_cf = tx.rocksdb_get_column(&crate::connection::TRANSACTIONS_AND_RECEIPTS_COLUMN);
+        let events_cf = tx.rocksdb_get_column(&crate::connection::EVENTS_COLUMN);
+        let hashes_cf = tx.rocksdb_get_column(&crate::connection::TRANSACTION_HASHES_COLUMN);
+        let state_updates_cf = tx.rocksdb_get_column(&crate::connection::STATE_UPDATES_COLUMN);
+        let key = block.get().to_be_bytes();
+
+        // Before deleting the transactions blob, read it to learn which tx hashes
+        // to remove from TRANSACTION_HASHES_COLUMN. Decompress and decode outside
+        // the batch lock — nothing here touches tx.batch.
+        let tx_hashes_to_delete: Vec<[u8; 32]> = if let Some(blob) = tx
+            .rocksdb()
+            .get_pinned_cf(&txs_cf, key)
+            .context("Reading transactions blob for pruning")?
+        {
+            let decompressed =
+                crate::connection::transaction::compression::decompress_transactions(&blob)
+                    .context("Decompressing transactions for pruning")?;
+            let (txs, _): (
+                crate::connection::transaction::dto::TransactionsWithReceiptsForBlock,
+                _,
+            ) = bincode::serde::decode_from_slice(&decompressed, bincode::config::standard())
+                .context("Deserializing transactions for pruning")?;
+            txs.transactions_with_receipts()
+                .into_iter()
+                .map(|tw| {
+                    let common_tx: pathfinder_common::transaction::Transaction =
+                        tw.transaction.into();
+                    *common_tx.hash.0.as_be_bytes()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let mut batch = tx.batch.lock().expect("Batch lock poisoned");
+        for hash_bytes in &tx_hashes_to_delete {
+            batch.delete_cf(&hashes_cf, hash_bytes);
+        }
+        batch.delete_cf(&txs_cf, key);
+        batch.delete_cf(&events_cf, key);
+        batch.delete_cf(&state_updates_cf, key);
+    }
+
     Ok(())
+}
+
+fn storage_prefix(address: &ContractAddress, key: &StorageAddress) -> [u8; 64] {
+    let mut prefix = [0u8; 64];
+    prefix[..32].copy_from_slice(address.0.as_be_bytes());
+    prefix[32..].copy_from_slice(key.0.as_be_bytes());
+    prefix
+}
+
+fn delete_prior_block_entries<C: rust_rocksdb::AsColumnFamilyRef>(
+    batch: &mut crate::RocksDBBatch,
+    rocksdb: &crate::RocksDB,
+    cf: &C,
+    prefix: &[u8],
+    last_kept_block: BlockNumber,
+) -> anyhow::Result<()> {
+    let last_kept_inverted = u64::MAX - last_kept_block.get();
+    let mut seek_key = Vec::with_capacity(prefix.len() + 8);
+    seek_key.extend_from_slice(prefix);
+    seek_key.extend_from_slice(&last_kept_inverted.wrapping_add(1).to_be_bytes());
+
+    let mut read_opts = rust_rocksdb::ReadOptions::default();
+    read_opts.set_prefix_same_as_start(true);
+    let mut iter = rocksdb.raw_iterator_cf_opt(cf, read_opts);
+    iter.seek(&seek_key);
+    while iter.valid() {
+        let key = iter.key().context("Reading prune key")?;
+        batch.delete_cf(cf, key);
+        iter.next();
+    }
+    iter.status().context("Iterating entries for pruning")?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use pathfinder_common::macro_prelude::*;
+    use pathfinder_common::{
+        BlockHash,
+        BlockHeader,
+        BlockNumber,
+        StateUpdate,
+        StorageValue,
+        TransactionHash,
+    };
+
+    use crate::connection::{NONCE_UPDATES_COLUMN, STORAGE_UPDATES_COLUMN};
+
+    #[test]
+    fn prune_block_removes_rocksdb_nonce_and_storage_entries() {
+        let storage = crate::StorageBuilder::in_memory().unwrap();
+        let mut conn = storage.connection().unwrap();
+        let contract = contract_address!("0xc");
+        let storage_key = storage_address!("0x2");
+
+        // Two blocks; both modify the same (contract, key) so the older one
+        // becomes prunable.
+        for (n, val) in &[(1u64, "0x10"), (2u64, "0x20")] {
+            let tx = conn.transaction().unwrap();
+            let header = BlockHeader::builder()
+                .number(BlockNumber::new_or_panic(*n))
+                .finalize_with_hash(BlockHash(pathfinder_crypto::Felt::from(*n)));
+            tx.insert_block_header(&header).unwrap();
+            let su = StateUpdate::default()
+                .with_storage_update(
+                    contract,
+                    storage_key,
+                    StorageValue(pathfinder_crypto::Felt::from_hex_str(val).unwrap()),
+                )
+                .with_contract_nonce(contract, contract_nonce!("0x1"));
+            tx.insert_state_update(BlockNumber::new_or_panic(*n), &su)
+                .unwrap();
+            tx.commit().unwrap();
+        }
+
+        // Pre-state: block-1 and block-2 entries exist in RocksDB.
+        let tx = conn.transaction().unwrap();
+        let rocksdb = tx.rocksdb_for_test();
+        let storage_cf = rocksdb.get_column(&STORAGE_UPDATES_COLUMN);
+        let nonce_cf = rocksdb.get_column(&NONCE_UPDATES_COLUMN);
+        drop(tx);
+
+        // Count entries with the contract prefix before pruning.
+        fn count_prefix(
+            db: &crate::RocksDB,
+            cf: &impl rust_rocksdb::AsColumnFamilyRef,
+            prefix: &[u8],
+        ) -> usize {
+            let mut read_opts = rust_rocksdb::ReadOptions::default();
+            read_opts.set_total_order_seek(true);
+            let mut iter = db.raw_iterator_cf_opt(cf, read_opts);
+            iter.seek(prefix);
+            let mut n = 0;
+            while iter.valid() {
+                let key = iter.key().unwrap();
+                if !key.starts_with(prefix) {
+                    break;
+                }
+                n += 1;
+                iter.next();
+            }
+            n
+        }
+
+        let storage_before = count_prefix(&rocksdb.rocksdb, &storage_cf, contract.0.as_be_bytes());
+        let nonce_before = count_prefix(&rocksdb.rocksdb, &nonce_cf, contract.0.as_be_bytes());
+        assert!(
+            storage_before >= 2,
+            "storage entries before pruning: {storage_before}"
+        );
+        assert!(
+            nonce_before >= 2,
+            "nonce entries before pruning: {nonce_before}"
+        );
+
+        // Prune block 1.
+        let tx = conn.transaction().unwrap();
+        tx.prune_block(BlockNumber::new_or_panic(1)).unwrap();
+        tx.commit().unwrap();
+
+        let storage_after = count_prefix(&rocksdb.rocksdb, &storage_cf, contract.0.as_be_bytes());
+        let nonce_after = count_prefix(&rocksdb.rocksdb, &nonce_cf, contract.0.as_be_bytes());
+        assert_eq!(
+            storage_after,
+            storage_before - 1,
+            "block 1 storage entry not pruned"
+        );
+        assert_eq!(
+            nonce_after,
+            nonce_before - 1,
+            "block 1 nonce entry not pruned"
+        );
+    }
+
+    #[test]
+    fn prune_block_removes_rocksdb_tx_event_hash_entries() {
+        use crate::connection::{
+            EVENTS_COLUMN,
+            TRANSACTIONS_AND_RECEIPTS_COLUMN,
+            TRANSACTION_HASHES_COLUMN,
+        };
+
+        let storage = crate::StorageBuilder::in_memory().unwrap();
+        let mut conn = storage.connection().unwrap();
+
+        // Insert two blocks with transactions and events.
+        for n in 1u64..=2 {
+            let tx = conn.transaction().unwrap();
+            let header = BlockHeader::builder()
+                .number(BlockNumber::new_or_panic(n))
+                .finalize_with_hash(BlockHash(pathfinder_crypto::Felt::from(n)));
+            tx.insert_block_header(&header).unwrap();
+
+            let transaction = pathfinder_common::transaction::Transaction {
+                hash: TransactionHash(pathfinder_crypto::Felt::from(n)),
+                variant: pathfinder_common::transaction::TransactionVariant::InvokeV0(
+                    pathfinder_common::transaction::InvokeTransactionV0 {
+                        sender_address: contract_address!("0x1"),
+                        ..Default::default()
+                    },
+                ),
+            };
+            let receipt = pathfinder_common::receipt::Receipt {
+                transaction_hash: transaction.hash,
+                transaction_index: pathfinder_common::TransactionIndex::new_or_panic(0),
+                ..Default::default()
+            };
+            let events = vec![vec![pathfinder_common::event::Event {
+                from_address: contract_address!("0x1"),
+                keys: vec![event_key!("0x1")],
+                data: vec![],
+            }]];
+            tx.insert_transaction_data(
+                BlockNumber::new_or_panic(n),
+                &[(transaction, receipt)],
+                Some(&events),
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+
+        // Verify both blocks exist in RocksDB.
+        let tx = conn.transaction().unwrap();
+        let rocksdb = tx.rocksdb_for_test();
+        let txs_cf = rocksdb.get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
+        let events_cf = rocksdb.get_column(&EVENTS_COLUMN);
+        let hashes_cf = rocksdb.get_column(&TRANSACTION_HASHES_COLUMN);
+        let block1_tx_hash = pathfinder_crypto::Felt::from(1u64);
+        let block2_tx_hash = pathfinder_crypto::Felt::from(2u64);
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(&txs_cf, 1u64.to_be_bytes())
+            .unwrap()
+            .is_some());
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(&txs_cf, 2u64.to_be_bytes())
+            .unwrap()
+            .is_some());
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(&events_cf, 1u64.to_be_bytes())
+            .unwrap()
+            .is_some());
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(&hashes_cf, block1_tx_hash.as_be_bytes())
+            .unwrap()
+            .is_some());
+        drop(tx);
+
+        // Prune block 1.
+        let tx = conn.transaction().unwrap();
+        tx.prune_block(BlockNumber::new_or_panic(1)).unwrap();
+        tx.commit().unwrap();
+
+        // Block 1 should be gone from all three CFs; block 2 stays.
+        assert!(
+            rocksdb
+                .rocksdb
+                .get_pinned_cf(&txs_cf, 1u64.to_be_bytes())
+                .unwrap()
+                .is_none(),
+            "block 1 transactions not pruned"
+        );
+        assert!(
+            rocksdb
+                .rocksdb
+                .get_pinned_cf(&events_cf, 1u64.to_be_bytes())
+                .unwrap()
+                .is_none(),
+            "block 1 events not pruned"
+        );
+        assert!(
+            rocksdb
+                .rocksdb
+                .get_pinned_cf(&txs_cf, 2u64.to_be_bytes())
+                .unwrap()
+                .is_some(),
+            "block 2 transactions should survive pruning"
+        );
+        assert!(
+            rocksdb
+                .rocksdb
+                .get_pinned_cf(&hashes_cf, block1_tx_hash.as_be_bytes())
+                .unwrap()
+                .is_none(),
+            "block 1 tx hash not pruned"
+        );
+        assert!(
+            rocksdb
+                .rocksdb
+                .get_pinned_cf(&hashes_cf, block2_tx_hash.as_be_bytes())
+                .unwrap()
+                .is_some(),
+            "block 2 tx hash should survive pruning"
+        );
+    }
 }

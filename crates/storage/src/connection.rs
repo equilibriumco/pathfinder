@@ -33,8 +33,11 @@ pub(crate) use transaction::{
     TRANSACTIONS_AND_RECEIPTS_COLUMN,
     TRANSACTION_HASHES_COLUMN,
 };
+#[cfg(test)]
+pub(crate) use trie::encode_stored_node_for_test;
 pub(crate) use trie::{
     contract_state_hashes_key,
+    decode_stored_node_with_hash,
     TrieColumn,
     CONTRACT_STATE_HASHES_COLUMN,
     TRIE_CLASS_COLUMN,

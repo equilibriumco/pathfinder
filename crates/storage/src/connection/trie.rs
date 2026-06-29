@@ -48,6 +48,18 @@ impl TrieColumn {
             TrieColumn::Storage => &TRIE_STORAGE_COLUMN,
         }
     }
+
+    /// Inverse of [`TrieColumn::column`]. Test-only: production code always
+    /// carries `TrieColumn` values directly.
+    #[cfg(test)]
+    pub(crate) fn from_column(column: &Column) -> Option<Self> {
+        match column.name {
+            n if n == TRIE_CLASS_COLUMN.name => Some(TrieColumn::Class),
+            n if n == TRIE_CONTRACT_COLUMN.name => Some(TrieColumn::Contract),
+            n if n == TRIE_STORAGE_COLUMN.name => Some(TrieColumn::Storage),
+            _ => None,
+        }
+    }
 }
 
 const CONTRACT_STATE_HASHES_PREFIX_LEN: usize = size_of::<Felt>();
@@ -1010,6 +1022,25 @@ impl StoredNode {
 
         Ok(node)
     }
+}
+
+/// Decodes a `StoredNode` from a raw RocksDB trie CF value, skipping the
+/// 32-byte hash prefix that `read_trie_entry` also skips. Exposed
+/// `pub(crate)` so the DFS reconcile in `crate::lib` can read nodes without
+/// touching the module-private `StoredNode` codec.
+pub(crate) fn decode_stored_node_with_hash(bytes: &[u8]) -> anyhow::Result<StoredNode> {
+    if bytes.len() < 32 {
+        anyhow::bail!("Trie entry has {} bytes; expected at least 32", bytes.len());
+    }
+    StoredNode::decode(&bytes[32..]).context("Decoding node from RocksDB")
+}
+
+#[cfg(test)]
+pub(crate) fn encode_stored_node_for_test(
+    node: &StoredNode,
+    buffer: &mut [u8],
+) -> Result<usize, bincode::error::EncodeError> {
+    node.encode(buffer)
 }
 
 impl Node {

@@ -369,6 +369,11 @@ impl Transaction<'_> {
                 params![&block_number],
                 |row| row.get_block_hash(0),
             )
+            // After a crash, RocksDB may hold TRANSACTION_HASHES entries
+            // whose block_number no longer has a matching `block_headers`
+            // row (see `reconcile_rocksdb_with_sqlite`). `.optional()`
+            // maps that to Ok(None) so the caller sees "unknown tx"
+            // rather than a phantom block reference.
             .optional()
             .map_err(Into::into)
     }
