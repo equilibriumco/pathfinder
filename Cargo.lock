@@ -5448,6 +5448,7 @@ dependencies = [
  "clap",
  "const-decoder",
  "futures",
+ "glob",
  "pathfinder",
  "pathfinder-block-commitments",
  "pathfinder-common",

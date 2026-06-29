@@ -26,7 +26,7 @@ use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -63,6 +63,9 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{fmt, EnvFilter};
 use warp::Filter;
 
+mod record_state;
+use record_state::RecordState;
+
 #[derive(Parser)]
 #[command(version)]
 struct Cli {
@@ -85,6 +88,13 @@ struct Cli {
     pub wait_for_marker_file: Option<PathBuf>,
     #[command(flatten)]
     pub reorg: ReorgCli,
+    #[arg(
+        long,
+        long_help = "Responses for the `get_preconfirmed_block API.",
+        value_name = "RECORD_DIR",
+        action=ArgAction::Set
+    )]
+    pub preconfirmed_record_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -259,6 +269,12 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
     });
     let reorged = Arc::new(AtomicBool::new(false));
 
+    let record_state = Arc::new(Mutex::new(RecordState::default()));
+    if let Some(record_dir) = cli.preconfirmed_record_dir {
+        let mut state = record_state.lock().unwrap();
+        state.load(&record_dir)?;
+    }
+
     fn maybe_chain(storage_rx: Receiver<Option<(Storage, Chain)>>) -> Option<Chain> {
         storage_rx.borrow().clone().map(|(_, chain)| chain)
     }
@@ -322,6 +338,16 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
                 return Ok(BlockId::Hash(h));
             }
             Err(())
+        }
+    }
+
+    impl BlockIdParam {
+        fn is_pending(&self) -> bool {
+            if let Some(n) = &self.block_number {
+                n == "pending"
+            } else {
+                false
+            }
         }
     }
 
@@ -434,6 +460,12 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
                 let reorg_config = reorg_config.clone();
                 let reorged = reorged.clone();
                 async move {
+                    if block_id.is_pending() {
+                        let update = include_str!("../fixtures/get_state_update.json");
+                        let json: serde_json::Value = serde_json::from_str(update).unwrap();
+                        return Ok(warp::reply::with_status(warp::reply::json(&json), warp::http::StatusCode::OK))
+                    }
+
                     let include_block = block_id.include_block.unwrap_or(false);
                     let include_signature = block_id.include_signature.unwrap_or(false);
 
@@ -463,20 +495,12 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
 
                             match resolved {
                                 Ok((state_update, block, signature)) => {
-                                    #[derive(Serialize)]
-                                    struct Reply {
-                                        state_update: starknet_gateway_types::reply::StateUpdate,
-                                        #[serde(skip_serializing_if = "Option::is_none")]
-                                        block: Option<starknet_gateway_types::reply::Block>,
-                                        #[serde(skip_serializing_if = "Option::is_none")]
-                                        signature: Option<[BlockCommitmentSignatureElem; 2]>,
-                                    }
-
-                                    let reply = Reply {
-                                        state_update,
-                                        block,
-                                        signature: signature.map(|s| s.signature),
-                                    };
+                                    let signature = signature.map(|s| s.signature);
+                                    let reply = serde_json::json!({
+                                        "state_update": state_update,
+                                        "block": block,
+                                        "signature": signature,
+                                    });
 
                                     Ok(warp::reply::with_status(warp::reply::json(&reply), warp::http::StatusCode::OK))
                                 },
@@ -498,11 +522,36 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
         ))
     });
 
-    let get_preconfirmed_block = warp::path("get_preconfirmed_block").then(|| async {
-        let block = include_str!("../fixtures/get_preconfirmed_block.json");
-        let json: serde_json::Value = serde_json::from_str(block).unwrap();
-        warp::reply::json(&json)
-    });
+    let get_preconfirmed_block = warp::path("get_preconfirmed_block")
+        .and(warp::query::<BlockIdParam>())
+        .and_then({
+            let record_state = record_state.clone();
+            move |block_id: BlockIdParam| {
+                let record_state = record_state.clone();
+                async move {
+                    match block_id.try_into() {
+                        Ok(block_id) => {
+                            let mut state = record_state.lock().unwrap();
+                            match state.get_next(block_id) {
+                                Ok(json) => Ok(warp::reply::with_status(
+                                    warp::reply::json(&json),
+                                    warp::http::StatusCode::OK,
+                                )),
+                                Err(e) => {
+                                    tracing::error!("Error loading block: {:?}", e);
+                                    let error = serde_json::Value::Null;
+                                    Ok(warp::reply::with_status(
+                                        warp::reply::json(&error),
+                                        warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                    ))
+                                }
+                            }
+                        }
+                        Err(_) => Err(warp::reject::reject()),
+                    }
+                }
+            }
+        });
 
     #[derive(Debug, Deserialize)]
     struct ClassHashParam {
