@@ -343,7 +343,7 @@ async fn complete_previous_block<S: GatewayApi + Send + 'static>(
 /// This is OK because:
 /// - `committed_head` is the already storage-committed head,
 /// - [`PendingDataCache`] in in-memory and doesn't write anything to storage,
-/// - data is consistent: there is a chaining check below and ultimately the RPC
+/// - data is consistent: stale views are dropped below and ultimately the RPC
 ///   read path re-validates the chaining requirement.
 fn store_pre_confirmed(
     cache: &PendingDataCache,
@@ -352,16 +352,26 @@ fn store_pre_confirmed(
     block: Box<PreConfirmedBlock>,
     pre_latest_data: Option<Box<(BlockNumber, PreLatestBlock, StateUpdate)>>,
 ) {
-    // Reject views that don't chain to the committed head.
+    // Drop only stale views.
+    //
+    // There is no explicit `committed_head + 1` requirement here. The
+    // `committed_head` comes from the `current` watch, which can briefly lag
+    // the DB (it's sent just after the consumer commits a block). An
+    // exact-match check would drop a perfectly good view whenever the watch is
+    // one block behind.
+    //
+    // The RPC read path is the ultimate authority on chaining and on the parent
+    // state commitment. It re-validates the cached view against then current
+    // committed head on every read.
     let next_block_number = pre_latest_data
         .as_ref()
         .map(|pre_latest| pre_latest.0)
         .unwrap_or(number);
 
-    if next_block_number != committed_head + 1 {
+    if next_block_number <= committed_head {
         tracing::debug!(
             %number, %committed_head,
-            "Pre-confirmed doesn't chain to committed head; skipping store"
+            "Pre-confirmed is at or behind the committed head; skipping stale store"
         );
         return;
     }
@@ -596,8 +606,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn store_pre_confirmed_skips_a_non_chaining_view() {
-        // Committed head 1, pre-confirmed at 5: gap > 1, so it doesn't chain.
+    async fn store_pre_confirmed_skips_a_stale_view() {
+        // Committed head 5, pre-confirmed at 3: at or behind the committed head,
+        // so it's stale and must be dropped.
+        let cache = PendingDataCache::new();
+        let mut rx = cache.subscribe();
+        let _ = rx.borrow_and_update();
+
+        store_pre_confirmed(
+            &cache,
+            BlockNumber::new_or_panic(5),
+            BlockNumber::new_or_panic(3),
+            Box::new(all_receipted_block(2)),
+            None,
+        );
+
+        assert!(
+            !rx.has_changed().unwrap(),
+            "a stale view (at or behind the committed head) must not be stored"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_pre_confirmed_caches_an_ahead_view_for_the_rpc_to_gate() {
+        // Committed head 1, pre-confirmed at 5 with no pre-latest, ahead by more
+        // than one.
         let cache = PendingDataCache::new();
         let mut rx = cache.subscribe();
         let _ = rx.borrow_and_update();
@@ -611,8 +644,12 @@ mod tests {
         );
 
         assert!(
-            !rx.has_changed().unwrap(),
-            "a non-chaining view must not be stored"
+            rx.has_changed().unwrap(),
+            "an ahead view should be cached for the RPC to gate"
+        );
+        assert_eq!(
+            rx.borrow().pre_confirmed_block_number(),
+            BlockNumber::new_or_panic(5)
         );
     }
 

@@ -445,10 +445,16 @@ mod tests {
         let result = uut.get(&tx, RpcVersion::V09).unwrap();
         pretty_assertions_sorted::assert_eq_sorted!(result, pending);
 
-        // Pre-latest block will be same as `latest` which is also valid, but in this
-        // case the pre-latest block should be ignored.
-        let pending = valid_pre_confirmed_block_with_pre_latest(&parent);
-        cache.store(pending);
+        // Now the pre-latest block (`latest + 1`) is itself finalized into storage,
+        // advancing the committed head to it. The same pre-confirmed view is still
+        // cached (the read view is monotonic, so we cannot model this by storing a
+        // lower-numbered view, it would be ignored). The now-committed pre-latest must
+        // no longer be reported as pending: we serve the pre-confirmed against
+        // the new head and drop the pre-latest.
+        let child = latest
+            .child_builder()
+            .finalize_with_hash(block_hash_bytes!(b"child hash"));
+        tx.insert_block_header(&child).unwrap();
 
         let result = uut.get(&tx, RpcVersion::V09).unwrap();
         // We got a non-empty pre-confirmed block..
