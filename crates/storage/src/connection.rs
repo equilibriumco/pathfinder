@@ -28,6 +28,11 @@ use pruning::BlockchainHistoryMode;
 // Re-export this so users don't require rusqlite as a direct dep.
 pub use rusqlite::TransactionBehavior;
 pub(crate) use state_update::{NONCE_UPDATES_COLUMN, STATE_UPDATES_COLUMN, STORAGE_UPDATES_COLUMN};
+pub(crate) use transaction::{
+    EVENTS_COLUMN,
+    TRANSACTIONS_AND_RECEIPTS_COLUMN,
+    TRANSACTION_HASHES_COLUMN,
+};
 pub(crate) use trie::{
     contract_state_hashes_key,
     TrieColumn,

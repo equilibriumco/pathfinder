@@ -83,5 +83,8 @@ pub(crate) const COLUMNS: &[Column] = &[
     crate::connection::STATE_UPDATES_COLUMN,
     crate::connection::STORAGE_UPDATES_COLUMN,
     crate::connection::NONCE_UPDATES_COLUMN,
+    crate::connection::TRANSACTIONS_AND_RECEIPTS_COLUMN,
+    crate::connection::EVENTS_COLUMN,
+    crate::connection::TRANSACTION_HASHES_COLUMN,
     crate::connection::CONTRACT_STATE_HASHES_COLUMN,
 ];

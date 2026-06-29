@@ -470,8 +470,24 @@ impl StorageBuilder {
             tracing::info!("Merkle trie pruning disabled");
         }
 
-        let running_event_filter = event::RunningEventFilter::load(&connection.transaction()?)
-            .context("Loading running event filter")?;
+        let running_event_filter = {
+            // Build a temporary storage Transaction wrapping the raw
+            // rusqlite connection and the RocksDB handle so that
+            // RunningEventFilter::load (and ::rebuild, if needed) can
+            // access both SQLite and RocksDB.
+            let dummy_ref = Arc::new(Mutex::new(event::RunningEventFilter {
+                filter: crate::bloom::AggregateBloom::new(BlockNumber::GENESIS),
+                next_block: BlockNumber::GENESIS,
+            }));
+            let raw_tx = connection.transaction()?;
+            let storage_tx = crate::connection::Transaction::from_raw_parts(
+                raw_tx,
+                Arc::new(AggregateBloomCache::with_size(self.event_filter_cache_size)),
+                dummy_ref,
+                rocksdb.clone(),
+            );
+            event::RunningEventFilter::load(&storage_tx).context("Loading running event filter")?
+        };
 
         connection
             .close()
@@ -553,8 +569,20 @@ impl StorageBuilder {
         )?;
         let rocksdb = Arc::new(Self::open_rocksdb_readonly(&rocksdb_path)?);
 
-        let running_event_filter = event::RunningEventFilter::load(&connection.transaction()?)
-            .context("Loading running event filter")?;
+        let running_event_filter = {
+            let dummy_ref = Arc::new(Mutex::new(event::RunningEventFilter {
+                filter: crate::bloom::AggregateBloom::new(BlockNumber::GENESIS),
+                next_block: BlockNumber::GENESIS,
+            }));
+            let raw_tx = connection.transaction()?;
+            let storage_tx = crate::connection::Transaction::from_raw_parts(
+                raw_tx,
+                Arc::new(AggregateBloomCache::with_size(event_filter_cache_size)),
+                dummy_ref,
+                rocksdb.clone(),
+            );
+            event::RunningEventFilter::load(&storage_tx).context("Loading running event filter")?
+        };
 
         connection
             .close()

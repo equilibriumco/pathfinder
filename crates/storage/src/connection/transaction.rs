@@ -7,7 +7,12 @@ use pathfinder_common::transaction::Transaction as StarknetTransaction;
 use pathfinder_common::{BlockHash, BlockId, BlockNumber, TransactionHash, TransactionIndex};
 
 use super::{EventsForBlock, TransactionDataForBlock, TransactionWithReceipt};
+use crate::columns::Column;
 use crate::prelude::*;
+
+pub const TRANSACTIONS_AND_RECEIPTS_COLUMN: Column = Column::new("transactions_and_receipts");
+pub const EVENTS_COLUMN: Column = Column::new("events");
+pub const TRANSACTION_HASHES_COLUMN: Column = Column::new("transaction_hashes");
 
 pub(crate) mod compression {
     use std::sync::LazyLock;
@@ -106,29 +111,7 @@ impl Transaction<'_> {
             return Ok(());
         }
 
-        let mut insert_transaction_stmt = self
-            .inner()
-            .prepare_cached(
-                "INSERT INTO transactions (block_number, transactions, events) VALUES \
-                 (:block_number, :transactions, :events)",
-            )
-            .context("Preparing insert transaction statement")?;
-        let mut insert_transaction_hash_stmt = self
-            .inner()
-            .prepare_cached(
-                "INSERT INTO transaction_hashes (hash, block_number, idx) VALUES (:hash, \
-                 :block_number, :idx)",
-            )
-            .context("Preparing insert transaction hash statement")?;
-
-        for (idx, (transaction, ..)) in transactions.iter().enumerate() {
-            let idx: i64 = idx.try_into()?;
-            insert_transaction_hash_stmt.execute(named_params![
-                ":hash": &transaction.hash,
-                ":block_number": &block_number,
-                ":idx": &idx,
-            ])?;
-        }
+        // Encode transactions and receipts.
         let transactions_with_receipts: Vec<_> = transactions
             .iter()
             .map(|(transaction, receipt)| dto::TransactionWithReceiptV4 {
@@ -146,6 +129,7 @@ impl Transaction<'_> {
             compression::compress_transactions(&transactions_with_receipts)
                 .context("Compressing transaction")?;
 
+        // Encode events.
         let encoded_events = events
             .map(|evts| {
                 let events = dto::EventsForBlock::V0 {
@@ -160,13 +144,35 @@ impl Transaction<'_> {
             })
             .transpose()?;
 
-        insert_transaction_stmt
-            .execute(named_params![
-                ":block_number": &block_number,
-                ":transactions": &transactions_with_receipts,
-                ":events": &encoded_events,
-            ])
-            .context("Inserting transaction data")?;
+        let mut batch = self.batch.lock().expect("Batch lock poisoned");
+        let block_number_key = block_number.get().to_be_bytes();
+
+        let transactions_and_receipts_column =
+            self.rocksdb_get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
+        batch.put_cf(
+            &transactions_and_receipts_column,
+            block_number_key,
+            &transactions_with_receipts,
+        );
+
+        let events_column = self.rocksdb_get_column(&EVENTS_COLUMN);
+        if let Some(encoded_events) = encoded_events {
+            batch.put_cf(&events_column, block_number_key, &encoded_events);
+        }
+
+        let transaction_hashes_column = self.rocksdb_get_column(&TRANSACTION_HASHES_COLUMN);
+        for (idx, (transaction, ..)) in transactions.iter().enumerate() {
+            let idx: u16 = idx.try_into()?;
+            let mut buffer = [0u8; 10];
+            buffer[..8].copy_from_slice(&block_number_key);
+            buffer[8..].copy_from_slice(&idx.to_be_bytes());
+
+            batch.put_cf(
+                &transaction_hashes_column,
+                transaction.hash.0.as_be_bytes(),
+                buffer,
+            );
+        }
 
         Ok(())
     }
@@ -176,22 +182,11 @@ impl Transaction<'_> {
         block_number: BlockNumber,
         events: Vec<Vec<Event>>,
     ) -> anyhow::Result<()> {
-        let mut stmt = self
-            .inner()
-            .prepare_cached(
-                r"
-                UPDATE transactions
-                SET events = :events
-                WHERE block_number = :block_number
-                ",
-            )
-            .context("Preparing update events statement")?;
-
         let encoded_events = dto::EventsForBlock::V0 {
             events: events
                 .iter()
                 .cloned()
-                .map(|events| events.into_iter().map(Into::into).collect())
+                .map(|evs| evs.into_iter().map(Into::into).collect())
                 .collect(),
         };
         let encoded_events =
@@ -200,14 +195,12 @@ impl Transaction<'_> {
         let encoded_events =
             compression::compress_events(&encoded_events).context("Compressing events")?;
 
-        stmt.execute(named_params![
-            ":block_number": &block_number,
-            ":events": &encoded_events,
-        ])
-        .context("Updating events")?;
+        let events_cf = self.rocksdb_get_column(&EVENTS_COLUMN);
+        let mut batch = self.batch.lock().expect("Batch lock poisoned");
+        batch.put_cf(&events_cf, block_number.get().to_be_bytes(), encoded_events);
+        drop(batch);
 
-        let events = events.iter().flatten();
-        self.upsert_block_event_filters(block_number, events)
+        self.upsert_block_event_filters(block_number, events.iter().flatten())
             .context("Inserting events into Bloom filter")?;
 
         Ok(())
@@ -353,30 +346,58 @@ impl Transaction<'_> {
         &self,
         hash: TransactionHash,
     ) -> anyhow::Result<Option<BlockHash>> {
+        let hashes_cf = self.rocksdb_get_column(&TRANSACTION_HASHES_COLUMN);
+        let Some(value) = self
+            .rocksdb()
+            .get_pinned_cf(&hashes_cf, hash.0.as_be_bytes())
+            .context("Looking up transaction hash")?
+        else {
+            return Ok(None);
+        };
+        if value.len() != 10 {
+            anyhow::bail!(
+                "Unexpected TRANSACTION_HASHES value length: {}",
+                value.len()
+            );
+        }
+        let block_number = BlockNumber::new_or_panic(u64::from_be_bytes(
+            value[..8].try_into().expect("8-byte slice"),
+        ));
         self.inner()
             .query_row(
-                r"
-                SELECT block_headers.hash FROM transaction_hashes
-                JOIN block_headers ON transaction_hashes.block_number = block_headers.number
-                WHERE transaction_hashes.hash = ?
-                ",
-                params![&hash],
+                "SELECT hash FROM block_headers WHERE number = ?",
+                params![&block_number],
                 |row| row.get_block_hash(0),
             )
             .optional()
-            .map_err(|e| e.into())
+            .map_err(Into::into)
     }
 
     pub fn delete_transactions_before(&self, block_number: BlockNumber) -> anyhow::Result<()> {
-        let mut stmt = self.inner().prepare_cached(
-            r"
-            DELETE FROM transactions
-            WHERE block_number < ?
-            ",
-        )?;
-        stmt.execute(params![&block_number])
-            .context("Deleting old transactions")?;
-
+        let txs_cf = self.rocksdb_get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
+        let events_cf = self.rocksdb_get_column(&EVENTS_COLUMN);
+        // Delete every block strictly below `block_number`.
+        let mut iter = self.rocksdb().raw_iterator_cf(&txs_cf);
+        iter.seek_to_first();
+        let mut batch = self.batch.lock().expect("Batch lock poisoned");
+        while iter.valid() {
+            let key = iter.key().context("Reading tx key")?;
+            if key.len() != 8 {
+                anyhow::bail!(
+                    "Unexpected TRANSACTIONS_AND_RECEIPTS key length: {}",
+                    key.len()
+                );
+            }
+            let block = u64::from_be_bytes(key.try_into().expect("8-byte slice"));
+            if block >= block_number.get() {
+                break;
+            }
+            batch.delete_cf(&txs_cf, key);
+            batch.delete_cf(&events_cf, key);
+            iter.next();
+        }
+        iter.status()
+            .context("Iterating transactions for deletion")?;
         Ok(())
     }
 
@@ -384,49 +405,67 @@ impl Transaction<'_> {
         &self,
         block_number: BlockNumber,
     ) -> anyhow::Result<()> {
-        let mut stmt = self.inner().prepare_cached(
-            r"
-            DELETE FROM transaction_hashes
-            WHERE block_number < ?
-            ",
-        )?;
-        stmt.execute(params![&block_number])
-            .context("Deleting old transaction hashes")?;
-
+        let hashes_cf = self.rocksdb_get_column(&TRANSACTION_HASHES_COLUMN);
+        // The TRANSACTION_HASHES key is the tx hash (not the block number) so we
+        // must read every entry's 10-byte value to decide whether to drop it.
+        let mut iter = self.rocksdb().raw_iterator_cf(&hashes_cf);
+        iter.seek_to_first();
+        let mut batch = self.batch.lock().expect("Batch lock poisoned");
+        while iter.valid() {
+            let value = iter.value().context("Reading hash value")?;
+            if value.len() != 10 {
+                anyhow::bail!(
+                    "Unexpected TRANSACTION_HASHES value length: {}",
+                    value.len()
+                );
+            }
+            let block = u64::from_be_bytes(value[..8].try_into().expect("8-byte slice"));
+            if block < block_number.get() {
+                let key = iter.key().context("Reading hash key")?.to_vec();
+                batch.delete_cf(&hashes_cf, key);
+            }
+            iter.next();
+        }
+        iter.status()
+            .context("Iterating transaction hashes for deletion")?;
         Ok(())
+    }
+
+    fn read_block_transactions(
+        &self,
+        block_number: BlockNumber,
+    ) -> anyhow::Result<Option<dto::TransactionsWithReceiptsForBlock>> {
+        let cf = self.rocksdb_get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
+        let Some(blob) = self
+            .rocksdb()
+            .get_pinned_cf(&cf, block_number.get().to_be_bytes())
+            .context("Reading transactions blob")?
+        else {
+            return Ok(None);
+        };
+        let decompressed =
+            compression::decompress_transactions(&blob).context("Decompressing transactions")?;
+        let (txs, _): (dto::TransactionsWithReceiptsForBlock, _) =
+            bincode::serde::decode_from_slice(&decompressed, bincode::config::standard())
+                .context("Deserializing transactions")?;
+        Ok(Some(txs))
     }
 
     fn query_transactions_by_block(
         &self,
         block_number: BlockNumber,
     ) -> anyhow::Result<Vec<(StarknetTransaction, Receipt)>> {
-        let mut stmt = self.inner().prepare_cached(
-            r"
-            SELECT transactions
-            FROM transactions
-            WHERE block_number = ?
-            ",
-        )?;
-        let mut rows = stmt.query(params![&block_number])?;
-        let Some(row) = rows.next()? else {
+        let Some(txs) = self.read_block_transactions(block_number)? else {
             return Ok(vec![]);
         };
-        let transactions = row.get_blob(0)?;
-        let transactions = compression::decompress_transactions(transactions)
-            .context("Decompressing transactions")?;
-        let transactions: dto::TransactionsWithReceiptsForBlock =
-            bincode::serde::decode_from_slice(&transactions, bincode::config::standard())
-                .context("Deserializing transactions")?
-                .0;
-        let transactions = transactions.transactions_with_receipts();
-
-        Ok(transactions
+        Ok(txs
+            .transactions_with_receipts()
             .into_iter()
             .map(
                 |dto::TransactionWithReceiptV4 {
                      transaction,
                      receipt,
-                 }| { (transaction.into(), receipt.into()) },
+                 }| (transaction.into(), receipt.into()),
             )
             .collect())
     }
@@ -435,82 +474,71 @@ impl Transaction<'_> {
         &self,
         block_number: BlockNumber,
     ) -> anyhow::Result<Vec<(TransactionHash, TransactionIndex)>> {
-        let mut stmt = self.inner().prepare_cached(
-            r"
-            SELECT hash, idx
-            FROM transaction_hashes
-            WHERE block_number = ? ORDER BY idx
-            ",
-        )?;
-        let transaction_hashes: Result<Vec<_>, _> = stmt
-            .query_map(params![&block_number], |row| {
-                let hash = row.get_transaction_hash(0)?;
-                let raw_idx = row.get_i64(1)?;
-                Ok((hash, TransactionIndex::new_or_panic(raw_idx as u64)))
+        let Some(txs) = self.read_block_transactions(block_number)? else {
+            return Ok(vec![]);
+        };
+        Ok(txs
+            .transactions_with_receipts()
+            .into_iter()
+            .enumerate()
+            .map(|(idx, t)| {
+                let tx: StarknetTransaction = t.transaction.into();
+                let idx = TransactionIndex::new_or_panic(idx as u64);
+                (tx.hash, idx)
             })
-            .context("Querying transaction hashes for block")?
-            .collect();
-        let transaction_infos = transaction_hashes?;
-
-        Ok(transaction_infos)
+            .collect())
     }
 
     fn query_transactions_and_events_by_block(
         &self,
         block_number: BlockNumber,
     ) -> anyhow::Result<TransactionsAndEventsByBlock> {
-        let mut stmt = self.inner().prepare_cached(
-            r"
-            SELECT transactions, events
-            FROM transactions
-            WHERE block_number = ?
-            ",
-        )?;
-        let mut rows = stmt.query(params![&block_number])?;
-        let Some(row) = rows.next()? else {
+        let txs_cf = self.rocksdb_get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
+        let events_cf = self.rocksdb_get_column(&EVENTS_COLUMN);
+        let key = block_number.get().to_be_bytes();
+        let Some(tx_blob) = self
+            .rocksdb()
+            .get_pinned_cf(&txs_cf, key)
+            .context("Reading transactions blob")?
+        else {
             return Ok((vec![], vec![]));
         };
-        let transactions = row.get_blob(0)?;
-        let transactions = compression::decompress_transactions(transactions)
-            .context("Decompressing transactions")?;
-        let transactions: dto::TransactionsWithReceiptsForBlock =
-            bincode::serde::decode_from_slice(&transactions, bincode::config::standard())
-                .context("Deserializing transactions")?
-                .0;
-        let transactions = transactions.transactions_with_receipts();
-        let events: Option<dto::EventsForBlock> = match row.get_optional_blob(1)? {
-            Some(events) => {
-                let events =
-                    compression::decompress_events(events).context("Decompressing events")?;
-                Some(
-                    bincode::serde::decode_from_slice(&events, bincode::config::standard())
-                        .context("Deserializing events")?
-                        .0,
-                )
+        let decompressed =
+            compression::decompress_transactions(&tx_blob).context("Decompressing transactions")?;
+        let (txs, _): (dto::TransactionsWithReceiptsForBlock, _) =
+            bincode::serde::decode_from_slice(&decompressed, bincode::config::standard())
+                .context("Deserializing transactions")?;
+
+        let events = match self
+            .rocksdb()
+            .get_pinned_cf(&events_cf, key)
+            .context("Reading events blob")?
+        {
+            Some(blob) => {
+                let decompressed =
+                    compression::decompress_events(&blob).context("Decompressing events")?;
+                let (efb, _): (dto::EventsForBlock, _) =
+                    bincode::serde::decode_from_slice(&decompressed, bincode::config::standard())
+                        .context("Deserializing events")?;
+                efb.events()
+                    .into_iter()
+                    .map(|e| e.into_iter().map(Into::into).collect())
+                    .collect()
             }
-            None => None,
+            None => Vec::new(),
         };
-        let events = events.map(|events| match events {
-            dto::EventsForBlock::V0 { events } => events,
-        });
+
         Ok((
-            transactions
+            txs.transactions_with_receipts()
                 .into_iter()
                 .map(
                     |dto::TransactionWithReceiptV4 {
                          transaction,
                          receipt,
-                     }| { (transaction.into(), receipt.into()) },
+                     }| (transaction.into(), receipt.into()),
                 )
                 .collect(),
-            events
-                .map(|events| {
-                    events
-                        .into_iter()
-                        .map(|e| e.into_iter().map(Into::into).collect())
-                        .collect()
-                })
-                .unwrap_or_default(),
+            events,
         ))
     }
 
@@ -518,214 +546,132 @@ impl Transaction<'_> {
         &self,
         block_number: BlockNumber,
     ) -> anyhow::Result<Option<Vec<Vec<Event>>>> {
-        let mut stmt = self.inner().prepare_cached(
-            r"
-            SELECT events
-            FROM transactions
-            WHERE block_number = ?
-            ",
-        )?;
-        let mut rows = stmt.query(params![&block_number])?;
-        let Some(row) = rows.next()? else {
+        let cf = self.rocksdb_get_column(&EVENTS_COLUMN);
+        let Some(blob) = self
+            .rocksdb()
+            .get_pinned_cf(&cf, block_number.get().to_be_bytes())
+            .context("Reading events blob")?
+        else {
             return Ok(None);
         };
-        let events: Option<dto::EventsForBlock> = match row.get_optional_blob(0)? {
-            Some(events) => {
-                let events =
-                    compression::decompress_events(events).context("Decompressing events")?;
-                let events: dto::EventsForBlock =
-                    bincode::serde::decode_from_slice(&events, bincode::config::standard())
-                        .context("Deserializing events")?
-                        .0;
-
-                Some(events)
-            }
-            None => None,
-        };
-        let events = events.map(|e| e.events());
-
-        Ok(events.map(|events| {
-            events
+        let decompressed = compression::decompress_events(&blob).context("Decompressing events")?;
+        let (efb, _): (dto::EventsForBlock, _) =
+            bincode::serde::decode_from_slice(&decompressed, bincode::config::standard())
+                .context("Deserializing events")?;
+        Ok(Some(
+            efb.events()
                 .into_iter()
                 .map(|e| e.into_iter().map(Into::into).collect())
-                .collect()
-        }))
+                .collect(),
+        ))
+    }
+
+    fn lookup_tx_by_hash(
+        &self,
+        hash: TransactionHash,
+    ) -> anyhow::Result<Option<(BlockNumber, u16, dto::TransactionWithReceiptV4)>> {
+        let hashes_cf = self.rocksdb_get_column(&TRANSACTION_HASHES_COLUMN);
+        let Some(value) = self
+            .rocksdb()
+            .get_pinned_cf(&hashes_cf, hash.0.as_be_bytes())
+            .context("Looking up transaction hash")?
+        else {
+            return Ok(None);
+        };
+        if value.len() != 10 {
+            anyhow::bail!(
+                "Unexpected TRANSACTION_HASHES value length: {}",
+                value.len()
+            );
+        }
+        let block_number = BlockNumber::new_or_panic(u64::from_be_bytes(
+            value[..8].try_into().expect("8-byte slice"),
+        ));
+        let idx = u16::from_be_bytes(value[8..].try_into().expect("2-byte slice"));
+
+        let txs_cf = self.rocksdb_get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
+        let Some(blob) = self
+            .rocksdb()
+            .get_pinned_cf(&txs_cf, block_number.get().to_be_bytes())
+            .context("Reading transactions blob")?
+        else {
+            return Ok(None);
+        };
+        let decompressed =
+            compression::decompress_transactions(&blob).context("Decompressing transactions")?;
+        let (txs, _): (dto::TransactionsWithReceiptsForBlock, _) =
+            bincode::serde::decode_from_slice(&decompressed, bincode::config::standard())
+                .context("Deserializing transactions")?;
+        let entry = txs
+            .transactions_with_receipts()
+            .get(idx as usize)
+            .context("Transaction index out of bounds")?
+            .clone();
+        Ok(Some((block_number, idx, entry)))
     }
 
     fn query_transaction_by_hash(
         &self,
         hash: TransactionHash,
     ) -> anyhow::Result<Option<(BlockNumber, StarknetTransaction, Receipt)>> {
-        let mut stmt = self.inner().prepare_cached(
-            r"
-            SELECT transactions.block_number, transactions, idx
-            FROM transactions
-            JOIN transaction_hashes ON transactions.block_number = transaction_hashes.block_number
-            WHERE hash = ?
-            ",
-        )?;
-        let mut rows = stmt.query(params![&hash])?;
-        let Some(row) = rows.next()? else {
+        let Some((block_number, _idx, entry)) = self.lookup_tx_by_hash(hash)? else {
             return Ok(None);
         };
-        let block_number = row.get_block_number(0)?;
-        let transactions = row.get_blob(1)?;
-        let idx: usize = row.get_i64(2)?.try_into()?;
-
-        let transactions = compression::decompress_transactions(transactions)
-            .context("Decompressing transactions")?;
-        let transactions: dto::TransactionsWithReceiptsForBlock =
-            bincode::serde::decode_from_slice(&transactions, bincode::config::standard())
-                .context("Deserializing transactions")?
-                .0;
-        let transactions = transactions.transactions_with_receipts();
         let dto::TransactionWithReceiptV4 {
             transaction,
             receipt,
-        } = transactions.get(idx).context("Transaction not found")?;
-
-        Ok(Some((
-            block_number,
-            transaction.clone().into(),
-            receipt.clone().into(),
-        )))
+        } = entry;
+        Ok(Some((block_number, transaction.into(), receipt.into())))
     }
 
     fn query_transaction_and_events_by_hash(
         &self,
         hash: TransactionHash,
     ) -> anyhow::Result<Option<TransactionAndEventsByHash>> {
-        let mut stmt = self.inner().prepare_cached(
-            r"
-            SELECT transactions.block_number, transactions, events, idx
-            FROM transactions
-            JOIN transaction_hashes ON transactions.block_number = transaction_hashes.block_number
-            WHERE hash = ?
-            ",
-        )?;
-        let mut rows = stmt.query(params![&hash])?;
-        let Some(row) = rows.next()? else {
+        let Some((block_number, idx, entry)) = self.lookup_tx_by_hash(hash)? else {
             return Ok(None);
-        };
-        let block_number = row.get_block_number(0)?;
-        let idx: usize = row.get_i64(3)?.try_into()?;
-        let transactions = row.get_blob(1)?;
-
-        let transactions = compression::decompress_transactions(transactions)
-            .context("Decompressing transactions")?;
-        let transactions: dto::TransactionsWithReceiptsForBlock =
-            bincode::serde::decode_from_slice(&transactions, bincode::config::standard())
-                .context("Deserializing transactions")?
-                .0;
-        let transactions = transactions.transactions_with_receipts();
-
-        let events: Option<Vec<Vec<dto::Event>>> = match row.get_optional_blob(2)? {
-            Some(events) => {
-                let events =
-                    compression::decompress_events(events).context("Decompressing events")?;
-                let events: dto::EventsForBlock =
-                    bincode::serde::decode_from_slice(&events, bincode::config::standard())
-                        .context("Deserializing events")?
-                        .0;
-                Some(events.events())
-            }
-            None => None,
         };
         let dto::TransactionWithReceiptV4 {
             transaction,
             receipt,
-        } = transactions.get(idx).context("Transaction not found")?;
-        let events = match events {
-            Some(events) => {
-                let events = events.get(idx).context("Events missing")?;
-                Some(events.iter().cloned().map(Into::into).collect())
+        } = entry;
+        let key = block_number.get().to_be_bytes();
+
+        let events_cf = self.rocksdb_get_column(&EVENTS_COLUMN);
+        let events = match self
+            .rocksdb()
+            .get_pinned_cf(&events_cf, key)
+            .context("Reading events blob")?
+        {
+            Some(blob) => {
+                let decompressed =
+                    compression::decompress_events(&blob).context("Decompressing events")?;
+                let (efb, _): (dto::EventsForBlock, _) =
+                    bincode::serde::decode_from_slice(&decompressed, bincode::config::standard())
+                        .context("Deserializing events")?;
+                let per_tx = efb.events();
+                per_tx
+                    .get(idx as usize)
+                    .map(|evs| evs.iter().cloned().map(Into::into).collect())
             }
             None => None,
         };
         Ok(Some((
             block_number,
-            transaction.clone().into(),
-            receipt.clone().into(),
+            transaction.into(),
+            receipt.into(),
             events,
         )))
     }
 }
 
 pub(crate) mod dto {
-    use std::fmt;
-
     use fake::{Dummy, Fake, Faker};
     use pathfinder_common::*;
     use pathfinder_crypto::Felt;
     use serde::{Deserialize, Serialize};
 
-    /// Minimally encoded Felt value.
-    #[derive(Clone, Debug, PartialEq, Eq, Default)]
-    pub struct MinimalFelt(Felt);
-
-    impl serde::Serialize for MinimalFelt {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
-            let bytes = self.0.as_be_bytes();
-            let zeros = bytes.iter().take_while(|&&x| x == 0).count();
-            bytes[zeros..].serialize(serializer)
-        }
-    }
-
-    impl<'de> serde::Deserialize<'de> for MinimalFelt {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            struct Visitor;
-
-            impl<'de> serde::de::Visitor<'de> for Visitor {
-                type Value = MinimalFelt;
-
-                fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    formatter.write_str("a sequence")
-                }
-
-                fn visit_seq<B>(self, mut seq: B) -> Result<Self::Value, B::Error>
-                where
-                    B: serde::de::SeqAccess<'de>,
-                {
-                    let len = seq.size_hint().unwrap();
-                    let mut bytes = [0; 32];
-                    let num_zeros = bytes.len() - len;
-                    let mut i = num_zeros;
-                    while let Some(value) = seq.next_element()? {
-                        bytes[i] = value;
-                        i += 1;
-                    }
-                    Ok(MinimalFelt(Felt::from_be_bytes(bytes).unwrap()))
-                }
-            }
-
-            deserializer.deserialize_seq(Visitor)
-        }
-    }
-
-    impl From<Felt> for MinimalFelt {
-        fn from(value: Felt) -> Self {
-            Self(value)
-        }
-    }
-
-    impl From<MinimalFelt> for Felt {
-        fn from(value: MinimalFelt) -> Self {
-            value.0
-        }
-    }
-
-    impl<T> Dummy<T> for MinimalFelt {
-        fn dummy_with_rng<R: rand::prelude::Rng + ?Sized>(config: &T, rng: &mut R) -> Self {
-            let felt: Felt = Dummy::dummy_with_rng(config, rng);
-            felt.into()
-        }
-    }
+    use crate::connection::dto::MinimalFelt;
 
     /// Represents deserialized L2 transaction entry point values.
     #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Dummy)]
@@ -1194,7 +1140,7 @@ pub(crate) mod dto {
                 payload: fake::vec![MinimalFelt; 1..10],
                 // Create a Felt using only 160 bits. This is required because p2p specification
                 // uses the wrong type to represent this field.
-                to_address: MinimalFelt(Felt::from_be_slice(&fake::vec![u8; 20]).unwrap()),
+                to_address: MinimalFelt::from(Felt::from_be_slice(&fake::vec![u8; 20]).unwrap()),
             }
         }
     }
@@ -3567,8 +3513,15 @@ mod tests {
         assert_eq!(result, body.first().unwrap().0);
 
         // Add 1 because transactions belong to `header`.
+        // Delete both transactions and hashes so the lookup doesn't find
+        // a hash pointing to a missing blob.
         tx.delete_transactions_before(header.number + 1).unwrap();
+        tx.delete_transaction_hashes_before(header.number + 1)
+            .unwrap();
+        // Commit so the RocksDB batch is flushed.
+        tx.commit().unwrap();
 
+        let tx = db.transaction().unwrap();
         let invalid = tx.transaction(target).unwrap();
         assert_eq!(invalid, None);
     }
@@ -3585,8 +3538,172 @@ mod tests {
         // Add 1 because transactions belong to `header`.
         tx.delete_transaction_hashes_before(header.number + 1)
             .unwrap();
+        // Commit so the RocksDB batch is flushed.
+        tx.commit().unwrap();
 
+        let tx = db.transaction().unwrap();
         let invalid = tx.transaction(target).unwrap();
         assert_eq!(invalid, None);
+    }
+
+    #[test]
+    fn query_transaction_by_hash_uses_rocksdb() {
+        let (mut db, header, body) = setup();
+        let tx = db.transaction().unwrap();
+        let (orig_tx, orig_receipt) = body.into_iter().next().unwrap();
+
+        let result = tx.query_transaction_by_hash(orig_tx.hash).unwrap();
+        let (block_number, found_tx, found_receipt) = result.expect("transaction found");
+        assert_eq!(block_number, header.number);
+        assert_eq!(found_tx, orig_tx);
+        assert_eq!(found_receipt, orig_receipt);
+    }
+
+    #[test]
+    fn transaction_block_hash_uses_rocksdb() {
+        let (mut db, header, body) = setup();
+        let tx = db.transaction().unwrap();
+        let hash = body[0].0.hash;
+        let block_hash = tx.transaction_block_hash(hash).unwrap().unwrap();
+        assert_eq!(block_hash, header.hash);
+    }
+
+    #[test]
+    fn delete_transactions_before_clears_rocksdb() {
+        use crate::connection::TRANSACTIONS_AND_RECEIPTS_COLUMN;
+
+        let (mut db, _, _) = setup();
+        let tx = db.transaction().unwrap();
+        let rocksdb = tx.rocksdb_for_test();
+        let cf = rocksdb.get_column(&TRANSACTIONS_AND_RECEIPTS_COLUMN);
+        // Pre-condition: data exists for block 0 (setup writes a single block).
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(&cf, 0u64.to_be_bytes())
+            .unwrap()
+            .is_some());
+
+        tx.delete_transactions_before(BlockNumber::new_or_panic(100))
+            .unwrap();
+        tx.commit().unwrap();
+
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(&cf, 0u64.to_be_bytes())
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn delete_transaction_hashes_before_clears_rocksdb() {
+        use crate::connection::TRANSACTION_HASHES_COLUMN;
+
+        let (mut db, _, body) = setup();
+        let tx = db.transaction().unwrap();
+        let hash = body[0].0.hash;
+        let rocksdb = tx.rocksdb_for_test();
+        let cf = rocksdb.get_column(&TRANSACTION_HASHES_COLUMN);
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(&cf, hash.0.as_be_bytes())
+            .unwrap()
+            .is_some());
+
+        tx.delete_transaction_hashes_before(BlockNumber::new_or_panic(100))
+            .unwrap();
+        tx.commit().unwrap();
+
+        assert!(rocksdb
+            .rocksdb
+            .get_pinned_cf(&cf, hash.0.as_be_bytes())
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn update_events_writes_to_rocksdb_events_column() {
+        use crate::connection::EVENTS_COLUMN;
+
+        let (mut db, header, _body) = setup();
+        let tx = db.transaction().unwrap();
+
+        let new_events = vec![vec![pathfinder_common::event::Event {
+            from_address: contract_address!("0xfeed"),
+            keys: vec![event_key!("0x1")],
+            data: vec![event_data!("0x42")],
+        }]];
+
+        tx.update_events(header.number, new_events.clone()).unwrap();
+        tx.commit().unwrap();
+
+        // Read directly from RocksDB EVENTS_COLUMN instead of using
+        // events_for_block(). The setup() helper creates a block with 9
+        // transactions, but update_events writes only 1 event vector.
+        // events_for_block() cross-references events with transaction infos
+        // and bails when the counts don't match, so we bypass it here to
+        // test the write path in isolation.
+        let tx = db.transaction().unwrap();
+        let rocksdb = tx.rocksdb_for_test();
+        let cf = rocksdb.get_column(&EVENTS_COLUMN);
+        let blob = rocksdb
+            .rocksdb
+            .get_pinned_cf(&cf, header.number.get().to_be_bytes())
+            .unwrap()
+            .expect("events blob present in RocksDB");
+        let decompressed = compression::decompress_events(&blob).unwrap();
+        let (efb, _): (dto::EventsForBlock, _) =
+            bincode::serde::decode_from_slice(&decompressed, bincode::config::standard()).unwrap();
+        let read_back = efb.events();
+        assert_eq!(read_back.len(), new_events.len());
+        let event: pathfinder_common::event::Event = read_back[0][0].clone().into();
+        assert_eq!(event.from_address, contract_address!("0xfeed"));
+    }
+
+    #[test]
+    fn update_events_overwrites_existing_events_blob() {
+        use crate::connection::EVENTS_COLUMN;
+
+        let (mut db, header, _body) = setup();
+        let tx = db.transaction().unwrap();
+
+        // Call update_events twice with different payloads; second should win.
+        tx.update_events(
+            header.number,
+            vec![vec![pathfinder_common::event::Event {
+                from_address: contract_address!("0x1"),
+                keys: vec![event_key!("0x1")],
+                data: vec![],
+            }]],
+        )
+        .unwrap();
+        tx.update_events(
+            header.number,
+            vec![vec![pathfinder_common::event::Event {
+                from_address: contract_address!("0x2"),
+                keys: vec![event_key!("0x2")],
+                data: vec![],
+            }]],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        // Read directly from RocksDB (same rationale as above -- setup()
+        // creates 9 transactions so events_for_block() would bail on the
+        // count mismatch).
+        let tx = db.transaction().unwrap();
+        let rocksdb = tx.rocksdb_for_test();
+        let cf = rocksdb.get_column(&EVENTS_COLUMN);
+        let blob = rocksdb
+            .rocksdb
+            .get_pinned_cf(&cf, header.number.get().to_be_bytes())
+            .unwrap()
+            .expect("events blob present in RocksDB");
+        let decompressed = compression::decompress_events(&blob).unwrap();
+        let (efb, _): (dto::EventsForBlock, _) =
+            bincode::serde::decode_from_slice(&decompressed, bincode::config::standard()).unwrap();
+        let read_back = efb.events();
+        // The second update_events had a single tx's events with from_address 0x2
+        let event: pathfinder_common::event::Event = read_back[0][0].clone().into();
+        assert_eq!(event.from_address, contract_address!("0x2"));
     }
 }

@@ -1,5 +1,3 @@
-use std::num::{NonZeroU64, NonZeroUsize};
-
 use anyhow::Result;
 use pathfinder_common::prelude::*;
 use pathfinder_common::{BlockCommitmentSignatureElem, L1BlockNumber};
@@ -103,13 +101,10 @@ to_sql_builtin!(
     i8,
     u32,
     u16,
-    u8,
-    std::rc::Rc<Vec<rusqlite::types::Value>>
+    u8
 );
 
 try_into_sql_int!(usize, u64);
-
-try_into_sql_int_newtype!(NonZeroUsize, NonZeroU64);
 
 /// Extends [rusqlite::Row] to provide getters for our own foreign types. This
 /// is a work-around for the orphan rule -- our types live in a separate crate
@@ -282,7 +277,6 @@ pub trait RowExt {
     row_felt_wrapper!(get_state_commitment, StateCommitment);
     row_felt_wrapper!(get_state_diff_commitment, StateDiffCommitment);
     row_felt_wrapper!(get_sequencer_address, SequencerAddress);
-    row_felt_wrapper!(get_transaction_hash, TransactionHash);
 
     row_felt_wrapper!(get_class_commitment_leaf, ClassCommitmentLeafHash);
     row_felt_wrapper!(
@@ -452,20 +446,6 @@ macro_rules! try_into_sql_int {
     }
 }
 
-macro_rules! try_into_sql_int_newtype {
-    ($target:ty) => {
-        impl TryIntoSqlInt for $target {
-            fn try_into_sql_int(&self) -> anyhow::Result<i64> {
-                Ok(i64::try_from(self.get())?)
-            }
-        }
-    };
-    ($head:ty, $($rest:ty),+  $(,)?) => {
-        try_into_sql_int_newtype!($head);
-        try_into_sql_int_newtype!($($rest),+);
-    }
-}
-
 macro_rules! row_felt_wrapper {
     ($fn_name:ident, $Type:ident) => {
         fn $fn_name<I: RowIndex>(&self, index: I) -> rusqlite::Result<$Type> {
@@ -481,7 +461,6 @@ use to_sql_compressed_felt;
 use to_sql_felt;
 use to_sql_int_newtype;
 use try_into_sql_int;
-use try_into_sql_int_newtype;
 
 /// Used in combination with our own [ToSql] trait to provide functionality
 /// equivalent to [rusqlite::params!] for our own foreign types.
