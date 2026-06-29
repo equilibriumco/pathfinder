@@ -258,14 +258,13 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
 
         // Complete the just-superseded block off the critical path. The new
         // height is already in the cache, the aim is to capture any tail transactions
-        // that landed before the block was superseded. The store will only
-        // succeed if the new height didn't itself chain to the committed head.
+        // that landed before the block was superseded and deliver them to streaming
+        // subscribers, without touching the read view RPC readers see.
         if let Some(prev) = prev_to_complete {
             let sequencer = sequencer.clone();
             let cache = cache.clone();
-            let committed_head = current.borrow().0;
             tokio::spawn(async move {
-                complete_previous_block(&sequencer, prev, &cache, committed_head).await;
+                complete_previous_block(&sequencer, prev, &cache).await;
             });
         }
 
@@ -283,12 +282,19 @@ async fn wait_for_next_poll(deadline: Instant, cache: &PendingDataCache) {
 }
 
 /// Fetch the previously-tracked block one final time to capture any
-/// transactions that landed before it was superseded. Best-effort.
+/// transactions that landed before it was superseded, and deliver them to
+/// streaming subscribers. Best-effort.
+///
+/// This publishes to the subscriber stream only (via
+/// [`PendingDataCache::publish_tail`]), never to the read view: by the time it
+/// runs the chain has advanced and a newer block is what RPC readers should
+/// see. Subscribers dedupe per block, so they pick up only the previously
+/// unsent tail transactions. Because it doesn't touch the read view it needs no
+/// committed-head chaining check.
 async fn complete_previous_block<S: GatewayApi + Send + 'static>(
     sequencer: &S,
     mut state: State,
     cache: &PendingDataCache,
-    committed_head: BlockNumber,
 ) {
     let response = match sequencer
         .preconfirmed_block(
@@ -310,13 +316,16 @@ async fn complete_previous_block<S: GatewayApi + Send + 'static>(
             .accumulated
             .as_ref()
             .expect("accumulated present after successful completion apply");
-        store_pre_confirmed(
-            cache,
-            committed_head,
-            state.block_number,
+        match PendingData::try_from_pre_confirmed_block(
             accumulated.clone().into(),
-            None,
-        );
+            state.block_number,
+        ) {
+            Ok(pending) => cache.publish_tail(pending),
+            Err(e) => tracing::info!(
+                block_number = %state.block_number, error = %e,
+                "Failed to convert completed pre-confirmed block; skipping tail publish"
+            ),
+        }
     }
 }
 
@@ -332,16 +341,6 @@ fn store_pre_confirmed(
     block: Box<PreConfirmedBlock>,
     pre_latest_data: Option<Box<(BlockNumber, PreLatestBlock, StateUpdate)>>,
 ) {
-    // Do not allow the cached height to regress.
-    let cached = cache.pre_confirmed_block_number();
-    if number < cached {
-        tracing::debug!(
-            %number, %cached,
-            "Pre-confirmed store would regress the cached height; skipping store"
-        );
-        return;
-    }
-
     // Reject views that don't chain to the committed head.
     let next_block_number = pre_latest_data
         .as_ref()
@@ -1026,7 +1025,7 @@ mod tests {
 
     /// The completion query for a superseded block carries any tail
     /// transactions that landed just before it advanced; they must reach
-    /// the cache.
+    /// streaming subscribers (via the subscriber stream).
     #[tokio::test]
     async fn complete_previous_block_applies_the_tail_delta() {
         const BLOCK_ID: &str = "id-11";
@@ -1071,12 +1070,12 @@ mod tests {
         let mut rx = cache.subscribe();
         let _ = rx.borrow_and_update();
 
-        // Committed head 10, so block 11 still chains and is stored.
-        complete_previous_block(&sequencer, state, &cache, BlockNumber::new_or_panic(10)).await;
+        // The completion publishes the superseded block to subscribers only.
+        complete_previous_block(&sequencer, state, &cache).await;
 
         assert!(
             rx.has_changed().unwrap(),
-            "the completion should store the block"
+            "the completion should publish the block to subscribers"
         );
         let pending = rx.borrow().clone();
         assert_eq!(

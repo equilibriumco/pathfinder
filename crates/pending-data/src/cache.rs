@@ -43,13 +43,28 @@ pub enum ReadError {
 /// Shared pre-confirmed data cache with freshness tracking.
 ///
 /// Holds the latest [`PendingData`] and a small amount of freshness state.
-/// - Writes via [`Self::store`] / [`Self::mark_fresh`] / [`Self::mark_stale`] /
-///   [`Self::mark_unavailable`].
+///
+/// There are two distinct channels, because streaming subscribers and
+/// point-in-time readers have different needs:
+/// - the **subscriber stream** (`subscriber_tx`) carries *every* published
+///   view, including the final tail of a just-superseded block (see
+///   [`Self::publish_tail`]); subscribers dedupe per block, so a brief
+///   non-monotonic blip is fine and no transaction is lost.
+/// - the **read view** (`read_tx`) only ever moves forward, so
+///   [`Self::read`]/[`Self::try_read`] never observe the pre-confirmed height
+///   going backwards.
+///
+/// - Writes via [`Self::store`] / [`Self::publish_tail`] / [`Self::mark_fresh`]
+///   / [`Self::mark_stale`] / [`Self::mark_unavailable`].
 /// - Reads via [`Self::read`] (returns fresh data, blocks while stale, fails
 ///   fast while unavailable) and [`Self::subscribe`] for streaming.
 pub struct PendingDataCache {
-    data_tx: watch::Sender<PendingData>,
-    data_rx: watch::Receiver<PendingData>,
+    /// Streaming firehose: every published view, monotonic or not.
+    subscriber_tx: watch::Sender<PendingData>,
+    subscriber_rx: watch::Receiver<PendingData>,
+    /// Forward-only view served to RPC readers.
+    read_tx: watch::Sender<PendingData>,
+    read_rx: watch::Receiver<PendingData>,
     on_read: Arc<Notify>,
     freshness_tx: watch::Sender<Freshness>,
     last_read: Mutex<Instant>,
@@ -65,11 +80,14 @@ impl PendingDataCache {
     pub const DEFAULT_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
 
     pub fn new() -> Self {
-        let (data_tx, data_rx) = watch::channel(PendingData::default());
+        let (subscriber_tx, subscriber_rx) = watch::channel(PendingData::default());
+        let (read_tx, read_rx) = watch::channel(PendingData::default());
         let (freshness_tx, _) = watch::channel(Freshness::default());
         Self {
-            data_tx,
-            data_rx,
+            subscriber_tx,
+            subscriber_rx,
+            read_tx,
+            read_rx,
             on_read: Arc::new(Notify::new()),
             freshness_tx,
             last_read: Mutex::new(Instant::now()),
@@ -89,9 +107,36 @@ impl PendingDataCache {
     }
 
     /// Writes fresh data into the cache and marks it fresh.
+    ///
+    /// The view reaches subscribers unconditionally. The read view only adopts
+    /// it when it does not regress the pre-confirmed height, so out-of-order or
+    /// stale writes can never move RPC readers backwards. This guard is atomic
+    /// (performed under the watch lock), so concurrent writers cannot
+    /// interleave a regression.
     pub fn store(&self, data: PendingData) {
-        self.data_tx.send_replace(data);
+        self.subscriber_tx.send_replace(data.clone());
+
+        let number = data.pre_confirmed_block_number();
+        let mut data = Some(data);
+        self.read_tx.send_if_modified(|current| {
+            if number >= current.pre_confirmed_block_number() {
+                *current = data.take().expect("closure runs at most once");
+                true
+            } else {
+                false
+            }
+        });
+
         self.bump_freshness();
+    }
+
+    /// Publishes a view to subscribers only, without advancing the read view.
+    ///
+    /// Used to deliver the final (tail) transactions of a just-superseded
+    /// pre-confirmed block to streaming subscribers — which dedupe per block —
+    /// while leaving the newer block that RPC readers see untouched.
+    pub fn publish_tail(&self, data: PendingData) {
+        self.subscriber_tx.send_replace(data);
     }
 
     /// Marks the cache fresh without replacing its contents.
@@ -136,7 +181,7 @@ impl PendingDataCache {
     pub async fn read(&self) -> Result<PendingData, ReadError> {
         self.signal_read();
         self.wait_for_fresh_data().await?;
-        Ok(self.data_rx.borrow().clone())
+        Ok(self.read_rx.borrow().clone())
     }
 
     /// Returns the latest cached data if it is fresh, `None` otherwise.
@@ -144,7 +189,7 @@ impl PendingDataCache {
     pub fn try_read(&self) -> Option<PendingData> {
         self.signal_read();
         match self.freshness_tx.borrow().status {
-            Status::Fresh => Some(self.data_rx.borrow().clone()),
+            Status::Fresh => Some(self.read_rx.borrow().clone()),
             Status::Stale | Status::Unavailable(_) => None,
         }
     }
@@ -155,17 +200,18 @@ impl PendingDataCache {
     /// idle/suspend accounting. Intended for protecting against a stale write
     /// decreasing the cached height.
     pub fn pre_confirmed_block_number(&self) -> BlockNumber {
-        self.data_rx.borrow().pre_confirmed_block_number()
+        self.read_rx.borrow().pre_confirmed_block_number()
     }
 
-    /// A fresh `watch::Receiver` for awaiting changes directly.
+    /// A fresh `watch::Receiver` over the subscriber stream for awaiting
+    /// changes directly.
     pub fn subscribe(&self) -> watch::Receiver<PendingData> {
         self.signal_read();
-        self.data_rx.clone()
+        self.subscriber_rx.clone()
     }
 
     pub fn subscriber_count(&self) -> usize {
-        self.data_tx
+        self.subscriber_tx
             .receiver_count()
             // Exclude the cache's own internal receiver from the count.
             .saturating_sub(1)
@@ -464,6 +510,44 @@ mod tests {
         let cache = PendingDataCache::new();
         cache.mark_stale();
         assert!(cache.try_read().is_none());
+    }
+
+    #[tokio::test]
+    async fn store_does_not_regress_read_view_but_notifies_subscribers() {
+        let cache = PendingDataCache::new();
+        let mut sub = cache.subscribe();
+        let _ = sub.borrow_and_update();
+
+        let high = sample_data(20);
+        cache.store(high.clone());
+        // A lower height (e.g. a late/out-of-order write) must not regress reads.
+        let low = sample_data(8);
+        cache.store(low.clone());
+
+        // Read view stays at the higher block.
+        assert_eq!(cache.read().await.unwrap(), high);
+        // Subscriber saw the most recent publish regardless of height.
+        assert!(sub.has_changed().unwrap());
+        assert_eq!(*sub.borrow_and_update(), low);
+    }
+
+    #[tokio::test]
+    async fn publish_tail_notifies_subscribers_without_advancing_read_view() {
+        let cache = PendingDataCache::new();
+        let mut sub = cache.subscribe();
+        let _ = sub.borrow_and_update();
+
+        let head = sample_data(20);
+        cache.store(head.clone());
+
+        let tail = sample_data(18);
+        cache.publish_tail(tail.clone());
+
+        // Readers still see the head block.
+        assert_eq!(cache.read().await.unwrap(), head);
+        // Subscribers received the tail.
+        assert!(sub.has_changed().unwrap());
+        assert_eq!(*sub.borrow_and_update(), tail);
     }
 
     #[tokio::test]
