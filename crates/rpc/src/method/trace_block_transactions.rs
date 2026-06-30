@@ -1228,15 +1228,22 @@ pub(crate) mod tests {
                 &casm_hash_bytes!(b"casm hash blake"),
             )?;
 
-            let dummy_receipt = Receipt {
-                transaction_hash: TransactionHash(felt!("0x1")),
-                transaction_index: TransactionIndex::new_or_panic(0),
-                ..Default::default()
-            };
+            let transaction_receipts: Vec<_> = pre_latest_transactions
+                .iter()
+                .enumerate()
+                .map(|(index, tx)| {
+                    Some((
+                        Receipt {
+                            transaction_hash: tx.hash,
+                            transaction_index: TransactionIndex::new_or_panic(index as u64),
+                            ..Default::default()
+                        },
+                        vec![],
+                    ))
+                })
+                .collect();
 
-            let transaction_receipts = vec![(dummy_receipt, vec![]); pre_latest_transactions.len()];
-
-            let pre_latest_block = starknet_gateway_types::reply::PreLatestBlock {
+            let pre_latest_block = starknet_gateway_types::reply::PreConfirmedBlock {
                 l1_gas_price: GasPrices {
                     price_in_wei: last_block_header.eth_l1_gas_price,
                     price_in_fri: last_block_header.strk_l1_gas_price,
@@ -1249,7 +1256,6 @@ pub(crate) mod tests {
                     price_in_wei: last_block_header.eth_l2_gas_price,
                     price_in_fri: last_block_header.strk_l2_gas_price,
                 },
-                parent_hash: last_block_header.hash,
                 sequencer_address: last_block_header.sequencer_address,
                 status: starknet_gateway_types::reply::Status::Pending,
                 timestamp: last_block_header.timestamp,
@@ -1257,6 +1263,7 @@ pub(crate) mod tests {
                 transactions: pre_latest_transactions.clone().into(),
                 starknet_version: last_block_header.starknet_version,
                 l1_da_mode: L1DataAvailabilityMode::Blob,
+                transaction_state_diffs: vec![],
             };
 
             let pre_confirmed_block = starknet_gateway_types::reply::PreConfirmedBlock {
@@ -1291,7 +1298,7 @@ pub(crate) mod tests {
                 Some(Box::new((
                     last_block_header.number + 1,
                     pre_latest_block,
-                    StateUpdate::default(),
+                    last_block_header.hash,
                 ))),
             )
             .unwrap()
