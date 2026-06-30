@@ -135,61 +135,27 @@ impl PendingData {
     }
 
     /// Same as [`Self::try_from_pre_confirmed_block`] but also accepts an
-    /// optional pre-latest parent. When present, the pre-confirmed block
-    /// must be its child.
+    /// optional pre-latest parent: a pre-confirmed block at a height already
+    /// past consensus. When present, the pre-confirmed block must be its child,
+    /// and its parent hash is our committed head.
     pub fn try_from_pre_confirmed_and_pre_latest(
         pre_confirmed_block: Box<starknet_gateway_types::reply::PreConfirmedBlock>,
         pre_confirmed_block_number: BlockNumber,
-        pre_latest_data: Option<
+        pre_latest: Option<
             Box<(
                 BlockNumber,
-                starknet_gateway_types::reply::PreLatestBlock,
-                StateUpdate,
+                starknet_gateway_types::reply::PreConfirmedBlock,
+                BlockHash,
             )>,
         >,
     ) -> anyhow::Result<Self> {
-        // Drop placeholder Nones from receipts.
-        let transaction_receipts: Vec<_> = pre_confirmed_block
-            .transaction_receipts
-            .into_iter()
-            .flatten()
-            .collect();
-
-        let pre_confirmed_transaction_hashes: HashSet<_> = transaction_receipts
-            .iter()
-            .map(|(receipt, _)| receipt.transaction_hash)
-            .collect();
-
-        for tx in &pre_confirmed_block.transactions {
-            if !pre_confirmed_transaction_hashes.contains(&tx.hash) {
-                anyhow::bail!("Missing transaction receipt for tx ({})", tx.hash);
-            }
-        }
-        if transaction_receipts.len() != pre_confirmed_block.transactions.len() {
-            anyhow::bail!("Mismatched transaction and receipt count in pre-confirmed block");
-        }
-
-        // Compose aggregated state diff for the pre-confirmed block.
-        let mut pre_confirmed_state_diff =
-            starknet_gateway_types::reply::state_update::StateDiff::default();
-        for transaction_diff in pre_confirmed_block
-            .transaction_state_diffs
-            .into_iter()
-            .flatten()
-        {
-            pre_confirmed_state_diff.extend(transaction_diff);
-        }
-        pre_confirmed_state_diff.deduplicate();
-
-        let pre_confirmed_state_update = {
-            let state_update = starknet_gateway_types::reply::StateUpdate {
-                state_diff: pre_confirmed_state_diff.clone(),
-                block_hash: Default::default(),
-                new_root: StateCommitment::default(),
-                old_root: StateCommitment::default(),
-            };
-            Arc::new(StateUpdate::from(state_update))
-        };
+        let transaction_receipts = require_receipts(
+            &pre_confirmed_block.transactions,
+            pre_confirmed_block.transaction_receipts,
+        )?;
+        let pre_confirmed_state_update = Arc::new(compose_state_update(
+            pre_confirmed_block.transaction_state_diffs,
+        ));
 
         let pre_confirmed_block = PreConfirmedBlock {
             number: pre_confirmed_block_number,
@@ -205,18 +171,22 @@ impl PendingData {
             transaction_receipts,
         };
 
-        let pre_latest_data = pre_latest_data
+        let pre_latest_data = pre_latest
             .map(|pre_latest| {
-                let (pre_latest_block_number, pre_latest_block, pre_latest_state_update) =
-                    *pre_latest;
+                let (pre_latest_block_number, pre_latest_block, parent_hash) = *pre_latest;
                 anyhow::ensure!(
                     pre_latest_block_number + 1 == pre_confirmed_block_number,
                     "Pre-confirmed block {pre_confirmed_block_number} is not the child of \
                      pre-latest {pre_latest_block_number}",
                 );
-                let pre_latest_block = PreLatestBlock {
+                let transaction_receipts = require_receipts(
+                    &pre_latest_block.transactions,
+                    pre_latest_block.transaction_receipts,
+                )?;
+                let state_update = compose_state_update(pre_latest_block.transaction_state_diffs);
+                let block = PreLatestBlock {
                     number: pre_latest_block_number,
-                    parent_hash: pre_latest_block.parent_hash,
+                    parent_hash,
                     l1_gas_price: pre_latest_block.l1_gas_price,
                     l1_data_gas_price: pre_latest_block.l1_data_gas_price,
                     l2_gas_price: pre_latest_block.l2_gas_price,
@@ -226,19 +196,19 @@ impl PendingData {
                     starknet_version: pre_latest_block.starknet_version,
                     l1_da_mode: pre_latest_block.l1_da_mode.into(),
                     transactions: pre_latest_block.transactions,
-                    transaction_receipts: pre_latest_block.transaction_receipts,
+                    transaction_receipts,
                 };
-                Ok(PreLatestData {
-                    block: pre_latest_block,
-                    state_update: pre_latest_state_update,
+                anyhow::Ok(PreLatestData {
+                    block,
+                    state_update,
                 })
             })
             .transpose()?;
 
         let aggregated_state_update = Arc::new(
             pre_latest_data
-                .clone()
-                .map(|data| data.state_update)
+                .as_ref()
+                .map(|data| data.state_update.clone())
                 .unwrap_or_default()
                 .apply(pre_confirmed_state_update.as_ref()),
         );
@@ -444,4 +414,51 @@ impl PendingData {
             .is_some_and(|pre_latest| pre_latest == block)
             || self.pre_confirmed_block_number() == block
     }
+}
+
+/// Drop the receipt placeholders a pre-confirmed response carries, failing if a
+/// transaction is still missing one. A missing receipt means a candidate
+/// transaction the sequencer hasn't executed yet.
+fn require_receipts(
+    transactions: &[Transaction],
+    transaction_receipts: Vec<Option<TxnReceiptAndEvents>>,
+) -> anyhow::Result<Vec<TxnReceiptAndEvents>> {
+    let transaction_receipts: Vec<TxnReceiptAndEvents> =
+        transaction_receipts.into_iter().flatten().collect();
+
+    let receipted: HashSet<_> = transaction_receipts
+        .iter()
+        .map(|(receipt, _)| receipt.transaction_hash)
+        .collect();
+    for tx in transactions {
+        if !receipted.contains(&tx.hash) {
+            anyhow::bail!("Missing transaction receipt for tx ({})", tx.hash);
+        }
+    }
+    anyhow::ensure!(
+        transaction_receipts.len() == transactions.len(),
+        "Mismatched transaction and receipt count in pre-confirmed block",
+    );
+
+    Ok(transaction_receipts)
+}
+
+/// Fold the per-transaction state diffs of a pre-confirmed response into one
+/// state update. A pending block has no root of its own, so the roots are left
+/// empty.
+fn compose_state_update(
+    transaction_state_diffs: Vec<Option<starknet_gateway_types::reply::state_update::StateDiff>>,
+) -> StateUpdate {
+    let mut state_diff = starknet_gateway_types::reply::state_update::StateDiff::default();
+    for transaction_diff in transaction_state_diffs.into_iter().flatten() {
+        state_diff.extend(transaction_diff);
+    }
+    state_diff.deduplicate();
+
+    StateUpdate::from(starknet_gateway_types::reply::StateUpdate {
+        state_diff,
+        block_hash: Default::default(),
+        new_root: StateCommitment::default(),
+        old_root: StateCommitment::default(),
+    })
 }

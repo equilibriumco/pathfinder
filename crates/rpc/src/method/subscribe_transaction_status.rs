@@ -505,7 +505,7 @@ mod tests {
     use pathfinder_pending_data::PendingDataCache;
     use pathfinder_storage::StorageBuilder;
     use pretty_assertions_sorted::assert_eq;
-    use starknet_gateway_types::reply::{PreConfirmedBlock, PreLatestBlock};
+    use starknet_gateway_types::reply::PreConfirmedBlock;
     use tokio::sync::mpsc;
 
     use crate::context::{RpcContext, WebsocketContext};
@@ -1129,24 +1129,23 @@ mod tests {
                             // a notification because it would have a duplicate `PRE_CONFIRMED`
                             // status.
                             BlockNumber::GENESIS + 2,
-                            PreLatestBlock {
-                                parent_hash: BlockHash(Felt::from_u64(2)),
+                            PreConfirmedBlock {
                                 transaction_receipts: vec![
-                                    (
+                                    Some((
                                         Receipt {
                                             transaction_hash: TARGET_TX_HASH,
                                             ..Default::default()
                                         },
                                         vec![],
-                                    ),
+                                    )),
                                     // Random tx receipt.
-                                    (
+                                    Some((
                                         Receipt {
                                             transaction_hash: TransactionHash(Felt::from_u64(123)),
                                             ..Default::default()
                                         },
                                         vec![],
-                                    ),
+                                    )),
                                 ],
                                 transactions: vec![
                                     Transaction {
@@ -1161,7 +1160,7 @@ mod tests {
                                 ],
                                 ..Default::default()
                             },
-                            StateUpdate::default(),
+                            BlockHash(Felt::from_u64(2)),
                         ))),
                     )
                     .unwrap(),
