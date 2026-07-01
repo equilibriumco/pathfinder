@@ -402,7 +402,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn contract_deployed_in_pre_confirmed() {
+        async fn call_cairo_contract_in_pre_confirmed() {
             let (context, last_block_header, _contract_address, test_key, _test_value) =
                 test_context().await;
 
@@ -431,7 +431,7 @@ mod tests {
         }
 
         #[test_log::test(tokio::test)]
-        async fn contract_declared_and_deployed_in_pre_confirmed() {
+        async fn call_sierra_contract_in_pre_confirmed() {
             let (context, last_block_header, _contract_address, _test_key, _test_value) =
                 test_context().await;
 
@@ -522,7 +522,7 @@ mod tests {
                         starknet_version: last_block_header.starknet_version,
                         l1_da_mode: L1DataAvailabilityMode::Blob.into(),
                     },
-                    pre_latest: None,
+                    parents: Vec::new(),
                 },
                 state_update,
                 aggregated_state_update,

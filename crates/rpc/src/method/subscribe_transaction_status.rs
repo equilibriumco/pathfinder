@@ -396,14 +396,16 @@ fn pending_data_cache_status(
     pending_data: &PendingData,
     tx_hash: TransactionHash,
 ) -> Option<(BlockNumber, FinalityStatus, Option<ExecutionStatus>)> {
-    if let Some(pre_latest_block) = pending_data.pre_latest_block() {
-        let status_in_pre_latest = find_tx_receipt(&pre_latest_block.transaction_receipts, tx_hash)
+    // Search every un-committed parent, newest to oldest, before the pre-confirmed
+    // block in the next step.
+    for parent in pending_data.parent_blocks().rev() {
+        let status_in_parent = find_tx_receipt(&parent.block.transaction_receipts, tx_hash)
             .map(|r| r.execution_status.clone());
-        if status_in_pre_latest.is_some() {
+        if status_in_parent.is_some() {
             return Some((
-                pre_latest_block.number,
+                parent.block.number,
                 FinalityStatus::PreConfirmed,
-                status_in_pre_latest,
+                status_in_parent,
             ));
         }
     }
@@ -1107,7 +1109,7 @@ mod tests {
                     }
                 })),
                 TestEvent::Pending(
-                    PendingData::try_from_pre_confirmed_and_pre_latest(
+                    PendingData::from_window(
                         PreConfirmedBlock {
                             transactions: vec![Transaction {
                                 hash: TransactionHash(Felt::from_u64(3)),
@@ -1124,28 +1126,29 @@ mod tests {
                         }
                         .into(),
                         BlockNumber::GENESIS + 3,
-                        Some(Box::new((
-                            // Previous block promoted to pre-latest. This should not result in
-                            // a notification because it would have a duplicate `PRE_CONFIRMED`
-                            // status.
-                            BlockNumber::GENESIS + 2,
-                            PreConfirmedBlock {
+                        // Previous block promoted to the immediate (un-committed) parent.
+                        // This should not result in a notification because it would have a
+                        // duplicate `PRE_CONFIRMED` status.
+                        vec![crate::pending::PreLatestData {
+                            block: crate::pending::PreLatestBlock {
+                                number: BlockNumber::GENESIS + 2,
+                                parent_hash: BlockHash(Felt::from_u64(2)),
                                 transaction_receipts: vec![
-                                    Some((
+                                    (
                                         Receipt {
                                             transaction_hash: TARGET_TX_HASH,
                                             ..Default::default()
                                         },
                                         vec![],
-                                    )),
+                                    ),
                                     // Random tx receipt.
-                                    Some((
+                                    (
                                         Receipt {
                                             transaction_hash: TransactionHash(Felt::from_u64(123)),
                                             ..Default::default()
                                         },
                                         vec![],
-                                    )),
+                                    ),
                                 ],
                                 transactions: vec![
                                     Transaction {
@@ -1160,8 +1163,9 @@ mod tests {
                                 ],
                                 ..Default::default()
                             },
-                            BlockHash(Felt::from_u64(2)),
-                        ))),
+                            state_update: StateUpdate::default(),
+                        }],
+                        BlockNumber::GENESIS + 1,
                     )
                     .unwrap(),
                 ),
@@ -1636,5 +1640,57 @@ mod tests {
             .with_pending_data_cache(pending_data_cache.clone())
             .with_websockets(WebsocketContext::for_test(WebsocketHistory::Unlimited));
         (v08::register_routes().build(ctx), pending_data_cache)
+    }
+
+    #[test]
+    fn pending_data_cache_status_spans_deep_ancestors() {
+        use pathfinder_pending_data::{PendingBlocks, PreLatestData};
+
+        let deep_hash = TransactionHash(Felt::from_u64(0x77));
+        let deep_ancestor = PreLatestData {
+            block: pathfinder_pending_data::PreLatestBlock {
+                number: BlockNumber::new_or_panic(7),
+                transaction_receipts: vec![(
+                    Receipt {
+                        transaction_hash: deep_hash,
+                        execution_status: ExecutionStatus::Succeeded,
+                        ..Default::default()
+                    },
+                    vec![],
+                )],
+                ..Default::default()
+            },
+            state_update: StateUpdate::default(),
+        };
+        let blocks = PendingBlocks {
+            pre_confirmed: pathfinder_pending_data::PreConfirmedBlock {
+                number: BlockNumber::new_or_panic(10),
+                ..Default::default()
+            },
+            // Deep ancestor (7) first, immediate parent (9) last.
+            parents: vec![
+                deep_ancestor,
+                PreLatestData {
+                    block: pathfinder_pending_data::PreLatestBlock {
+                        number: BlockNumber::new_or_panic(9),
+                        ..Default::default()
+                    },
+                    state_update: StateUpdate::default(),
+                },
+            ],
+        };
+        let pending = PendingData::from_parts(
+            blocks,
+            StateUpdate::default(),
+            StateUpdate::default(),
+            BlockNumber::new_or_panic(10),
+        );
+
+        let (block_number, finality, execution) =
+            super::pending_data_cache_status(&pending, deep_hash)
+                .expect("deep-ancestor tx status should be found");
+        assert_eq!(block_number, BlockNumber::new_or_panic(7));
+        assert!(matches!(finality, super::FinalityStatus::PreConfirmed));
+        assert_eq!(execution, Some(ExecutionStatus::Succeeded));
     }
 }

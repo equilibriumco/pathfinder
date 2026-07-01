@@ -75,87 +75,106 @@ impl PendingWatcher {
         let watched_pending_blocks = watched_pending_data.pending_block();
         let PendingBlocks {
             pre_confirmed,
-            pre_latest,
+            parents,
         } = watched_pending_blocks.as_ref();
 
-        let pending_data = {
-            // The parent state commitment is only available here. The task polling the
-            // pre-confirmed block has no access to the parent block header, thus it
-            // cannot properly set the parent state commitment.
+        // The parent state commitment is only available here. The task polling
+        // the pre-confirmed block has no access to the parent block header, so
+        // it cannot set the parent state commitment itself.
+        //
+        // A view is servable against our committed head precisely when its
+        // aggregated overlay reaches down to (or below) that head and the
+        // pre-confirmed block is ahead of it:
+        //
+        //   aggregated_lower_bound <= committed < pre_confirmed.number
+        //
+        // Then base state at `committed` plus the overlay covers every block up
+        // to the pre-confirmed tip with no gap, regardless of how many blocks
+        // sit in between. This single condition subsumes the previous
+        // pre-latest / pre-confirmed chaining cases (which only ever served a
+        // gap of at most two).
+        let committed = latest.number;
+        let servable = pre_confirmed.number > committed
+            && watched_pending_data.aggregated_lower_bound <= committed;
 
-            // We can consider the pre-confirmed block valid if:
-            //   - the pre-latest block exists and is the child our latest stored block,
-            //   - the pre-latest block exists and is the same block as our latest block,
-            //   i.e. we received that block as a finalized L2 block but it still lingers
-            //   in pending data.
-            //   - the pre-latest block does not exist and the pre-confirmed block is the
-            //   child of our latest stored block.
-            match pre_latest {
-                // Is pre-latest the next block, with pre-confirmed as its child?
-                Some(pre_latest)
-                    if pre_latest.block.number == latest.number + 1
-                        && pre_latest.block.number + 1 == pre_confirmed.number =>
-                {
-                    // Set pre-latest block parent state commitment, clone rest of the data.
-                    let pre_latest = pre_latest.clone();
-                    let pre_latest_state_update = pre_latest
-                        .state_update
-                        .with_parent_state_commitment(latest.state_commitment);
-                    let pre_latest = PreLatestData {
-                        block: pre_latest.block,
-                        state_update: pre_latest_state_update,
-                    };
-                    PendingData {
-                        blocks: PendingBlocks {
-                            pre_confirmed: pre_confirmed.clone(),
-                            pre_latest: Some(pre_latest),
-                        }
-                        .into(),
-                        state_update: Arc::clone(&watched_pending_data.state_update),
-                        aggregated_state_update: Arc::clone(
-                            &watched_pending_data.aggregated_state_update,
-                        ),
-                        number: pre_confirmed.number,
-                    }
-                }
-                // Is pre-latest already in the database, with pre-confirmed as its child?
-                Some(pre_latest)
-                    if pre_latest.block.number == latest.number
-                        && pre_latest.block.number + 1 == pre_confirmed.number =>
-                {
-                    // Set pre-latest data to `None`, pre-confirmed block parent state
-                    // commitment and clone rest of the data.
-                    let pre_confirmed_block = PendingBlocks {
-                        pre_confirmed: pre_confirmed.clone(),
-                        pre_latest: None,
-                    };
-                    let pre_confirmed_state_update = Arc::new(
-                        StateUpdate::clone(&watched_pending_data.state_update)
-                            .with_parent_state_commitment(latest.state_commitment),
-                    );
+        if !servable {
+            return Ok(PendingData::empty(&latest));
+        }
 
-                    PendingData {
-                        blocks: Arc::new(pre_confirmed_block),
-                        state_update: Arc::clone(&pre_confirmed_state_update),
-                        aggregated_state_update: pre_confirmed_state_update,
-                        number: pre_confirmed.number,
-                    }
+        // Report only parents still strictly above the committed head. The head
+        // can advance after the producer composed this view, finalising the
+        // lowest entries into the DB; those must no longer appear as pending.
+        let mut parents: Vec<PreLatestData> = parents
+            .iter()
+            .filter(|parent| parent.block.number > committed)
+            .cloned()
+            .collect();
+
+        // If the committed head has advanced past the overlay's base, the stored
+        // aggregated overlay still carries the state diffs of blocks that are now
+        // committed. Recompose it from the surviving parents plus the
+        // pre-confirmed block so it sits exactly on `committed` — no block ever
+        // appears in both the committed DB base and the pending overlay, so
+        // execution can't double-apply a just-committed block's diffs. When the
+        // base is already at the committed head the stored overlay is reused
+        // as-is. Composition mirrors `PendingData::from_window`: parents oldest →
+        // newest, then the pre-confirmed block's own diffs on top.
+        let aggregated_overlay = if watched_pending_data.aggregated_lower_bound < committed {
+            let mut overlay = StateUpdate::default();
+            for parent in &parents {
+                overlay = overlay.apply(&parent.state_update);
+            }
+            Arc::new(overlay.apply(watched_pending_data.state_update.as_ref()))
+        } else {
+            Arc::clone(&watched_pending_data.aggregated_state_update)
+        };
+
+        let pending_data = if let Some(immediate_parent) = parents.last_mut() {
+            // The immediate parent (newest un-committed block) is the
+            // pre-confirmed's parent and carries the parent state commitment.
+            // Deeper parents carry only data (txns, receipts, events); execution
+            // uses the aggregated overlay, so they need no patch.
+            assert_eq!(
+                immediate_parent.block.number + 1,
+                pre_confirmed.number,
+                "Pre-confirmed block should be child of its immediate parent"
+            );
+            immediate_parent.state_update = immediate_parent
+                .state_update
+                .clone()
+                .with_parent_state_commitment(latest.state_commitment);
+            PendingData {
+                blocks: PendingBlocks {
+                    pre_confirmed: pre_confirmed.clone(),
+                    parents,
                 }
-                // Is pre-confirmed the next block?
-                None if pre_confirmed.number == latest.number + 1 => {
-                    // Set pre-confirmed block parent state commitment, clone rest of the data.
-                    let pre_confirmed_state_update =
-                        StateUpdate::clone(&watched_pending_data.state_update)
-                            .with_parent_state_commitment(latest.state_commitment);
-                    let state_update = Arc::new(pre_confirmed_state_update);
-                    PendingData {
-                        blocks: Arc::clone(&watched_pending_data.blocks),
-                        state_update: Arc::clone(&state_update),
-                        aggregated_state_update: state_update,
-                        number: pre_confirmed.number,
-                    }
-                }
-                _ => PendingData::empty(&latest),
+                .into(),
+                state_update: Arc::clone(&watched_pending_data.state_update),
+                aggregated_state_update: aggregated_overlay,
+                number: pre_confirmed.number,
+                aggregated_lower_bound: committed,
+            }
+        } else {
+            // No un-committed parent (a gap of one, or the parents have all been
+            // finalised into the DB): serve the pre-confirmed against the
+            // committed base, which then carries the parent state commitment.
+            let state_update = Arc::new(
+                StateUpdate::clone(&watched_pending_data.state_update)
+                    .with_parent_state_commitment(latest.state_commitment),
+            );
+            let aggregated_state_update = Arc::new(
+                StateUpdate::clone(&aggregated_overlay)
+                    .with_parent_state_commitment(latest.state_commitment),
+            );
+            PendingData {
+                blocks: Arc::new(PendingBlocks {
+                    pre_confirmed: pre_confirmed.clone(),
+                    parents: Vec::new(),
+                }),
+                state_update,
+                aggregated_state_update,
+                number: pre_confirmed.number,
+                aggregated_lower_bound: committed,
             }
         };
 
@@ -182,8 +201,9 @@ impl PendingWatcher {
     }
 }
 
-/// Find a transaction-with-receipt in the pre-confirmed or pre-latest block,
-/// in that order.
+/// Find a transaction-with-receipt across the whole un-committed window: the
+/// pre-confirmed block first, then every un-committed parent newest → oldest
+/// (the immediate pre-latest, then any deeper ancestors).
 pub fn find_finalized_tx_data(
     pending: &PendingData,
     tx_hash: pathfinder_common::TransactionHash,
@@ -197,7 +217,8 @@ pub fn find_finalized_tx_data(
             .pre_confirmed_tx_receipts_and_events()
             .iter()
             .find(|(r, _)| r.transaction_hash == tx_hash)
-            .cloned()?;
+            .cloned()
+            .expect("Receipt should exist if the transaction exists");
         return Some(FinalizedTxData {
             block_number: pending.pre_confirmed_block_number(),
             transaction: tx.clone(),
@@ -207,19 +228,17 @@ pub fn find_finalized_tx_data(
         });
     }
 
-    if let Some(pre_latest_block) = pending.pre_latest_block() {
-        if let Some(tx) = pre_latest_block
-            .transactions
-            .iter()
-            .find(|t| t.hash == tx_hash)
-        {
-            let (receipt, events) = pending.pre_latest_tx_receipts_and_events().and_then(|rs| {
-                rs.iter()
-                    .find(|(r, _)| r.transaction_hash == tx_hash)
-                    .cloned()
-            })?;
+    for parent in pending.parent_blocks().rev() {
+        if let Some(tx) = parent.block.transactions.iter().find(|t| t.hash == tx_hash) {
+            let (receipt, events) = parent
+                .block
+                .transaction_receipts
+                .iter()
+                .find(|(r, _)| r.transaction_hash == tx_hash)
+                .cloned()
+                .expect("Receipt should exist if the transaction exists");
             return Some(FinalizedTxData {
-                block_number: pre_latest_block.number,
+                block_number: parent.block.number,
                 transaction: tx.clone(),
                 receipt,
                 events,
@@ -277,12 +296,14 @@ mod tests {
                     transactions: vec![],
                     transaction_receipts: vec![],
                 },
-                pre_latest: None,
+                parents: Vec::new(),
             }
             .into(),
             state_update: Arc::clone(&state_update),
             aggregated_state_update: state_update,
             number: latest.number + 1,
+            // Pre-confirmed-only view at latest+1 sits on the committed head.
+            aggregated_lower_bound: latest.number,
         }
     }
 
@@ -330,15 +351,17 @@ mod tests {
                     transactions: vec![Transaction::default()],
                     transaction_receipts: vec![(Receipt::default(), vec![])],
                 },
-                pre_latest: Some(PreLatestData {
+                parents: vec![PreLatestData {
                     block: pre_latest_block,
                     state_update: pre_latest_state_update,
-                }),
+                }],
             }
             .into(),
             state_update: pre_confirmed_state_update.into(),
             aggregated_state_update: aggregated_state_update.into(),
             number: latest.number + 2,
+            // Overlay covers {latest+1, latest+2}, so it sits on the committed head.
+            aggregated_lower_bound: latest.number,
         }
     }
 
@@ -361,13 +384,17 @@ mod tests {
                     number: latest.number + 3,
                     ..Default::default()
                 },
-                pre_latest: Some(pre_latest_data),
+                parents: vec![pre_latest_data],
             }
             .into(),
             state_update: StateUpdate::default().into(),
             aggregated_state_update: StateUpdate::default().into(),
             // Should be latest.number + 2 to be valid.
             number: latest.number + 3,
+            // Derived as if the pre-latest were the immediate parent, so the
+            // view is considered servable and the inconsistent pair trips the
+            // child-of-pre-latest assertion in `get` (see the should_panic test).
+            aggregated_lower_bound: latest.number,
         }
     }
 
@@ -435,16 +462,40 @@ mod tests {
         let result = uut.get(&tx, RpcVersion::V09).unwrap();
         pretty_assertions_sorted::assert_eq_sorted!(result, pending);
 
-        // Pre-latest block will be same as `latest` which is also valid, but in this
-        // case the pre-latest block should be ignored.
-        let pending = valid_pre_confirmed_block_with_pre_latest(&parent);
-        cache.store(pending);
+        // Now the pre-latest block (latest + 1) is itself finalized into storage,
+        // advancing the committed head to it. The same pre-confirmed view
+        // (latest + 2) is still cached, but the now-committed pre-latest must no
+        // longer be reported as pending — we serve the pre-confirmed against the
+        // new head and drop the pre-latest.
+        let child = latest
+            .child_builder()
+            .finalize_with_hash(block_hash_bytes!(b"child hash"));
+        tx.insert_block_header(&child).unwrap();
 
         let result = uut.get(&tx, RpcVersion::V09).unwrap();
         // We got a non-empty pre-confirmed block..
         assert!(!result.pre_confirmed_transactions().is_empty());
         // ..and we did not receive a pre-latest block.
         assert!(result.pre_latest_block().is_none());
+
+        // The execution overlay must be trimmed to the advanced head too, not
+        // just the reported parents: the now-committed pre-latest block's state
+        // diff is dropped, only the pre-confirmed block's own diff remains, and
+        // the overlay is declared to sit on the new committed head. Otherwise
+        // execution would double-apply the just-committed block's diff, which is
+        // already in the committed DB base.
+        let overlay = result.aggregated_state_update();
+        assert_eq!(
+            overlay.contract_nonce(contract_address_bytes!(b"pre latest contract address")),
+            None,
+            "the now-committed pre-latest diff must be dropped from the overlay"
+        );
+        assert_eq!(
+            overlay.contract_nonce(contract_address_bytes!(b"contract address")),
+            Some(contract_nonce_bytes!(b"nonce")),
+            "the pre-confirmed block's own diff must remain in the overlay"
+        );
+        assert_eq!(result.aggregated_lower_bound, latest.number + 1);
     }
 
     #[test]
@@ -647,9 +698,8 @@ mod tests {
     }
 
     #[test]
-    fn pre_confirmed_not_child_of_pre_latest_defaults_to_empty() {
-        // A pre-confirmed block that doesn't chain onto the pre-latest falls back
-        // to an empty pending block.
+    #[should_panic]
+    fn pre_confirmed_is_not_child_of_pre_latest_panics() {
         let cache = Arc::new(PendingDataCache::new());
         let uut = PendingWatcher::new(cache.clone());
 
@@ -678,11 +728,8 @@ mod tests {
         tx.insert_block_header(&latest).unwrap();
 
         let pending = invalid_pre_confirmed_block_with_pre_latest(&latest);
-        cache.store(pending);
-
-        let result = uut.get(&tx, RpcVersion::V09).unwrap();
-
-        pretty_assertions_sorted::assert_eq_sorted!(result, PendingData::empty(&latest));
+        cache.store(pending.clone());
+        let _ = uut.get(&tx, RpcVersion::V09).unwrap();
     }
 
     fn empty_pre_confirmed_block(latest: &BlockHeader) -> PendingData {
@@ -711,11 +758,12 @@ mod tests {
         PendingData {
             blocks: Arc::new(PendingBlocks {
                 pre_confirmed,
-                pre_latest: None,
+                parents: Vec::new(),
             }),
             state_update: StateUpdate::default().into(),
             aggregated_state_update: StateUpdate::default().into(),
             number: latest.number + 1,
+            aggregated_lower_bound: latest.number,
         }
     }
 
@@ -862,5 +910,71 @@ mod tests {
             err,
             "Mismatched transaction and receipt count in pre-confirmed block"
         );
+    }
+
+    /// `find_finalized_tx_data` spans the whole un-committed window: a
+    /// transaction (with its receipt and events) living in a deep ancestor —
+    /// more than one block below the pre-confirmed tip — is found and reported
+    /// against that ancestor's block number.
+    #[test]
+    fn find_finalized_tx_data_spans_deep_ancestors() {
+        use pathfinder_common::event::Event;
+
+        let deep_hash = transaction_hash_bytes!(b"deep tx");
+        let deep_event = Event {
+            from_address: contract_address_bytes!(b"emitter"),
+            keys: vec![],
+            data: vec![],
+        };
+        let deep_ancestor = PreLatestData {
+            block: PreLatestBlock {
+                number: BlockNumber::new_or_panic(7),
+                transactions: vec![Transaction {
+                    hash: deep_hash,
+                    ..Default::default()
+                }],
+                transaction_receipts: vec![(
+                    Receipt {
+                        transaction_hash: deep_hash,
+                        ..Default::default()
+                    },
+                    vec![deep_event.clone()],
+                )],
+                ..Default::default()
+            },
+            state_update: StateUpdate::default(),
+        };
+
+        let pending = PendingData::from_parts(
+            PendingBlocks {
+                pre_confirmed: PreConfirmedBlock {
+                    number: BlockNumber::new_or_panic(10),
+                    ..Default::default()
+                },
+                parents: vec![
+                    deep_ancestor,
+                    PreLatestData {
+                        block: PreLatestBlock {
+                            number: BlockNumber::new_or_panic(9),
+                            ..Default::default()
+                        },
+                        state_update: StateUpdate::default(),
+                    },
+                ],
+            },
+            StateUpdate::default(),
+            StateUpdate::default(),
+            BlockNumber::new_or_panic(10),
+        );
+
+        let found =
+            find_finalized_tx_data(&pending, deep_hash).expect("deep-ancestor tx should be found");
+        assert_eq!(found.block_number, BlockNumber::new_or_panic(7));
+        assert_eq!(found.transaction.hash, deep_hash);
+        assert_eq!(found.receipt.transaction_hash, deep_hash);
+        assert_eq!(found.events, vec![deep_event]);
+
+        // A hash present nowhere in the window is not found.
+        assert!(find_finalized_tx_data(&pending, transaction_hash_bytes!(b"absent")).is_none());
     }
 }

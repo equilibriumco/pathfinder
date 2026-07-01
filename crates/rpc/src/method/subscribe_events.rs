@@ -278,6 +278,12 @@ impl RpcSubscriptionFlow for SubscribeEvents {
             HashSet<(TransactionHash, TxnFinalityStatus)>,
         > = HashMap::new();
 
+        // The highest committed block height seen on the L2-block stream. A block at or
+        // below this has been finalized, and its `sent_updates` were dropped when it
+        // was committed, so it must not be re-emitted as pending. A not-yet-pruned
+        // pending view can briefly show a just committed block as a parent.
+        let mut latest_committed = BlockNumber::GENESIS;
+
         loop {
             tokio::select! {
                 reorg = reorgs.recv() => {
@@ -309,6 +315,7 @@ impl RpcSubscriptionFlow for SubscribeEvents {
                         Ok(block) => {
                             let block_number = block.header.number;
                             let block_hash = block.header.hash;
+                            latest_committed = std::cmp::max(latest_committed, block_number);
 
                             tracing::trace!(%block_number, %block_hash, "Received new block");
 
@@ -402,20 +409,32 @@ impl RpcSubscriptionFlow for SubscribeEvents {
                         return Ok(());
                     }
 
-                    if let Some(pre_latest_block) = pending.pre_latest_block() {
+                    // Emit every un-committed parent block (the immediate
+                    // pre-latest and any deeper ancestors), oldest to newest.
+                    for parent in pending.parent_blocks() {
+                        let pre_latest_block = &parent.block;
                         let pre_latest_block_number = pre_latest_block.number;
+
+                        // A just-committed block can still show up as a parent in a
+                        // not-yet-pruned pending view for a brief moment. Its `sent_updates`
+                        // were dropped when it was committed, so re-emitting it here would
+                        // falsely regress finality to PRE_CONFIRMED for transactions that
+                        // were already emitted as ACCEPTED_ON_L2.
+                        if pre_latest_block_number <= latest_committed {
+                            continue;
+                        }
 
                         let sent_pre_latest_updates = sent_updates_per_block
                             .entry(pre_latest_block_number)
                             .or_default();
 
                         if !sent_pre_latest_updates.is_empty() {
-                            // We've already processed this block as pre-latest (and once it gets
-                            // promoted to pre-latest, it cannot change anymore), nothing to do.
+                            // We've already processed this block as a parent (once it stops being
+                            // the pre-confirmed tip, its contents are frozen), nothing to do.
                             continue;
                         }
 
-                        tracing::trace!(block_number = %pre_latest_block_number, "Pre-latest block update");
+                        tracing::trace!(block_number = %pre_latest_block_number, "Un-committed parent block update");
 
                         if send_event_updates(
                             &pre_latest_block.transaction_receipts,
@@ -500,7 +519,7 @@ mod tests {
 
     use crate::context::{RpcContext, WebsocketContext};
     use crate::jsonrpc::websocket::WebsocketHistory;
-    use crate::jsonrpc::{handle_json_rpc_socket, RpcRouter, RpcSubscriptionFlow};
+    use crate::jsonrpc::{handle_json_rpc_socket, RpcResponse, RpcRouter, RpcSubscriptionFlow};
     use crate::method::subscribe_events::SubscribeEvents;
     use crate::{v06, v07, v08, v09, v10, Notifications, Reorg, RpcVersion};
 
@@ -869,6 +888,83 @@ mod tests {
         };
         assert_eq!(json, expected);
         assert!(sender_rx.is_empty());
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn committed_parent_is_not_re_emitted_as_pending() {
+        let num_blocks = SubscribeEvents::CATCH_UP_BATCH_SIZE + 10;
+        let parent = num_blocks;
+        let tip = num_blocks + 1;
+        let (router, pending_data_cache) = setup(num_blocks, RpcVersion::V09).await;
+        let (sender_tx, mut sender_rx) = mpsc::channel(1024);
+        let (receiver_tx, receiver_rx) = mpsc::channel(1024);
+        handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
+
+        // "0x16" (block 22, from the DB) is a catch-up sync point
+        // `parent` and `tip` are the two pending blocks we care about.
+        let params = serde_json::json!({
+            "block_id": {"block_number": 0},
+            "keys": [["0x16", format!("{parent:x}"), format!("{tip:x}")]],
+            "finality_status": "PRE_CONFIRMED",
+        });
+        receiver_tx
+            .send(Ok(Message::Text(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "starknet_subscribeEvents",
+                    "params": params
+                })
+                .to_string()
+                .into(),
+            )))
+            .await
+            .unwrap();
+        let subscription_id = match sender_rx.recv().await.unwrap().unwrap() {
+            Message::Text(json) => {
+                let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+                json["result"].as_str().unwrap().parse().unwrap()
+            }
+            _ => panic!("Expected text message"),
+        };
+
+        // Catch-up emits block 22 (sync point).
+        assert_eq!(
+            recv(&mut sender_rx).await,
+            sample_event_message(0x16, subscription_id, RpcVersion::V09)
+        );
+
+        // Pending window: tip with the parent below it. The tip is emitted first,
+        // then the parent, both PRE_CONFIRMED (no block hash).
+        pending_data_cache.store(sample_pending_with_parent(tip, parent));
+        assert_eq!(
+            recv(&mut sender_rx).await,
+            sample_event_message_without_block_hash(tip, subscription_id)
+        );
+        assert_eq!(
+            recv(&mut sender_rx).await,
+            sample_event_message_without_block_hash(parent, subscription_id)
+        );
+
+        // The parent commits: its event is re-sent as ACCEPTED_ON_L2 and its
+        // sent set is dropped.
+        router
+            .context
+            .notifications
+            .l2_blocks
+            .send(sample_block(parent).into())
+            .unwrap();
+        assert_eq!(
+            recv(&mut sender_rx).await,
+            sample_event_message(parent, subscription_id, RpcVersion::V09)
+        );
+
+        // A not-yet-pruned pending view still lists the now-committed parent. It
+        // must NOT be re-emitted as PRE_CONFIRMED. (Don't commit the tip to
+        // disambiguate — that would exercise the unguarded pre-confirmed/tip path
+        // and mask the check.)
+        pending_data_cache.store(sample_pending_with_parent(tip, parent));
+        assert_recv_nothing(&mut sender_rx).await;
     }
 
     #[test_log::test(tokio::test)]
@@ -1341,6 +1437,47 @@ mod tests {
             transactions: vec![sample_transaction(block_number)],
             ..Default::default()
         }
+    }
+
+    /// A pre-confirmed tip with with its un-committed parent.
+    fn sample_pending_with_parent(tip: u64, parent: u64) -> crate::PendingData {
+        let parent = crate::PendingData::try_from_pre_confirmed_block(
+            sample_pre_confirmed_block(parent).into(),
+            BlockNumber::new_or_panic(parent),
+        )
+        .unwrap()
+        .to_pre_latest_data();
+        let tip_view = crate::PendingData::try_from_pre_confirmed_block(
+            sample_pre_confirmed_block(tip).into(),
+            BlockNumber::new_or_panic(tip),
+        )
+        .unwrap();
+        let blocks = pathfinder_pending_data::PendingBlocks {
+            pre_confirmed: tip_view.blocks.pre_confirmed.clone(),
+            parents: vec![parent],
+        };
+        crate::PendingData {
+            blocks: blocks.into(),
+            state_update: tip_view.state_update.clone(),
+            aggregated_state_update: tip_view.aggregated_state_update.clone(),
+            number: BlockNumber::new_or_panic(tip),
+            aggregated_lower_bound: BlockNumber::GENESIS,
+        }
+    }
+
+    async fn recv(rx: &mut mpsc::Receiver<Result<Message, RpcResponse>>) -> serde_json::Value {
+        let res = rx.recv().await.unwrap().unwrap();
+        match res {
+            Message::Text(json) => serde_json::from_str(&json).unwrap(),
+            _ => panic!("Expected text message"),
+        }
+    }
+
+    async fn assert_recv_nothing(rx: &mut mpsc::Receiver<Result<Message, RpcResponse>>) {
+        let timeout = std::time::Duration::from_millis(100);
+        tokio::time::timeout(timeout, rx.recv())
+            .await
+            .expect_err("Message received when none was expected");
     }
 
     fn sample_event_message(
