@@ -216,6 +216,12 @@ impl RpcSubscriptionFlow for SubscribeNewTransactions {
             HashSet<(TransactionHash, TxnFinalityStatusWithoutL1Accepted)>,
         > = HashMap::new();
 
+        // The highest committed block height seen on the L2-block stream. A block at or
+        // below this has been finalized, and its `sent_updates` were dropped when it
+        // was committed, so it must not be re-emitted as pending. A not-yet-pruned
+        // pending view can briefly show a just committed block as a parent.
+        let mut latest_committed = BlockNumber::GENESIS;
+
         // Transactions sent with Received status are kept separately,
         // because their lifetime doesn't depend on blocks (they
         // disappear spontaneously from the tracker as time passes).
@@ -256,6 +262,7 @@ impl RpcSubscriptionFlow for SubscribeNewTransactions {
                         }
                         Ok(block) => {
                             tracing::trace!(block_number=%block.header.number, "New block header");
+                            latest_committed = std::cmp::max(latest_committed, block.header.number);
 
                             // We won't be needing to keep track of updates for this block anymore,
                             // so we remove it from the map.
@@ -332,20 +339,32 @@ impl RpcSubscriptionFlow for SubscribeNewTransactions {
                         return Ok(());
                     }
 
-                    if let Some(pre_latest_block) = pending.pre_latest_block() {
+                    // Emit every un-committed parent block (the immediate
+                    // pre-latest and any deeper ancestors), oldest to newest.
+                    for parent in pending.parent_blocks() {
+                        let pre_latest_block = &parent.block;
                         let pre_latest_block_number = pre_latest_block.number;
+
+                        // A just-committed block can still show up as a parent in a
+                        // not-yet-pruned pending view for a brief moment. Its `sent_updates`
+                        // were dropped when it was committed, so re-emitting it here would
+                        // falsely regress finality to PRE_CONFIRMED for transactions that
+                        // were already emitted as ACCEPTED_ON_L2.
+                        if pre_latest_block_number <= latest_committed {
+                            continue;
+                        }
 
                         let sent_pre_latest_updates = sent_updates_per_block
                             .entry(pre_latest_block_number)
                             .or_default();
 
                         if !sent_pre_latest_updates.is_empty() {
-                            // We've already processed this block as pre-latest (and once it gets
-                            // promoted to pre-latest, it cannot change anymore), nothing to do.
+                            // We've already processed this block as a parent (once it stops being
+                            // the pre-confirmed tip, its contents are frozen), nothing to do.
                             continue;
                         }
 
-                        tracing::trace!(block_number = %pre_latest_block_number, "Pre-latest block update");
+                        tracing::trace!(block_number = %pre_latest_block_number, "Un-committed parent block update");
 
                         let pre_latest_txs = pre_latest_block
                             .transactions
@@ -1077,6 +1096,84 @@ mod tests {
     }
 
     #[test_log::test(tokio::test)]
+    async fn committed_parent_is_not_re_emitted_as_pending() {
+        let Setup {
+            tx,
+            mut rx,
+            pending_data_cache,
+            submission_tracker: _,
+            notifications,
+        } = setup();
+        tx.send(Ok(Message::Text(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "starknet_subscribeNewTransactions",
+                "params": { "finality_status": ["ACCEPTED_ON_L2", "PRE_CONFIRMED"] }
+            })
+            .to_string()
+            .into(),
+        )))
+        .await
+        .unwrap();
+        let response = rx.recv().await.unwrap().unwrap();
+        let subscription_id = match response {
+            Message::Text(json) => {
+                let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+                json["result"].as_str().unwrap().parse().unwrap()
+            }
+            _ => panic!("Expected text message"),
+        };
+        assert_recv_nothing(&mut rx).await;
+
+        // Tip block 2 (0x222) with block 1 (0x111) as an un-committed parent. The tip
+        // is emitted first, then the parent — both PRE_CONFIRMED.
+        pending_data_cache.store(sample_pending_with_parent(
+            BlockNumber::new_or_panic(2),
+            vec![(contract_address!("0x22"), transaction_hash!("0x222"))],
+            BlockNumber::new_or_panic(1),
+            vec![(contract_address!("0x11"), transaction_hash!("0x111"))],
+        ));
+        assert_eq!(
+            recv(&mut rx).await,
+            sample_pre_confirmed_transaction_message("0x22", "0x222", subscription_id)
+        );
+        assert_eq!(
+            recv(&mut rx).await,
+            sample_pre_confirmed_transaction_message("0x11", "0x111", subscription_id)
+        );
+        assert_recv_nothing(&mut rx).await;
+
+        // Block 1 commits: 0x111 is re-sent as ACCEPTED_ON_L2 and its sent-set is
+        // dropped.
+        notifications
+            .l2_blocks
+            .send(
+                sample_block(
+                    BlockNumber::new_or_panic(1),
+                    vec![(contract_address!("0x11"), transaction_hash!("0x111"))],
+                )
+                .into(),
+            )
+            .unwrap();
+        assert_eq!(
+            recv(&mut rx).await,
+            sample_transaction_message("0x11", "0x111", subscription_id)
+        );
+        assert_recv_nothing(&mut rx).await;
+
+        // A not-yet-pruned pending view still lists the now-committed block 1 as a
+        // parent. It must NOT be re-emitted as PRE_CONFIRMED.
+        pending_data_cache.store(sample_pending_with_parent(
+            BlockNumber::new_or_panic(2),
+            vec![(contract_address!("0x22"), transaction_hash!("0x222"))],
+            BlockNumber::new_or_panic(1),
+            vec![(contract_address!("0x11"), transaction_hash!("0x111"))],
+        ));
+        assert_recv_nothing(&mut rx).await;
+    }
+
+    #[test_log::test(tokio::test)]
     async fn pre_confirmed_followed_by_block_with_filter_on_finality_status() {
         let Setup {
             tx,
@@ -1335,6 +1432,28 @@ mod tests {
             ..Default::default()
         };
         PendingData::try_from_pre_confirmed_block(pre_confirmed_block.into(), block_number).unwrap()
+    }
+
+    /// A pre-confirmed tip with with its un-committed parent.
+    fn sample_pending_with_parent(
+        tip: BlockNumber,
+        tip_txs: Vec<(ContractAddress, TransactionHash)>,
+        parent: BlockNumber,
+        parent_txs: Vec<(ContractAddress, TransactionHash)>,
+    ) -> PendingData {
+        let parent = sample_pre_confirmed_block(parent, parent_txs).to_pre_latest_data();
+        let tip_view = sample_pre_confirmed_block(tip, tip_txs);
+        let blocks = pathfinder_pending_data::PendingBlocks {
+            pre_confirmed: tip_view.blocks.pre_confirmed.clone(),
+            parents: vec![parent],
+        };
+        PendingData {
+            blocks: blocks.into(),
+            state_update: tip_view.state_update.clone(),
+            aggregated_state_update: tip_view.aggregated_state_update.clone(),
+            number: tip,
+            aggregated_lower_bound: BlockNumber::GENESIS,
+        }
     }
 
     fn sample_received_transaction_message(

@@ -326,7 +326,9 @@ pub async fn get_events(
                     // We have a full page from the database, but there might be more pending
                     // events. Return a continuation token for the pending block.
                     let pending_block = pending
-                        .pre_latest_block_number()
+                        .parent_blocks()
+                        .next()
+                        .map(|parent| parent.block.number)
                         .unwrap_or_else(|| pending.pre_confirmed_block_number());
                     Some(ContinuationToken {
                         block_number: pending_block,
@@ -368,9 +370,30 @@ fn get_pending_events(
 
     let pending_block = pending.pre_confirmed_block_number();
 
-    // If we have a continuation token and it points to a pre-latest/pending block,
-    // we use its values. Otherwise we take whatever events we have from pending
-    // data, if the continuation token is valid (not pointing past pending block).
+    // The un-committed window in emission order (oldest to newest): every
+    // un-committed parent block, then the pre-confirmed block last.
+    let mut blocks: Vec<(BlockNumber, &[crate::pending::TxnReceiptAndEvents])> = pending
+        .parent_blocks()
+        .map(|parent| {
+            (
+                parent.block.number,
+                parent.block.transaction_receipts.as_slice(),
+            )
+        })
+        .collect();
+    blocks.push((
+        pending_block,
+        pending.pre_confirmed_tx_receipts_and_events(),
+    ));
+
+    let oldest_block = blocks
+        .first()
+        .map(|(number, _)| *number)
+        .unwrap_or(pending_block);
+
+    // If we have a continuation token and it points into the un-committed window,
+    // resume from it. Otherwise start at the oldest un-committed block (validating
+    // the token doesn't go beyond the pre-confirmed block).
     let (start_block, start_offset) = match continuation_token {
         Some(ct) if ct.block_number > pending_block => {
             return Err(GetEventsError::InvalidContinuationToken)
@@ -378,96 +401,59 @@ fn get_pending_events(
         Some(ct) if pending.is_pre_latest_or_pre_confirmed(ct.block_number) => {
             (ct.block_number, ct.offset)
         }
-        _ => (
-            pending.pre_latest_block_number().unwrap_or(pending_block),
-            0,
-        ),
+        _ => (oldest_block, 0),
     };
 
     let mut events = Vec::new();
+    let mut blocks = blocks
+        .into_iter()
+        .skip_while(|(number, _)| *number < start_block)
+        .peekable();
+    let mut is_first = true;
 
-    let new_continuation_token = match pending.pre_latest_block() {
-        Some(pre_latest_block) if pre_latest_block.number == start_block => {
-            // Fetch from pre-latest and pre-confirmed.
-            let pre_latest_events_exhausted = match_and_fill_events(
-                &pre_latest_block.transaction_receipts,
-                &mut events,
-                start_offset,
-                max_amount,
-                &keys,
-                addresses,
-                pre_latest_block.number,
-            );
+    // Walk the window from oldest to newest, filling the page. The continuation
+    // token, when a page fills, points at the next unread position: the same block
+    // at a higher offset if it still has events, otherwise the next block at offset
+    // 0.
+    let new_continuation_token = loop {
+        let Some((number, receipts)) = blocks.next() else {
+            // Scanned the whole window without filling the page.
+            break None;
+        };
 
-            let taken_from_pre_latest = events.len();
+        // The resume offset only applies to the first block we touch, every next
+        // block is read from its start.
+        let block_offset = if is_first { start_offset } else { 0 };
+        is_first = false;
 
-            if taken_from_pre_latest == max_amount {
-                let continuation_token = if pre_latest_events_exhausted {
-                    // We exhausted the pre-latest block but there might be more events in
-                    // the pending block.
-                    ContinuationToken {
-                        block_number: pending_block,
-                        offset: 0,
-                    }
-                } else {
-                    // We've filled up a page but still have more events in the pre-latest
-                    // block.
-                    ContinuationToken {
-                        block_number: pre_latest_block.number,
-                        offset: start_offset + max_amount,
-                    }
-                };
+        let before = events.len();
+        let remaining = max_amount - before;
+        let exhausted = match_and_fill_events(
+            receipts,
+            &mut events,
+            block_offset,
+            remaining,
+            &keys,
+            addresses,
+            number,
+        );
+        let taken = events.len() - before;
 
-                return Ok((events, Some(continuation_token)));
-            }
-
-            let amount_to_take = max_amount - taken_from_pre_latest;
-
-            let pending_events_exhausted = match_and_fill_events(
-                pending.pre_confirmed_tx_receipts_and_events(),
-                &mut events,
-                // Continuation token was used on pre-latest block, no offset for pending.
-                0,
-                amount_to_take,
-                &keys,
-                addresses,
-                pending_block,
-            );
-
-            if pending_events_exhausted {
-                None
+        // match_and_fill_events() is guaranteed to stop at max_amount
+        if events.len() == max_amount {
+            break if !exhausted {
+                // More events remain in this block.
+                Some(ContinuationToken {
+                    block_number: number,
+                    offset: block_offset + taken,
+                })
             } else {
-                let offset_in_pending = events.len() - taken_from_pre_latest;
-                // We filled up a page but still have more events in the pending block.
-                let continuation_token = ContinuationToken {
-                    block_number: pending_block,
-                    offset: offset_in_pending,
-                };
-                Some(continuation_token)
-            }
-        }
-        _ => {
-            // Fetch from pending/pre-confirmed block only.
-            let pending_events_exhausted = match_and_fill_events(
-                pending.pre_confirmed_tx_receipts_and_events(),
-                &mut events,
-                start_offset,
-                max_amount,
-                &keys,
-                addresses,
-                pending_block,
-            );
-
-            if pending_events_exhausted {
-                None
-            } else {
-                // We filled up a page but still have more events in the pending block.
-                let continuation_token = ContinuationToken {
-                    block_number: pending_block,
-                    offset: start_offset + events.len(),
-                };
-                Some(continuation_token)
-            }
+                // This block is exhausted; resume at the next block, if any.
+                blocks.peek().map(|(next_number, _)| ContinuationToken {
+                    block_number: *next_number,
+                    offset: 0,
+                })
+            };
         }
     };
 
@@ -1224,6 +1210,89 @@ mod tests {
             };
             let error = get_events(context, input, RPC_VERSION).await.unwrap_err();
             assert!(matches!(error, GetEventsError::Custom(_)));
+        }
+
+        #[test]
+        fn get_pending_events_spans_deep_ancestors() {
+            use pathfinder_common::event::Event;
+            use pathfinder_common::macro_prelude::*;
+            use pathfinder_common::receipt::Receipt;
+            use pathfinder_pending_data::{
+                PendingBlocks,
+                PendingData,
+                PreConfirmedBlock,
+                PreLatestBlock,
+                PreLatestData,
+            };
+
+            fn bn(n: u64) -> BlockNumber {
+                BlockNumber::new_or_panic(n)
+            }
+
+            // One event per block, each from a distinct emitter.
+            let event = |from_address| {
+                vec![(
+                    Receipt::default(),
+                    vec![Event {
+                        from_address,
+                        keys: vec![],
+                        data: vec![],
+                    }],
+                )]
+            };
+            let parent = |n: u64, from_address| PreLatestData {
+                block: PreLatestBlock {
+                    number: bn(n),
+                    transaction_receipts: event(from_address),
+                    ..Default::default()
+                },
+                state_update: StateUpdate::default(),
+            };
+
+            let blocks = PendingBlocks {
+                pre_confirmed: PreConfirmedBlock {
+                    number: bn(10),
+                    transaction_receipts: event(contract_address_bytes!(b"10")),
+                    ..Default::default()
+                },
+                parents: vec![
+                    parent(7, contract_address_bytes!(b"7")),
+                    parent(8, contract_address_bytes!(b"8")),
+                    parent(9, contract_address_bytes!(b"9")),
+                ],
+            };
+            let pending = PendingData::from_parts(
+                blocks,
+                StateUpdate::default(),
+                StateUpdate::default(),
+                bn(10),
+            );
+
+            let (events, ct) =
+                get_pending_events(&pending, 100, &[], &HashSet::new(), None).unwrap();
+            let block_numbers: Vec<_> = events.iter().map(|e| e.block_number).collect();
+            // Deep ancestors 7 and 8, immediate parent 9, then pre-confirmed 10.
+            assert_eq!(
+                block_numbers,
+                vec![Some(bn(7)), Some(bn(8)), Some(bn(9)), Some(bn(10))]
+            );
+            assert!(ct.is_none());
+
+            // Paging across the window: a chunk of 2 returns blocks 7 and 8 and a
+            // continuation token resuming at block 9.
+            let (page, ct) = get_pending_events(&pending, 2, &[], &HashSet::new(), None).unwrap();
+            assert_eq!(
+                page.iter().map(|e| e.block_number).collect::<Vec<_>>(),
+                vec![Some(bn(7)), Some(bn(8))]
+            );
+            let ct = ct.expect("more events remain, so a continuation token is returned");
+            let (rest, ct) =
+                get_pending_events(&pending, 100, &[], &HashSet::new(), Some(ct)).unwrap();
+            assert_eq!(
+                rest.iter().map(|e| e.block_number).collect::<Vec<_>>(),
+                vec![Some(bn(9)), Some(bn(10))]
+            );
+            assert!(ct.is_none());
         }
 
         #[tokio::test]

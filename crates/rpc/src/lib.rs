@@ -896,7 +896,7 @@ pub mod test_utils {
                 starknet_version: StarknetVersion::V_0_13_2,
                 l1_da_mode: L1DataAvailabilityMode::Calldata,
             },
-            pre_latest: None,
+            parents: Vec::new(),
         };
 
         // The class definitions must be inserted into the database.
@@ -1242,10 +1242,10 @@ pub mod test_utils {
                 starknet_version: StarknetVersion::V_0_13_2,
                 l1_da_mode: L1DataAvailabilityMode::Calldata,
             },
-            pre_latest: Some(PreLatestData {
+            parents: vec![PreLatestData {
                 block: pre_latest_block,
                 state_update: pre_latest_state_update.clone(),
-            }),
+            }],
         };
 
         let aggregated_state_update = pre_latest_state_update
