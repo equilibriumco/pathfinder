@@ -214,66 +214,8 @@ impl PendingData {
         })
     }
 
-    /// Same as [`Self::try_from_pre_confirmed_block`] but also accepts an
-    /// optional pre-latest parent: a pre-confirmed block at a height already
-    /// past consensus. When present, the pre-confirmed block must be its child,
-    /// and its parent hash is our committed head.
-    pub fn try_from_pre_confirmed_and_pre_latest(
-        pre_confirmed_block: Box<starknet_gateway_types::reply::PreConfirmedBlock>,
-        pre_confirmed_block_number: BlockNumber,
-        pre_latest: Option<
-            Box<(
-                BlockNumber,
-                starknet_gateway_types::reply::PreConfirmedBlock,
-                BlockHash,
-            )>,
-        >,
-    ) -> anyhow::Result<Self> {
-        let Some(pre_latest) = pre_latest else {
-            return Self::try_from_pre_confirmed_block(
-                pre_confirmed_block,
-                pre_confirmed_block_number,
-            );
-        };
-
-        let (pre_latest_block_number, pre_latest_block, parent_hash) = *pre_latest;
-        anyhow::ensure!(
-            pre_latest_block_number + 1 == pre_confirmed_block_number,
-            "Pre-confirmed block {pre_confirmed_block_number} is not the child of pre-latest \
-             {pre_latest_block_number}",
-        );
-
-        let (block, state_update) =
-            convert_pre_confirmed_block(Box::new(pre_latest_block), pre_latest_block_number)?;
-        let parent = PreLatestData {
-            block: PreLatestBlock {
-                number: pre_latest_block_number,
-                parent_hash,
-                l1_gas_price: block.l1_gas_price,
-                l1_data_gas_price: block.l1_data_gas_price,
-                l2_gas_price: block.l2_gas_price,
-                sequencer_address: block.sequencer_address,
-                status: Status::Pending,
-                timestamp: block.timestamp,
-                starknet_version: block.starknet_version,
-                l1_da_mode: block.l1_da_mode,
-                transactions: block.transactions,
-                transaction_receipts: block.transaction_receipts,
-            },
-            state_update: StateUpdate::clone(&state_update),
-        };
-
-        let aggregated_lower_bound =
-            aggregated_lower_bound_from_lowest_covered(pre_latest_block_number);
-        Self::from_window(
-            pre_confirmed_block,
-            pre_confirmed_block_number,
-            vec![parent],
-            aggregated_lower_bound,
-        )
-    }
-
-    /// Build a pending view over a multi-block window.
+    /// Build a pending view whose aggregated overlay spans a multi-block
+    /// window.
     ///
     /// `parents` are all uncommitted blocks between the committed head
     /// (`aggregated_lower_bound`) and the preconfirmed tip (`number`). The
