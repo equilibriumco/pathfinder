@@ -70,19 +70,39 @@ fi
 
 # Run an instant PromQL query, returning its result vector (.data.result)
 prom_query() {
-    local query="$1" response status
-    response=$(curl -sS -g -G ${AUTH[@]+"${AUTH[@]}"} \
-        --data-urlencode "query=${query}" \
-        "${PROM_URL%/}/api/v1/query") \
-        || { echo "error: could not reach Prometheus at ${PROM_URL}" >&2; exit 1; }
+    local query="$1" endpoint response http_code body status
+    endpoint="${PROM_URL%/}/api/v1/query"
 
-    status=$(printf '%s' "$response" | jq -r '.status // "error"')
+    # curl exits non-zero only when it can't reach the server at all.
+    response=$(curl -sS -g -G ${AUTH[@]+"${AUTH[@]}"} \
+        -w $'\n%{http_code}' \
+        --data-urlencode "query=${query}" \
+        "$endpoint") \
+        || { echo "error: could not reach Prometheus at ${PROM_URL}" >&2
+             echo "  check the URL and that the server is up and reachable." >&2
+             exit 1; }
+    http_code=${response##*$'\n'}
+    body=${response%$'\n'*}
+
+    # The Prometheus API always answers with JSON, even for a rejected query.
+    # A non-JSON body means --url isn't pointing at that API.
+    if ! printf '%s' "$body" | jq -e . >/dev/null 2>&1; then
+        echo "error: ${endpoint} is not a Prometheus API endpoint (HTTP ${http_code})." >&2
+        case "$http_code" in
+            404) echo "  pass the Prometheus base URL, e.g. http://host:9090 — not a path or another service." >&2 ;;
+            401|403) echo "  authentication is required — set PROM_BEARER_TOKEN or PROM_BASIC_AUTH." >&2 ;;
+            *)   echo "  is --url really pointing at Prometheus?" >&2 ;;
+        esac
+        exit 1
+    fi
+
+    status=$(printf '%s' "$body" | jq -r '.status // "error"')
     if [ "$status" != "success" ]; then
-        echo "error: query rejected by Prometheus: $(printf '%s' "$response" | jq -r '.error // "unknown"')" >&2
+        echo "error: Prometheus rejected the query: $(printf '%s' "$body" | jq -r '.error // "unknown error"')" >&2
         echo "  query: ${query}" >&2
         exit 1
     fi
-    printf '%s' "$response" | jq '.data.result'
+    printf '%s' "$body" | jq '.data.result'
 }
 
 # Total calls and error counts over the window; latency quantiles from the histogram
@@ -91,6 +111,15 @@ errors=$(prom_query "sum by (method, version, error_kind) (increase(rpc_method_c
 p50=$(prom_query "histogram_quantile(0.50, sum by (le, method, version) (rate(rpc_method_calls_duration_seconds_bucket[${WINDOW}])))")
 p95=$(prom_query "histogram_quantile(0.95, sum by (le, method, version) (rate(rpc_method_calls_duration_seconds_bucket[${WINDOW}])))")
 p99=$(prom_query "histogram_quantile(0.99, sum by (le, method, version) (rate(rpc_method_calls_duration_seconds_bucket[${WINDOW}])))")
+
+# A reachable Prometheus with no rpc_* samples usually means it isn't scraping a
+# node that emits them: an older Pathfinder, a scrape target that's down, or a
+# window longer than retention. Warn rather than hand back a silently empty file.
+if [ "$(printf '%s' "$calls" | jq 'length')" = "0" ]; then
+    echo "warning: no rpc_method_calls_total data in the last ${WINDOW}." >&2
+    echo "  the node may predate these metrics, may not be scraped by this Prometheus," >&2
+    echo "  or ${WINDOW} may exceed its retention. the export will be empty." >&2
+fi
 
 # Shape the result vectors into the export document
 jq -n \
