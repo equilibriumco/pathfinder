@@ -3,12 +3,12 @@ default:
 
 test $RUST_BACKTRACE="1" *args="": build-pathfinder-release
     cargo nextest run --no-fail-fast --all-targets --features p2p --workspace --locked \
-    -E 'not (test(/^p2p_network::sync::sync_handlers::tests::prop/) | test(/^consensus::inner::p2p_task::handler_proptest/) | test(/^test::consensus_[34]_nodes/))' \
+    -E 'not (test(/^p2p_network::sync::sync_handlers::tests::prop/) | test(/^test::consensus_[34]_nodes/))' \
     {{args}}
 
 test-all-features $RUST_BACKTRACE="1" *args="": build-pathfinder-release
     cargo nextest run --no-fail-fast --all-targets --all-features --workspace --locked \
-    -E 'not (test(/^p2p_network::sync::sync_handlers::tests::prop/) | test(/^consensus::inner::p2p_task::handler_proptest/) | test(/^test::consensus_[34]_nodes/))' \
+    -E 'not (test(/^p2p_network::sync::sync_handlers::tests::prop/) | test(/^test::consensus_[34]_nodes/))' \
     {{args}}
 
 test-consensus $RUST_BACKTRACE="1" *args="": build-pathfinder build-feeder-gateway
@@ -18,11 +18,6 @@ test-consensus $RUST_BACKTRACE="1" *args="": build-pathfinder build-feeder-gatew
 proptest-sync-handlers $RUST_BACKTRACE="1" *args="":
     cargo nextest run --no-fail-fast --retries 2 --all-targets --features p2p --workspace --locked \
     -E 'test(/^p2p_network::sync::sync_handlers::tests::prop/)' \
-    {{args}}
-
-proptest-consensus-handler $RUST_BACKTRACE="1" *args="":
-    cargo nextest run --no-fail-fast --retries 2 --all-targets --features p2p --workspace --locked \
-    -E 'test(/^consensus::inner::p2p_task::handler_proptest/)' \
     {{args}}
 
 build:
