@@ -316,7 +316,6 @@ mod tests {
     fn valid_pre_confirmed_block_with_pre_latest(latest: &BlockHeader) -> PendingData {
         let pre_latest_block = PreLatestBlock {
             number: latest.number + 1,
-            parent_hash: latest.hash,
             l1_gas_price: Default::default(),
             l1_data_gas_price: Default::default(),
             l2_gas_price: Default::default(),
@@ -375,7 +374,6 @@ mod tests {
         let pre_latest_block = PreLatestBlock {
             // These are okay.
             number: latest.number + 1,
-            parent_hash: latest.hash,
             ..Default::default()
         };
         let pre_latest_data = PreLatestData {

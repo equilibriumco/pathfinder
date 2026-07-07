@@ -1079,7 +1079,6 @@ pub mod test_utils {
         let pre_latest_block = PreLatestBlock {
             // Pre-latest is between current latest and pre-confirmed.
             number: latest.number + 1,
-            parent_hash: latest.hash,
             l1_gas_price: GasPrices {
                 price_in_wei: GasPrice::from_be_slice(b"gas price").unwrap(),
                 price_in_fri: GasPrice::from_be_slice(b"strk gas price").unwrap(),

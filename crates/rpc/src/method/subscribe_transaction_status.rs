@@ -1132,7 +1132,6 @@ mod tests {
                         vec![crate::pending::PreLatestData {
                             block: crate::pending::PreLatestBlock {
                                 number: BlockNumber::GENESIS + 2,
-                                parent_hash: BlockHash(Felt::from_u64(2)),
                                 transaction_receipts: vec![
                                     (
                                         Receipt {
