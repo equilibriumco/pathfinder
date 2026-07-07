@@ -340,12 +340,6 @@ impl PendingData {
         }
     }
 
-    /// Synthesise a `BlockHeader` from the immediate parent block, if it
-    /// exists.
-    pub fn pre_latest_header(&self) -> Option<BlockHeader> {
-        self.blocks.immediate_parent().map(|data| data.header())
-    }
-
     pub fn pending_block(&self) -> Arc<PendingBlocks> {
         Arc::clone(&self.blocks)
     }
