@@ -304,7 +304,8 @@ pub async fn get_events(
             offset: ct.offset,
         });
 
-        // TODO: Verify the added `| None` in review.
+        // An absent `to_block` is unbounded, so it reaches into the pending
+        // range just like an explicit pre-confirmed upper bound does.
         let append_from_pending =
             db_ct.is_none() && matches!(to_block_id, Some(PreConfirmed) | None);
 
