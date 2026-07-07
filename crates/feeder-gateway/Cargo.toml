@@ -21,6 +21,7 @@ pathfinder-storage = { path = "../storage" }
 primitive-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["arbitrary_precision", "raw_value"] }
+serde_with = { workspace = true }
 starknet-gateway-types = { path = "../gateway-types" }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 tracing = { workspace = true }

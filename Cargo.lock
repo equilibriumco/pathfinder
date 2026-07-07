@@ -5455,6 +5455,7 @@ dependencies = [
  "primitive-types 0.14.0",
  "serde",
  "serde_json",
+ "serde_with",
  "starknet-gateway-types",
  "tokio",
  "tracing",

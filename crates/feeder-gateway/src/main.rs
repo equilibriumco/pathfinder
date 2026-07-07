@@ -26,7 +26,7 @@ use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -63,6 +63,12 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{fmt, EnvFilter};
 use warp::Filter;
 
+mod progress;
+use progress::Progress;
+
+mod preconfirmed;
+use preconfirmed::resolve_preconfirmed_response;
+
 #[derive(Parser)]
 #[command(version)]
 struct Cli {
@@ -83,6 +89,14 @@ struct Cli {
         action=ArgAction::Set
     )]
     pub wait_for_marker_file: Option<PathBuf>,
+    #[arg(
+        long,
+        long_help = "Latest block starting value. Overrides the database \
+                     value, for simulating behavior after full sync.",
+        value_name = "BLOCK_NUMBER",
+        action=ArgAction::Set
+    )]
+    pub latest: Option<u64>,
     #[command(flatten)]
     pub reorg: ReorgCli,
 }
@@ -258,6 +272,7 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
         })
     });
     let reorged = Arc::new(AtomicBool::new(false));
+    let progress = Arc::new(Mutex::new(Progress::new(cli.latest)));
 
     fn maybe_chain(storage_rx: Receiver<Option<(Storage, Chain)>>) -> Option<Chain> {
         storage_rx.borrow().clone().map(|(_, chain)| chain)
@@ -325,23 +340,59 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
         }
     }
 
+    #[derive(Debug, Deserialize)]
+    struct PreconfirmedBlockParam {
+        #[serde(default, rename = "blockNumber")]
+        block_number: Option<String>,
+        #[serde(default, rename = "blockIdentifier")]
+        block_identifier: Option<String>,
+    }
+
+    impl PreconfirmedBlockParam {
+        fn try_get_number(&self) -> Result<BlockId, ()> {
+            if let Some(n) = &self.block_number {
+                if n == "latest" {
+                    Ok(BlockId::Latest)
+                } else {
+                    let n: u64 = n.parse().map_err(|_| ())?;
+                    Ok(BlockId::Number(BlockNumber::new_or_panic(n)))
+                }
+            } else {
+                Err(())
+            }
+        }
+
+        fn get_identifier(&self) -> String {
+            self.block_identifier.clone().unwrap_or_default()
+        }
+    }
+
     let get_block = warp::path("get_block")
         .and(warp::query::<BlockIdParam>())
         .and_then({
             let storage_rx = storage_rx.clone();
             let reorg_config = reorg_config.clone();
             let reorged = reorged.clone();
+            let progress = progress.clone();
 
             move |block_id: BlockIdParam| {
                 let storage_rx = storage_rx.clone();
                 let reorg_config = reorg_config.clone();
                 let reorged = reorged.clone();
+                let progress = progress.clone();
 
                 async move {
                     let header_only = block_id.header_only.unwrap_or(false);
 
                     match block_id.try_into() {
-                        Ok(block_id) => {
+                        Ok(mut block_id) => {
+                            if block_id == BlockId::Latest {
+                                let mut state = progress.lock().unwrap();
+                                if let Some(latest_override) = state.timed_latest() {
+                                    block_id = BlockId::Number(BlockNumber::new_or_panic(latest_override));
+                                }
+                            }
+
                             let Some(storage) = maybe_storage(storage_rx) else {
                                 return Err(storage_unavailable_rejection());
                             };
@@ -428,17 +479,29 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
             let storage_rx = storage_rx.clone();
             let reorg_config = reorg_config.clone();
             let reorged = reorged.clone();
+            let progress = progress.clone();
 
             move |block_id: BlockIdParam| {
                 let storage_rx = storage_rx.clone();
                 let reorg_config = reorg_config.clone();
                 let reorged = reorged.clone();
+                let progress = progress.clone();
                 async move {
                     let include_block = block_id.include_block.unwrap_or(false);
                     let include_signature = block_id.include_signature.unwrap_or(false);
 
                     match block_id.try_into() {
                         Ok(block_id) => {
+                            if let BlockId::Number(bn) = block_id {
+                                let mut state = progress.lock().unwrap();
+                                if let Some(latest_override) = state.timed_latest() {
+                                    if bn.get() > latest_override {
+                                        let error = serde_json::json!({"code": "StarknetErrorCode.BLOCK_NOT_FOUND", "message": "Block number not found"});
+                                        return Ok(warp::reply::with_status(warp::reply::json(&error), warp::http::StatusCode::BAD_REQUEST))
+                                    }
+                                }
+                            }
+
                             let Some(storage) = maybe_storage(storage_rx) else {
                                 return Err(storage_unavailable_rejection());
                             };
@@ -498,11 +561,65 @@ async fn serve(cli: Cli, storage_rx: Receiver<Option<(Storage, Chain)>>) -> anyh
         ))
     });
 
-    let get_preconfirmed_block = warp::path("get_preconfirmed_block").then(|| async {
-        let block = include_str!("../fixtures/get_preconfirmed_block.json");
-        let json: serde_json::Value = serde_json::from_str(block).unwrap();
-        warp::reply::json(&json)
-    });
+    let get_preconfirmed_block = warp::path("get_preconfirmed_block")
+        .and(warp::query::<PreconfirmedBlockParam>())
+        .and_then({
+            let storage_rx = storage_rx.clone();
+            let progress = progress.clone();
+
+            move |block_param: PreconfirmedBlockParam| {
+                let storage_rx = storage_rx.clone();
+                let progress = progress.clone();
+
+                async move {
+                    match block_param.try_get_number() {
+                        Ok(mut block_id) => {
+                            let mut identifier = block_param.get_identifier();
+                            if block_id == BlockId::Latest {
+                                let mut state = progress.lock().unwrap();
+                                if let Some((preconf_override, ident_override)) = state.timed_preconfirmed(&identifier) {
+                                    block_id = BlockId::Number(BlockNumber::new_or_panic(preconf_override));
+                                    identifier = ident_override;
+                                } else {
+                                    #[derive(Serialize)]
+                                    struct Unchanged {
+                                        changed: bool,
+                                    }
+
+                                    let reply = Unchanged {
+                                        changed: false,
+                                    };
+                                    return Ok(warp::reply::with_status(warp::reply::json(&reply), warp::http::StatusCode::OK))
+                                }
+                            }
+
+                            let Some(storage) = maybe_storage(storage_rx) else {
+                                return Err(storage_unavailable_rejection());
+                            };
+
+                            let response = tokio::task::spawn_blocking(move || {
+                                let mut connection = storage.connection().unwrap();
+                                let tx = connection.transaction().unwrap();
+
+                                resolve_preconfirmed_response(&tx, block_id, identifier)
+                            }).await.context("Joining blocking task").and_then(|res| res);
+
+                            match response {
+                                Ok(response) => {
+                                    Ok(warp::reply::with_status(warp::reply::json(&response), warp::http::StatusCode::OK))
+                                },
+                                Err(e) => {
+                                    tracing::error!("Error fetching block: {:?}", e);
+                                    let error = serde_json::json!({"code": "StarknetErrorCode.BLOCK_NOT_FOUND", "message": "Block number not found"});
+                                    Ok(warp::reply::with_status(warp::reply::json(&error), warp::http::StatusCode::BAD_REQUEST))
+                                }
+                            }
+                        },
+                        Err(_) => Err(warp::reject::reject()),
+                    }
+                }
+            }
+        });
 
     #[derive(Debug, Deserialize)]
     struct ClassHashParam {
