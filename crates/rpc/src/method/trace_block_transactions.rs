@@ -1269,7 +1269,6 @@ pub(crate) mod tests {
             let parent = crate::pending::PreLatestData {
                 block: crate::pending::PreLatestBlock {
                     number: last_block_header.number + 1,
-                    parent_hash: last_block_header.hash,
                     l1_gas_price: GasPrices {
                         price_in_wei: last_block_header.eth_l1_gas_price,
                         price_in_fri: last_block_header.strk_l1_gas_price,
@@ -1391,7 +1390,6 @@ pub(crate) mod tests {
             let parent = crate::pending::PreLatestData {
                 block: crate::pending::PreLatestBlock {
                     number: last_block_header.number + 1,
-                    parent_hash: last_block_header.hash,
                     l1_gas_price: GasPrices {
                         price_in_wei: last_block_header.eth_l1_gas_price,
                         price_in_fri: last_block_header.strk_l1_gas_price,
