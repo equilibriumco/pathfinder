@@ -626,7 +626,11 @@ fn determine_compiler_concurrency_limit(
             .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
     );
     system.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram());
-    let total_memory_bytes = system.total_memory();
+
+    let total_memory_bytes = system
+        .cgroup_limits()
+        .map(|limits| limits.total_memory)
+        .unwrap_or_else(|| system.total_memory());
 
     compute_compiler_concurrency_limit(
         total_memory_bytes,
