@@ -502,6 +502,49 @@ mod tests {
     }
 
     #[test]
+    fn windowed_pre_confirmed_reports_committed_head_as_old_root() {
+        // With a pre-latest present the window is two blocks deep, so the tip is
+        // served through the immediate-parent branch. Its own state update must
+        // carry the committed head's state commitment as its old root, otherwise
+        // getStateUpdate(pre_confirmed) on v0.9 serializes old_root as 0x0.
+        let cache = Arc::new(PendingDataCache::new());
+        let uut = PendingWatcher::new(cache.clone());
+
+        let mut storage = pathfinder_storage::StorageBuilder::in_memory()
+            .unwrap()
+            .connection()
+            .unwrap();
+
+        let parent = BlockHeader::builder()
+            .number(BlockNumber::GENESIS + 12)
+            .finalize_with_hash(block_hash_bytes!(b"parent hash"));
+        // A committed head with a non-zero state commitment, so a zeroed old
+        // root would be observably wrong.
+        let latest = parent
+            .child_builder()
+            .state_commitment(state_commitment!("0xc0ffee"))
+            .finalize_with_hash(block_hash_bytes!(b"latest hash"));
+
+        let tx = storage.transaction().unwrap();
+        tx.insert_block_header(&parent).unwrap();
+        tx.insert_block_header(&latest).unwrap();
+
+        // Window of two: pre-latest at latest + 1, pre-confirmed at latest + 2.
+        cache.store(valid_pre_confirmed_block_with_pre_latest(&latest));
+
+        let result = uut.get(&tx, RpcVersion::V09).unwrap();
+
+        assert!(
+            result.pre_latest_block().is_some(),
+            "the pre-latest should keep this on the immediate-parent branch"
+        );
+        assert_eq!(
+            result.pre_confirmed_state_update().parent_state_commitment,
+            latest.state_commitment,
+        );
+    }
+
+    #[test]
     fn valid_pre_confirmed_is_not_used_for_old_rpc_versions() {
         let cache = Arc::new(PendingDataCache::new());
         let uut = PendingWatcher::new(cache.clone());
