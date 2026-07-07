@@ -387,9 +387,12 @@ fn get_pending_events(
         pending.pre_confirmed_tx_receipts_and_events(),
     ));
 
-    let oldest_block = blocks
-        .first()
-        .map(|(number, _)| *number)
+    // The oldest un-committed block is the first parent, or the pre-confirmed
+    // tip itself when there are no parents (a gap of one).
+    let oldest_block = pending
+        .parent_blocks()
+        .next()
+        .map(|parent| parent.block.number)
         .unwrap_or(pending_block);
 
     // If we have a continuation token and it points into the un-committed window,
