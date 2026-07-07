@@ -44,13 +44,9 @@ pub struct PreConfirmedBlock {
     pub transaction_receipts: Vec<TxnReceiptAndEvents>,
 }
 
-// TODO consider removing, because we're gonna be setting the parent hash to
-// zero anyway.
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct PreLatestBlock {
     pub number: BlockNumber,
-
-    pub parent_hash: BlockHash,
 
     pub l1_gas_price: GasPrices,
     pub l1_data_gas_price: GasPrices,
@@ -78,7 +74,7 @@ impl PreLatestData {
     pub fn header(&self) -> BlockHeader {
         let block = &self.block;
         BlockHeader {
-            parent_hash: block.parent_hash,
+            parent_hash: BlockHash::ZERO,
             number: block.number,
             timestamp: block.timestamp,
             eth_l1_gas_price: block.l1_gas_price.price_in_wei,
@@ -256,7 +252,6 @@ impl PendingData {
         PreLatestData {
             block: PreLatestBlock {
                 number: block.number,
-                parent_hash: BlockHash::ZERO,
                 l1_gas_price: block.l1_gas_price,
                 l1_data_gas_price: block.l1_data_gas_price,
                 l2_gas_price: block.l2_gas_price,
