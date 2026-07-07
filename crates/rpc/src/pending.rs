@@ -120,11 +120,10 @@ impl PendingWatcher {
         // as-is. Composition mirrors `PendingData::from_window`: parents oldest →
         // newest, then the pre-confirmed block's own diffs on top.
         let aggregated_overlay = if watched_pending_data.aggregated_lower_bound < committed {
-            let mut overlay = StateUpdate::default();
-            for parent in &parents {
-                overlay = overlay.apply(&parent.state_update);
-            }
-            Arc::new(overlay.apply(watched_pending_data.state_update.as_ref()))
+            Arc::new(
+                PendingData::compose_parents_overlay(&parents)
+                    .apply(watched_pending_data.state_update.as_ref()),
+            )
         } else {
             Arc::clone(&watched_pending_data.aggregated_state_update)
         };

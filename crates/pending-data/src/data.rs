@@ -210,6 +210,23 @@ impl PendingData {
         })
     }
 
+    /// Fold every uncommitted parent's state update into one overlay, oldest
+    /// first so newer diffs win. The pre-confirmed tip's own diff is not
+    /// included.
+    pub fn compose_parents_overlay(parents: &[PreLatestData]) -> StateUpdate {
+        let mut overlay = StateUpdate::default();
+        for parent in parents {
+            overlay = overlay.apply(&parent.state_update);
+        }
+        overlay
+    }
+
+    /// The overlay of just the uncommitted parents, without the pre-confirmed
+    /// tip's own diff.
+    pub fn parents_overlay(&self) -> StateUpdate {
+        Self::compose_parents_overlay(&self.blocks.parents)
+    }
+
     /// Build a pending view whose aggregated overlay spans a multi-block
     /// window.
     ///
@@ -226,13 +243,9 @@ impl PendingData {
         let (pre_confirmed_block, pre_confirmed_state_update) =
             convert_pre_confirmed_block(pre_confirmed_block, number)?;
 
-        // Compose the overlay starting from the oldest block so fresher updates
-        // overwrite older ones.
-        let mut overlay = StateUpdate::default();
-        for parent in &parents {
-            overlay = overlay.apply(&parent.state_update);
-        }
-        let aggregated_state_update = Arc::new(overlay.apply(pre_confirmed_state_update.as_ref()));
+        let aggregated_state_update = Arc::new(
+            Self::compose_parents_overlay(&parents).apply(pre_confirmed_state_update.as_ref()),
+        );
 
         Ok(Self {
             blocks: Arc::new(PendingBlocks {
