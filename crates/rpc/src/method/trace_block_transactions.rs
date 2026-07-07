@@ -115,11 +115,7 @@ pub async fn trace_block_transactions(
                 // best and create a pending state diff for everything up to but excluding the
                 // preconfirmed block.
                 let pending_state = if pending.parent_blocks().next().is_some() {
-                    let mut overlay = pathfinder_common::StateUpdate::default();
-                    for parent in pending.parent_blocks() {
-                        overlay = overlay.apply(&parent.state_update);
-                    }
-                    Some(std::sync::Arc::new(overlay))
+                    Some(std::sync::Arc::new(pending.parents_overlay()))
                 } else {
                     None
                 };
