@@ -149,7 +149,13 @@ impl PendingWatcher {
                     parents,
                 }
                 .into(),
-                state_update: Arc::clone(&watched_pending_data.state_update),
+                // The pre-confirmed tip's own state update is serialized with the
+                // committed head as its old root, so stamp it here just like the
+                // no-parent branch below.
+                state_update: Arc::new(
+                    StateUpdate::clone(&watched_pending_data.state_update)
+                        .with_parent_state_commitment(latest.state_commitment),
+                ),
                 aggregated_state_update: aggregated_overlay,
                 number: pre_confirmed.number,
                 aggregated_lower_bound: committed,
