@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The default `--rpc.compiler.concurrency-limit` now respects the container's cgroup memory limit instead of the host's total RAM, so it no longer over-provisions compiler concurrency (risking OOM) when running in a memory-limited container.
+- `starknet_getMessagesStatus` now returns `failure_reason` from the reverted execution status on JSON-RPC v0.9 and later, while preserving the legacy rejected-status failure reason on older RPC versions.
 
 ## [0.22.7] - 2026-06-23
 
