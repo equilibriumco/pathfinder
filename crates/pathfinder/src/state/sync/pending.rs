@@ -233,8 +233,8 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
         {
             Ok(r) => r,
             Err(err) => {
-                // A transient failure must invalidate the cache. We serve the last good view as
-                // a best effort until a poll succeeds again.
+                // A transient failure must not invalidate the cache. We serve the last good
+                // view as a best effort until a poll succeeds again.
                 tracing::debug!(%err, "Failed to fetch pre-confirmed block; retaining last view");
                 cache.mark_fresh();
                 wait_for_next_poll(t_fetch + poll_interval, &cache).await;
