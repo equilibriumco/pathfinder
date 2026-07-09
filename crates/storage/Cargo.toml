@@ -47,7 +47,29 @@ util = { path = "../util" }
 zstd = { workspace = true, features = ["experimental"] }
 
 [dev-dependencies]
+criterion = { workspace = true }
 pretty_assertions_sorted = { workspace = true }
 rstest = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
 tracing-subscriber = { workspace = true }
+walkdir = { workspace = true }
+
+[[bench]]
+name = "trie"
+path = "benches/trie.rs"
+harness = false
+
+[[bench]]
+name = "state_update"
+path = "benches/state_update.rs"
+harness = false
+
+[[bench]]
+name = "block_data"
+path = "benches/block_data.rs"
+harness = false
+
+[[bench]]
+name = "pruning"
+path = "benches/pruning.rs"
+harness = false

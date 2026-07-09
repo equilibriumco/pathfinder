@@ -9039,6 +9039,7 @@ dependencies = [
  "bitvec",
  "cached 0.59.0",
  "const_format",
+ "criterion",
  "fake",
  "flume",
  "hex",
@@ -9071,6 +9072,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "util",
+ "walkdir",
  "zstd",
 ]
 
