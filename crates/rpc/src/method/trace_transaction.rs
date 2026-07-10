@@ -265,10 +265,7 @@ fn parents_overlay_below(
     below: BlockNumber,
 ) -> Option<Arc<StateUpdate>> {
     let parents = &pending_data.blocks.parents;
-    let end = parents
-        .iter()
-        .take_while(|parent| parent.block.number < below)
-        .count();
+    let end = parents.partition_point(|parent| parent.block.number < below);
     (end > 0).then(|| Arc::new(PendingData::compose_parents_overlay(&parents[..end])))
 }
 
