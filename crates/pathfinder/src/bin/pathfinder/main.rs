@@ -321,21 +321,35 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
     // and wait for them to finish. Only then can we exit the process and return an
     // error if some of the tasks failed or no error if we have received a signal.
 
-    let (sync_p2p_handle, sync_p2p_client) = p2p_network::sync::start(
-        pathfinder_context.network_id,
-        p2p_storage,
-        config.sync_p2p.clone(),
-        config.data_directory.clone(),
-    )
-    .await;
+    let (sync_p2p_handle, sync_p2p_client) = if config.is_sync_enabled {
+        p2p_network::sync::start(
+            pathfinder_context.network_id,
+            p2p_storage,
+            config.sync_p2p.clone(),
+            config.data_directory.clone(),
+        )
+        .await
+    } else {
+        (
+            tokio::task::spawn(std::future::pending::<anyhow::Result<()>>()),
+            None,
+        )
+    };
 
     let chain_id = pathfinder_context.network_id;
-    let (consensus_p2p_handle, consensus_p2p_client_and_event_rx) = p2p_network::consensus::start(
-        chain_id,
-        config.consensus_p2p.clone(),
-        config.data_directory.clone(),
-    )
-    .await;
+    let (consensus_p2p_handle, consensus_p2p_client_and_event_rx) = if config.consensus.is_some() {
+        p2p_network::consensus::start(
+            chain_id,
+            config.consensus_p2p.clone(),
+            config.data_directory.clone(),
+        )
+        .await
+    } else {
+        (
+            tokio::task::spawn(std::future::pending::<anyhow::Result<()>>()),
+            None,
+        )
+    };
 
     let integration_testing_config = config.integration_testing;
 
