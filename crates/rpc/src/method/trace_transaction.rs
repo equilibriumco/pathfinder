@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use anyhow::Context;
-use pathfinder_common::{ChainId, TransactionHash};
+use pathfinder_common::{BlockNumber, ChainId, StateUpdate, TransactionHash};
 use pathfinder_executor::TransactionExecutionError;
+use pathfinder_pending_data::PendingData;
 use starknet_gateway_client::GatewayApi;
 
 use crate::context::RpcContext;
@@ -70,13 +73,8 @@ pub async fn trace_transaction(
             let pending = context.pending_data.get_optional(&db_tx, rpc_version)?;
             let pending = pending.as_ref();
 
-            // Gateway's `transaction_trace` supports pending blocks, so locally we only
-            // trace transactions from a preconfirmed block that is the immediate parent of
-            // the local commit head and fall back to the gateway otherwise.
-            let local_number = pending.map(|p| p.aggregated_lower_bound + 1);
-
-            let (header, transactions, cache) = if let Some((pending, pending_tx)) = pending
-                .and_then(|p| {
+            let (header, transactions, pending_state, cache) = if let Some((pending, pending_tx)) =
+                pending.and_then(|p| {
                     p.pre_confirmed_transactions()
                         .iter()
                         .find(|tx| tx.hash == input.transaction_hash)
@@ -84,16 +82,17 @@ pub async fn trace_transaction(
                 }) {
                 let header = pending.pre_confirmed_header();
 
-                if Some(header.number) != local_number
-                    || header.starknet_version
-                        < VERSIONS_LOWER_THAN_THIS_SHOULD_FALL_BACK_TO_FETCHING_TRACE_FROM_GATEWAY
+                if header.starknet_version
+                    < VERSIONS_LOWER_THAN_THIS_SHOULD_FALL_BACK_TO_FETCHING_TRACE_FROM_GATEWAY
                 {
                     return Ok(LocalExecution::Unsupported(pending_tx.clone()));
                 }
 
+                let pending_state = parents_overlay_below(pending, header.number);
                 (
                     header,
                     pending.pre_confirmed_transactions().to_vec(),
+                    pending_state,
                     // Can't use the cache for pending blocks since they have no block hash.
                     pathfinder_executor::TraceCache::default(),
                 )
@@ -113,16 +112,20 @@ pub async fn trace_transaction(
                         })
                 })
             }) {
-                if Some(header.number) != local_number
-                    || header.starknet_version
-                        < VERSIONS_LOWER_THAN_THIS_SHOULD_FALL_BACK_TO_FETCHING_TRACE_FROM_GATEWAY
+                if header.starknet_version
+                    < VERSIONS_LOWER_THAN_THIS_SHOULD_FALL_BACK_TO_FETCHING_TRACE_FROM_GATEWAY
                 {
                     return Ok(LocalExecution::Unsupported(parent_tx));
                 }
 
+                let pending_state = parents_overlay_below(
+                    pending.expect("pending present in the window"),
+                    header.number,
+                );
                 (
                     header,
                     txs,
+                    pending_state,
                     // Can't use the cache for pending blocks since they have no block hash.
                     pathfinder_executor::TraceCache::default(),
                 )
@@ -170,14 +173,14 @@ pub async fn trace_transaction(
                     .into_iter()
                     .collect::<Vec<_>>();
 
-                (header, transactions, context.cache.clone())
+                (header, transactions, None, context.cache.clone())
             };
 
             let hash = header.hash;
             let state = pathfinder_executor::ExecutionState::trace(
                 context.chain_id,
                 header,
-                None,
+                pending_state,
                 context.config.versioned_constants_map,
                 context.contract_addresses.eth_l2_token_address,
                 context.contract_addresses.strk_l2_token_address,
@@ -254,6 +257,19 @@ pub async fn trace_transaction(
         // State diffs are not available for traces fetched from the gateway.
         include_state_diff: false,
     }))
+}
+
+/// Returns parents state overlay below the given block number.
+fn parents_overlay_below(
+    pending_data: &PendingData,
+    below: BlockNumber,
+) -> Option<Arc<StateUpdate>> {
+    let parents = &pending_data.blocks.parents;
+    let end = parents
+        .iter()
+        .take_while(|parent| parent.block.number < below)
+        .count();
+    (end > 0).then(|| Arc::new(PendingData::compose_parents_overlay(&parents[..end])))
 }
 
 #[derive(Debug)]
