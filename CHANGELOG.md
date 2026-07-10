@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - RPC method-call latency is now exported as a Prometheus histogram in seconds, `rpc_method_calls_duration_seconds` (`_bucket`/`_sum`/`_count`), replacing the summary `rpc_method_calls_duration_milliseconds`. Update alerts and dashboards to the new name and derive quantiles with `histogram_quantile(...)` over the `_bucket` series; see `docs/docs/monitoring-and-metrics.md`.
+- Preconfirmed blocks are now accumulated from the local commit head to the preconfirmed tip, improving RPC latency.
+
+### Fixed
+
+- The default `--rpc.compiler.concurrency-limit` now respects the container's cgroup memory limit instead of the host's total RAM, so it no longer over-provisions compiler concurrency (risking OOM) when running in a memory-limited container.
+- `starknet_getMessagesStatus` now returns `failure_reason` from the reverted execution status on JSON-RPC v0.9 and later, while preserving the legacy rejected-status failure reason on older RPC versions.
 
 ## [0.22.7] - 2026-06-23
 

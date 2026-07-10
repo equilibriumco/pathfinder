@@ -104,17 +104,27 @@ pub async fn trace_block_transactions(
         let mut db_conn = storage.connection()?;
         let db_tx = db_conn.transaction()?;
 
-        let (block_id, header, transactions, cache) = match input.block_id {
+        let (block_id, header, transactions, pending_state, cache) = match input.block_id {
             BlockId::PreConfirmed => {
                 let pending = context.pending_data.get(&db_tx, rpc_version)?;
 
                 let header = pending.pre_confirmed_header();
                 let transactions = pending.pre_confirmed_transactions().to_vec();
 
+                // `block_traces` on the gateway does not support pending blocks, so we do our
+                // best and create a pending state diff for everything up to but excluding the
+                // preconfirmed block.
+                let pending_state = if pending.parent_blocks().next().is_some() {
+                    Some(std::sync::Arc::new(pending.parents_overlay()))
+                } else {
+                    None
+                };
+
                 (
                     None,
                     header,
                     transactions,
+                    pending_state,
                     // Can't use the cache for pending blocks since they have no
                     // block hash.
                     pathfinder_executor::TraceCache::default(),
@@ -135,7 +145,13 @@ pub async fn trace_block_transactions(
                     .into_iter()
                     .collect::<Vec<_>>();
 
-                (Some(block_id), header, transactions, context.cache.clone())
+                (
+                    Some(block_id),
+                    header,
+                    transactions,
+                    None,
+                    context.cache.clone(),
+                )
             }
         };
 
@@ -181,7 +197,7 @@ pub async fn trace_block_transactions(
         let state = pathfinder_executor::ExecutionState::trace(
             context.chain_id,
             header,
-            None,
+            pending_state,
             context.config.versioned_constants_map,
             context.contract_addresses.eth_l2_token_address,
             context.contract_addresses.strk_l2_token_address,
@@ -1228,35 +1244,48 @@ pub(crate) mod tests {
                 &casm_hash_bytes!(b"casm hash blake"),
             )?;
 
-            let dummy_receipt = Receipt {
-                transaction_hash: TransactionHash(felt!("0x1")),
-                transaction_index: TransactionIndex::new_or_panic(0),
-                ..Default::default()
-            };
+            tx.commit()?;
 
-            let transaction_receipts = vec![(dummy_receipt, vec![]); pre_latest_transactions.len()];
+            let transaction_receipts: Vec<_> = pre_latest_transactions
+                .iter()
+                .enumerate()
+                .map(|(index, tx)| {
+                    (
+                        Receipt {
+                            transaction_hash: tx.hash,
+                            transaction_index: TransactionIndex::new_or_panic(index as u64),
+                            ..Default::default()
+                        },
+                        vec![],
+                    )
+                })
+                .collect();
 
-            let pre_latest_block = starknet_gateway_types::reply::PreLatestBlock {
-                l1_gas_price: GasPrices {
-                    price_in_wei: last_block_header.eth_l1_gas_price,
-                    price_in_fri: last_block_header.strk_l1_gas_price,
+            // The immediate un-committed parent (one above the committed head).
+            let parent = crate::pending::PreLatestData {
+                block: crate::pending::PreLatestBlock {
+                    number: last_block_header.number + 1,
+                    l1_gas_price: GasPrices {
+                        price_in_wei: last_block_header.eth_l1_gas_price,
+                        price_in_fri: last_block_header.strk_l1_gas_price,
+                    },
+                    l1_data_gas_price: GasPrices {
+                        price_in_wei: last_block_header.eth_l1_data_gas_price,
+                        price_in_fri: last_block_header.strk_l1_data_gas_price,
+                    },
+                    l2_gas_price: GasPrices {
+                        price_in_wei: last_block_header.eth_l2_gas_price,
+                        price_in_fri: last_block_header.strk_l2_gas_price,
+                    },
+                    sequencer_address: last_block_header.sequencer_address,
+                    status: starknet_gateway_types::reply::Status::Pending,
+                    timestamp: last_block_header.timestamp,
+                    transaction_receipts,
+                    transactions: pre_latest_transactions.clone().into(),
+                    starknet_version: last_block_header.starknet_version,
+                    l1_da_mode: pathfinder_common::L1DataAvailabilityMode::Blob,
                 },
-                l1_data_gas_price: GasPrices {
-                    price_in_wei: last_block_header.eth_l1_data_gas_price,
-                    price_in_fri: last_block_header.strk_l1_data_gas_price,
-                },
-                l2_gas_price: GasPrices {
-                    price_in_wei: last_block_header.eth_l2_gas_price,
-                    price_in_fri: last_block_header.strk_l2_gas_price,
-                },
-                parent_hash: last_block_header.hash,
-                sequencer_address: last_block_header.sequencer_address,
-                status: starknet_gateway_types::reply::Status::Pending,
-                timestamp: last_block_header.timestamp,
-                transaction_receipts,
-                transactions: pre_latest_transactions.clone().into(),
-                starknet_version: last_block_header.starknet_version,
-                l1_da_mode: L1DataAvailabilityMode::Blob,
+                state_update: StateUpdate::default(),
             };
 
             let pre_confirmed_block = starknet_gateway_types::reply::PreConfirmedBlock {
@@ -1282,17 +1311,13 @@ pub(crate) mod tests {
                 transaction_state_diffs: vec![],
             };
 
-            tx.commit()?;
-
-            crate::pending::PendingData::try_from_pre_confirmed_and_pre_latest(
+            // Last L2 block, then the parent (pre-latest), then this so the tip is +2 and
+            // the overlay sits on the committed head.
+            crate::pending::PendingData::from_window(
                 Box::new(pre_confirmed_block),
-                // Last L2 block, then pre-latest then this, so +2.
                 last_block_header.number + 2,
-                Some(Box::new((
-                    last_block_header.number + 1,
-                    pre_latest_block,
-                    StateUpdate::default(),
-                ))),
+                vec![parent],
+                last_block_header.number,
             )
             .unwrap()
         };
@@ -1318,6 +1343,148 @@ pub(crate) mod tests {
         ];
 
         Ok((context, traces))
+    }
+
+    #[tokio::test]
+    async fn regression_pre_confirmed_tip_is_traced_on_parents_state() -> anyhow::Result<()> {
+        use super::super::simulate_transactions::tests::{
+            fixtures,
+            setup_storage_with_starknet_version,
+        };
+
+        let (
+            storage,
+            last_block_header,
+            account_contract_address,
+            universal_deployer_address,
+            _test_storage_value,
+        ) = setup_storage_with_starknet_version(StarknetVersion::new(0, 14, 0, 0)).await;
+        let context = RpcContext::for_tests().with_storage(storage.clone());
+
+        // Lives in the parent (committed + 1), bumping the account nonce to 1.
+        let parent_declare =
+            fixtures::input::declare(account_contract_address).try_into_common(context.chain_id)?;
+        // Lives in the tip (committed + 2), needs the account nonce to be 1.
+        let tip_deploy = fixtures::input::universal_deployer(
+            account_contract_address,
+            universal_deployer_address,
+        )
+        .try_into_common(context.chain_id)?;
+
+        let pending_data = {
+            let mut db = storage.connection().map_err(anyhow::Error::from)?;
+            let tx = db.transaction()?;
+
+            tx.insert_sierra_class_definition(
+                &SierraHash(fixtures::SIERRA_HASH.0),
+                &SerializedSierraDefinition::from_slice(fixtures::SIERRA_DEFINITION),
+                &SerializedCasmDefinition::from_slice(fixtures::CASM_DEFINITION),
+                &casm_hash_bytes!(b"casm hash blake"),
+            )?;
+            tx.commit()?;
+
+            let parent = crate::pending::PreLatestData {
+                block: crate::pending::PreLatestBlock {
+                    number: last_block_header.number + 1,
+                    l1_gas_price: GasPrices {
+                        price_in_wei: last_block_header.eth_l1_gas_price,
+                        price_in_fri: last_block_header.strk_l1_gas_price,
+                    },
+                    l1_data_gas_price: GasPrices {
+                        price_in_wei: last_block_header.eth_l1_data_gas_price,
+                        price_in_fri: last_block_header.strk_l1_data_gas_price,
+                    },
+                    l2_gas_price: GasPrices {
+                        price_in_wei: last_block_header.eth_l2_gas_price,
+                        price_in_fri: last_block_header.strk_l2_gas_price,
+                    },
+                    sequencer_address: last_block_header.sequencer_address,
+                    status: starknet_gateway_types::reply::Status::Pending,
+                    timestamp: last_block_header.timestamp,
+                    transaction_receipts: vec![(
+                        Receipt {
+                            transaction_hash: parent_declare.hash,
+                            transaction_index: TransactionIndex::new_or_panic(0),
+                            ..Default::default()
+                        },
+                        vec![],
+                    )],
+                    transactions: vec![parent_declare.clone()],
+                    starknet_version: last_block_header.starknet_version,
+                    l1_da_mode: pathfinder_common::L1DataAvailabilityMode::Blob,
+                },
+                // The only diff the tip depends on: the account nonce after the
+                // declare.
+                state_update: StateUpdate::default()
+                    .with_contract_nonce(account_contract_address, contract_nonce!("0x1")),
+            };
+
+            let pre_confirmed_block = starknet_gateway_types::reply::PreConfirmedBlock {
+                l1_gas_price: GasPrices {
+                    price_in_wei: last_block_header.eth_l1_gas_price,
+                    price_in_fri: last_block_header.strk_l1_gas_price,
+                },
+                l1_data_gas_price: GasPrices {
+                    price_in_wei: last_block_header.eth_l1_data_gas_price,
+                    price_in_fri: last_block_header.strk_l1_data_gas_price,
+                },
+                l2_gas_price: GasPrices {
+                    price_in_wei: last_block_header.eth_l2_gas_price,
+                    price_in_fri: last_block_header.strk_l2_gas_price,
+                },
+                sequencer_address: last_block_header.sequencer_address,
+                status: starknet_gateway_types::reply::Status::PreConfirmed,
+                timestamp: last_block_header.timestamp,
+                transaction_receipts: vec![Some((
+                    Receipt {
+                        transaction_hash: tip_deploy.hash,
+                        transaction_index: TransactionIndex::new_or_panic(0),
+                        ..Default::default()
+                    },
+                    vec![],
+                ))],
+                transactions: vec![tip_deploy.clone()],
+                starknet_version: last_block_header.starknet_version,
+                l1_da_mode: L1DataAvailabilityMode::Blob,
+                transaction_state_diffs: vec![],
+            };
+
+            // Parent at committed + 1, tip at committed + 2, overlay on the
+            // committed head.
+            crate::pending::PendingData::from_window(
+                Box::new(pre_confirmed_block),
+                last_block_header.number + 2,
+                vec![parent],
+                last_block_header.number,
+            )
+            .unwrap()
+        };
+
+        let pending_data_cache = Arc::new(PendingDataCache::new());
+        pending_data_cache.store(pending_data);
+        let context = context.with_pending_data_cache(pending_data_cache);
+
+        let input = TraceBlockTransactionsInput {
+            block_id: BlockId::PreConfirmed,
+            trace_flags: crate::dto::TraceFlags::new(),
+        };
+
+        let output = trace_block_transactions(context, input, RPC_VERSION)
+            .await
+            .unwrap()
+            .serialize(Serializer {
+                version: RPC_VERSION,
+            })
+            .unwrap();
+
+        // The tip's single transaction was traced on the parent's state.
+        let traces = output.as_array().unwrap();
+        assert_eq!(traces.len(), 1);
+        let traced_hash =
+            Felt::from_hex_str(traces[0]["transaction_hash"].as_str().unwrap()).unwrap();
+        assert_eq!(traced_hash, tip_deploy.hash.0);
+
+        Ok(())
     }
 
     pub(crate) async fn setup_multi_tx_trace_pre_confirmed_test(
@@ -1414,11 +1581,10 @@ pub(crate) mod tests {
 
             tx.commit()?;
 
-            crate::pending::PendingData::try_from_pre_confirmed_and_pre_latest(
+            // No un-committed parent, so the tip is just +1.
+            crate::pending::PendingData::try_from_pre_confirmed_block(
                 Box::new(pre_confirmed_block),
-                // No pre-latest block, so +1.
                 last_block_header.number + 1,
-                None,
             )
             .unwrap()
         };

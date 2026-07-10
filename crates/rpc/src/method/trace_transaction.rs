@@ -70,6 +70,11 @@ pub async fn trace_transaction(
             let pending = context.pending_data.get_optional(&db_tx, rpc_version)?;
             let pending = pending.as_ref();
 
+            // Gateway's `transaction_trace` supports pending blocks, so locally we only
+            // trace transactions from a preconfirmed block that is the immediate parent of
+            // the local commit head and fall back to the gateway otherwise.
+            let local_number = pending.map(|p| p.aggregated_lower_bound + 1);
+
             let (header, transactions, cache) = if let Some((pending, pending_tx)) = pending
                 .and_then(|p| {
                     p.pre_confirmed_transactions()
@@ -79,8 +84,9 @@ pub async fn trace_transaction(
                 }) {
                 let header = pending.pre_confirmed_header();
 
-                if header.starknet_version
-                    < VERSIONS_LOWER_THAN_THIS_SHOULD_FALL_BACK_TO_FETCHING_TRACE_FROM_GATEWAY
+                if Some(header.number) != local_number
+                    || header.starknet_version
+                        < VERSIONS_LOWER_THAN_THIS_SHOULD_FALL_BACK_TO_FETCHING_TRACE_FROM_GATEWAY
                 {
                     return Ok(LocalExecution::Unsupported(pending_tx.clone()));
                 }
@@ -91,37 +97,33 @@ pub async fn trace_transaction(
                     // Can't use the cache for pending blocks since they have no block hash.
                     pathfinder_executor::TraceCache::default(),
                 )
-            } else if let Some((pending, pre_latest_tx)) = pending.and_then(|p| {
-                p.pre_latest_block()
-                    .and_then(|pre_latest| {
-                        pre_latest
-                            .transactions
-                            .iter()
-                            .find(|tx| tx.hash == input.transaction_hash)
-                            .cloned()
-                    })
-                    .map(|tx| (p, tx))
+            } else if let Some((parent_tx, header, txs)) = pending.and_then(|p| {
+                p.parent_blocks().find_map(|parent| {
+                    parent
+                        .block
+                        .transactions
+                        .iter()
+                        .find(|tx| tx.hash == input.transaction_hash)
+                        .map(|tx| {
+                            (
+                                tx.clone(),
+                                parent.header(),
+                                parent.block.transactions.clone(),
+                            )
+                        })
+                })
             }) {
-                let header = pending
-                    .pre_latest_header()
-                    .expect("Pre-latest block exists");
-
-                if header.starknet_version
-                    < VERSIONS_LOWER_THAN_THIS_SHOULD_FALL_BACK_TO_FETCHING_TRACE_FROM_GATEWAY
+                if Some(header.number) != local_number
+                    || header.starknet_version
+                        < VERSIONS_LOWER_THAN_THIS_SHOULD_FALL_BACK_TO_FETCHING_TRACE_FROM_GATEWAY
                 {
-                    return Ok(LocalExecution::Unsupported(pre_latest_tx.clone()));
+                    return Ok(LocalExecution::Unsupported(parent_tx));
                 }
-
-                let txs = pending
-                    .pre_latest_block()
-                    .expect("Pre-latest block exists")
-                    .transactions
-                    .clone();
 
                 (
                     header,
                     txs,
-                    // Can't use the cache for pre-latest blocks since they have no block hash.
+                    // Can't use the cache for pending blocks since they have no block hash.
                     pathfinder_executor::TraceCache::default(),
                 )
             } else {

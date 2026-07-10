@@ -12,11 +12,7 @@ use pathfinder_common::class_definition::{
 use pathfinder_common::prelude::*;
 use reqwest::Url;
 use starknet_gateway_types::error::SequencerError;
-use starknet_gateway_types::reply::{
-    PreConfirmedPollResponse,
-    PreConfirmedPollResponseWire,
-    PreLatestBlock,
-};
+use starknet_gateway_types::reply::{PreConfirmedPollResponse, PreConfirmedPollResponseWire};
 use starknet_gateway_types::trace::{BlockTrace, TransactionTrace};
 use starknet_gateway_types::{reply, request};
 
@@ -58,10 +54,6 @@ impl From<pathfinder_common::BlockId> for BlockId {
 #[mockall::automock]
 #[async_trait::async_trait]
 pub trait GatewayApi: Sync {
-    async fn pending_block(&self) -> Result<(PreLatestBlock, StateUpdate), SequencerError> {
-        unimplemented!();
-    }
-
     async fn preconfirmed_block(
         &self,
         block: BlockId,
@@ -156,10 +148,6 @@ pub trait GatewayApi: Sync {
 
 #[async_trait::async_trait]
 impl<T: GatewayApi + Sync + Send> GatewayApi for Arc<T> {
-    async fn pending_block(&self) -> Result<(PreLatestBlock, StateUpdate), SequencerError> {
-        self.as_ref().pending_block().await
-    }
-
     async fn preconfirmed_block(
         &self,
         block: BlockId,
@@ -490,26 +478,6 @@ fn resolve_hosts(url: &Url) -> anyhow::Result<Vec<std::net::IpAddr>> {
 
 #[async_trait::async_trait]
 impl GatewayApi for Client {
-    #[tracing::instrument(skip(self))]
-    async fn pending_block(&self) -> Result<(PreLatestBlock, StateUpdate), SequencerError> {
-        #[derive(Clone, Debug, serde::Deserialize)]
-        struct Dto {
-            pub block: PreLatestBlock,
-            pub state_update: starknet_gateway_types::reply::StateUpdate,
-        }
-
-        let result: Dto = self
-            .feeder_gateway_request()
-            .get_state_update()
-            .block(BlockId::Pending)
-            .param("includeBlock", "true")
-            .retry(self.retry)
-            .get()
-            .await?;
-
-        Ok((result.block, result.state_update.into()))
-    }
-
     #[tracing::instrument(skip(self))]
     async fn preconfirmed_block(
         &self,
@@ -1342,45 +1310,6 @@ mod tests {
                 .block_header(BlockNumber::new_or_panic(BLOCK_NUMBER).into())
                 .await
                 .unwrap_err();
-            assert_matches!(
-                error,
-                SequencerError::StarknetError(e) => assert_eq!(e.code, KnownStarknetErrorCode::BlockNotFound.into())
-            );
-        }
-    }
-
-    mod pending_block {
-        use super::*;
-
-        #[test_log::test(tokio::test)]
-        async fn success() {
-            let body: serde_json::Value = serde_json::from_str(starknet_gateway_test_fixtures::v0_13_1::state_update_with_block::SEPOLIA_INTEGRATION_PENDING).unwrap();
-            let server = MockServer::start().await;
-            Mock::given(matchers::path("/feeder_gateway/get_state_update"))
-                .and(matchers::query_param("blockNumber", "pending"))
-                .and(matchers::query_param("includeBlock", "true"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(body))
-                .mount(&server)
-                .await;
-            let client = Client::for_test(server.uri().parse().unwrap()).unwrap();
-
-            client.pending_block().await.unwrap();
-        }
-
-        #[test_log::test(tokio::test)]
-        async fn block_not_found() {
-            let server = MockServer::start().await;
-            Mock::given(matchers::path("/feeder_gateway/get_state_update"))
-                .and(matchers::query_param("blockNumber", "pending"))
-                .and(matchers::query_param("includeBlock", "true"))
-                .respond_with(
-                    ResponseTemplate::new(500)
-                        .set_body_json(response_body_from(KnownStarknetErrorCode::BlockNotFound)),
-                )
-                .mount(&server)
-                .await;
-            let client = Client::for_test(server.uri().parse().unwrap()).unwrap();
-            let error = client.pending_block().await.unwrap_err();
             assert_matches!(
                 error,
                 SequencerError::StarknetError(e) => assert_eq!(e.code, KnownStarknetErrorCode::BlockNotFound.into())

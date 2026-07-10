@@ -1,10 +1,11 @@
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
-use anyhow::Context;
-use pathfinder_common::{BlockHash, BlockNumber, StateUpdate};
-use pathfinder_pending_data::{PendingData, PendingDataCache};
+use futures::StreamExt;
+use pathfinder_common::{BlockHash, BlockNumber};
+use pathfinder_pending_data::{PendingData, PendingDataCache, PreLatestData};
 use starknet_gateway_client::{BlockId, GatewayApi};
-use starknet_gateway_types::reply::{PreConfirmedBlock, PreConfirmedPollResponse, PreLatestBlock};
+use starknet_gateway_types::reply::{PreConfirmedBlock, PreConfirmedPollResponse};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -19,8 +20,6 @@ struct State {
     /// Running merged view of the preconfirmed block at `block_number`.
     /// `None` until we've received our first response for this height.
     accumulated: Option<PreConfirmedBlock>,
-    /// Whether the pre-latest block was present at the last poll.
-    pre_latest_data_present: bool,
 }
 
 impl Default for State {
@@ -29,12 +28,18 @@ impl Default for State {
             block_number: BlockNumber::GENESIS,
             block_identifier: None,
             accumulated: None,
-            pre_latest_data_present: false,
         }
     }
 }
 
 impl State {
+    pub fn new(block_number: BlockNumber) -> Self {
+        Self {
+            block_number,
+            ..Default::default()
+        }
+    }
+
     fn tx_count(&self) -> u64 {
         self.accumulated
             .as_ref()
@@ -42,13 +47,9 @@ impl State {
             .unwrap_or(0)
     }
 
-    /// Apply a fresh poll response, given the pre-latest presence
-    /// observed for this poll. Returns `true` if `accumulated` was
+    /// Apply a fresh poll response. Returns `true` if `accumulated` was
     /// updated and the caller should emit the new view.
-    fn apply(&mut self, response: PreConfirmedPollResponse, new_pre_latest: bool) -> bool {
-        let prev_pre_latest = self.pre_latest_data_present;
-        self.pre_latest_data_present = new_pre_latest;
-
+    fn apply(&mut self, response: PreConfirmedPollResponse) -> bool {
         match response {
             PreConfirmedPollResponse::Unchanged => false,
 
@@ -88,17 +89,15 @@ impl State {
                 block_number: _,
                 block,
             } => {
-                // Emit on any of three independent signals:
+                // Emit on either independent signal:
                 //  - the server's identifier changed (round bump, new height, or first poll)
                 //  - new transactions arrived
-                //  - pre-latest just finalised
                 // Otherwise suppress: pre-0.14.3 gateways re-serve the same view across
                 // polls and we don't want to bombard downstream with redundant events.
                 let identifier_changed = self.block_identifier.as_ref() != Some(&identifier);
                 let new_txs_arrived = (block.transactions.len() as u64) > self.tx_count();
-                let pre_latest_finalised = prev_pre_latest && !new_pre_latest;
 
-                if identifier_changed || new_txs_arrived || pre_latest_finalised {
+                if identifier_changed || new_txs_arrived {
                     self.block_identifier = Some(identifier);
                     self.accumulated = Some(block);
                     true
@@ -107,6 +106,90 @@ impl State {
                 }
             }
         }
+    }
+}
+
+/// The un-committed blocks below the current pre-confirmed tip, keyed by block
+/// number, used both to compose the aggregated execution overlay and as the
+/// served `ancestors`.
+///
+/// There are two sources of entries:
+/// - *provisional* (`complete = false`): the recent preconfirmed tip, just
+///   superseded by the current new preconfirmed tip. It may be missing some
+///   tail data, which will be filled in by [`complete_previous_block`].
+/// - *complete* (`complete = true`): full block, filled by
+///   [`complete_previous_block`], no tail data missing.
+///
+/// A provisional entry allows the new tip to be served immediately and the
+/// window stays contiguous. `generation` advances on every content change so
+/// the producer re-serves a fuller view.
+#[derive(Default)]
+struct Window {
+    blocks: BTreeMap<BlockNumber, WindowEntry>,
+    /// Bumped when an entry is added (new tip) or upgraded (tip is extended
+    /// with new data or tip - 1 gets its tail data via
+    /// [`complete_previous_block`]). The producer serves again when the
+    /// generation changes compared to the last served generation, so any update
+    /// is visible right away to the readers.
+    generation: u64,
+}
+
+struct WindowEntry {
+    data: Arc<PreLatestData>,
+    /// `false` for a provisional accumulated placeholder (which may be missing
+    /// tail data), `true` when upgraded with any missing tail by
+    /// [`complete_previous_block`].
+    complete: bool,
+}
+
+impl Window {
+    /// Prune the window from the bottom, removing any blocks that have been
+    /// committed.
+    fn prune(&mut self, committed: BlockNumber) {
+        self.blocks.retain(|&n, _| n > committed);
+    }
+
+    /// Either a provisional entry only fills an empty slot or a complete entry
+    /// upgrades a provisional entry. Generation is then incremented.
+    ///
+    /// Does nothing otherwise (ie. a complete slot cannot be updated, a
+    /// provisional entry cannot replace an existing provisional entry).
+    fn record(&mut self, number: BlockNumber, data: Arc<PreLatestData>, complete: bool) {
+        match self.blocks.get(&number) {
+            // The existing entry if complete, nothing more to do.
+            Some(existing) if existing.complete => return,
+            // A provisional record can't replace an existing provisional one.
+            Some(_) if !complete => return,
+            _ => {}
+        }
+        self.blocks.insert(number, WindowEntry { data, complete });
+        self.generation += 1;
+    }
+
+    /// Collect the parents in the range `(committed, tip)`, oldest to newest.
+    /// `None` if any block inbetween is missing (e.g. cold start, or a block
+    /// that failed deserialization/conversion).
+    fn collect(&self, committed: BlockNumber, tip: BlockNumber) -> Option<Vec<Arc<PreLatestData>>> {
+        let mut parents = Vec::new();
+        let mut expected = committed + 1;
+        while expected < tip {
+            parents.push(self.blocks.get(&expected)?.data.clone());
+            expected += 1;
+        }
+        Some(parents)
+    }
+
+    /// Get block numbers for entries missing in the range `(committed, tip)`.
+    fn missing(&self, committed: BlockNumber, tip: BlockNumber) -> Vec<BlockNumber> {
+        let mut missing = Vec::new();
+        let mut i = committed + 1;
+        while i < tip {
+            if !self.blocks.contains_key(&i) {
+                missing.push(i);
+            }
+            i += 1;
+        }
+        missing
     }
 }
 
@@ -125,6 +208,17 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
 ) {
     let mut state = State::default();
 
+    // The un-committed window below the current tip. Any missing tail data is
+    // filled in by [`complete_previous_block`].
+    let window: Arc<Mutex<Window>> = Arc::new(Mutex::new(Window::default()));
+
+    // The `(tip, window generation)` we last served. View is served again when:
+    // 1. the tip is filled with more delta,
+    // 2. the tip's block number is incremented (a new tip),
+    // 3. window generation is incremented (tip-1 was completed by
+    //    [`complete_previous_block`]).
+    let mut served: Option<(BlockNumber, u64)> = None;
+
     loop {
         // Suspend if idle.
         if cache.is_idle() && cache.subscriber_count() == 0 {
@@ -136,7 +230,7 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
         let t_fetch = Instant::now();
 
         // Skip while catching up to head.
-        let (latest_number, latest_hash) = *latest.borrow();
+        let latest_number = latest.borrow().0;
         let current_number = current.borrow().0.get();
 
         if latest_number.get().abs_diff(current_number) > in_sync_threshold {
@@ -149,21 +243,21 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             continue;
         }
 
-        // Fetch pre-confirmed and pre-latest concurrently.
-        let (response, pre_latest_result) = tokio::join!(
-            sequencer.preconfirmed_block(
+        // Fetch the pre-confirmed tip (block).
+        let response = match sequencer
+            .preconfirmed_block(
                 BlockId::Latest,
                 state.block_identifier.clone(),
                 state.tx_count(),
-            ),
-            fetch_pre_latest(&sequencer, latest_number, latest_hash),
-        );
-
-        let response = match response {
+            )
+            .await
+        {
             Ok(r) => r,
             Err(err) => {
-                tracing::debug!(%err, "Failed to fetch pre-confirmed block");
-                cache.mark_unavailable("gateway error");
+                // A transient failure must not invalidate the cache. We serve the last good
+                // view as a best effort until a poll succeeds again.
+                tracing::debug!(%err, "Failed to fetch pre-confirmed block; retaining last view");
+                cache.mark_fresh();
                 wait_for_next_poll(t_fetch + poll_interval, &cache).await;
                 continue;
             }
@@ -177,6 +271,10 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
             PreConfirmedPollResponse::Full { block_number, .. } => block_number,
             _ => None,
         };
+
+        // Set when the preconfirmed tip advances: the previous block to complete once
+        // the new height has been published.
+        let mut prev_to_complete: Option<State> = None;
 
         if let Some(height) = resolved {
             // A transient (?) lower-height shouldn't discard accumulated state.
@@ -192,65 +290,182 @@ pub(super) async fn poll_pre_confirmed<S: GatewayApi + Clone + Send + 'static>(
                 continue;
             }
 
-            // The chain advanced: complete the previous block before resetting state.
+            // The preconfirmed tip advanced. Keep the previous block's state so we can
+            // complete it after publishing the new height. We keep completion of tip-1 off
+            // the critical path to avoid delaying serving the new tip to readers.
             if height > state.block_number {
-                if state.block_identifier.is_some() && state.accumulated.is_some() {
-                    let committed_head = current.borrow().0;
-                    complete_previous_block(&sequencer, &mut state, &cache, committed_head).await;
+                let prev = std::mem::replace(
+                    &mut state,
+                    State {
+                        block_number: height,
+                        ..State::default()
+                    },
+                );
+
+                // Provisionally fill the window with the previous block from our previous
+                // state, so the window stays contiguous and the new tip can be served
+                // on this poll instead of waiting for [`complete_previous_block`] to finish.
+                if let Some(block) = prev.accumulated.clone() {
+                    let prev_number = prev.block_number;
+                    if let Ok(pending) = run_cpu_bound(|| {
+                        PendingData::try_from_pre_confirmed_block(Box::new(block), prev_number)
+                    }) {
+                        window.lock().unwrap().record(
+                            prev_number,
+                            Arc::new(pending.to_pre_latest_data()),
+                            false,
+                        );
+                    }
                 }
-                state = State {
-                    block_number: height,
-                    ..State::default()
-                };
+
+                if prev.block_identifier.is_some() && prev.accumulated.is_some() {
+                    prev_to_complete = Some(prev);
+                }
             }
         }
 
-        // Keep pre-latest only when it chains to the pre-confirmed height
-        // resolved above. A mismatch means the chain advanced between the two
-        // fetches, in which case publishing pre-confirmed alone is the safe move.
-        let pre_latest_data = match pre_latest_result {
-            Ok(Some(pre_latest)) => {
-                let pre_latest_number = pre_latest.0;
-                if pre_latest_number + 1 == state.block_number {
-                    Some(Box::new(pre_latest))
-                } else {
-                    tracing::debug!(
-                        pre_latest = %pre_latest_number,
-                        pre_confirmed = %state.block_number,
-                        "Pre-latest doesn't chain to pre-confirmed; dropping (chain raced)"
-                    );
-                    None
-                }
-            }
-            Ok(None) => None,
-            Err(e) => {
-                tracing::debug!(%e, "Failed to fetch pre-latest block");
+        let committed = current.borrow().0;
+
+        let changed = state.apply(response);
+        let number = state.block_number;
+
+        // Prune committed blocks and collect the parents that fill the gap
+        // `(committed, number)`.
+        let (bridge, generation) = {
+            let mut window = window.lock().unwrap();
+            window.prune(committed);
+            let bridge = if number > committed {
+                window.collect(committed, number)
+            } else {
                 None
-            }
+            };
+            (bridge, window.generation)
         };
 
-        // Publish. On a change we store the new view directly; otherwise we mark
-        // the existing contents fresh to unblock cold-start readers.
-        if state.apply(response, pre_latest_data.is_some()) {
-            let accumulated = state
-                .accumulated
-                .as_ref()
-                .expect("accumulated block present after a successful update");
-            store_pre_confirmed(
-                &cache,
-                current.borrow().0,
-                state.block_number,
-                accumulated.clone().into(),
-                pre_latest_data,
-            );
-        } else {
-            tracing::trace!("No change in pre-confirmed block data");
-            cache.mark_fresh();
+        // Fetch any missing blocks if there is a hole in the window.
+        let (bridge, generation) =
+            fetch_missing_blocks(&sequencer, &window, committed, number, bridge, generation).await;
+
+        match bridge {
+            // Serve when the tip's own contents changed, when the tip advanced, or when the window
+            // generation increased, i.e. when an updated view is available.
+            Some(parents) if changed || served != Some((number, generation)) => {
+                let accumulated = state
+                    .accumulated
+                    .clone()
+                    .expect("accumulated block present whenever the tip is bridgeable");
+                let built = run_cpu_bound(|| {
+                    let parents = parents.iter().map(|p| PreLatestData::clone(p)).collect();
+                    PendingData::from_window(Box::new(accumulated), number, parents, committed)
+                });
+                match built {
+                    Ok(pending) => {
+                        let pre_confirmed_tx_count = pending.pre_confirmed_transactions().len();
+                        cache.store(pending);
+                        served = Some((number, generation));
+                        tracing::debug!(block_number = %number, %committed, %pre_confirmed_tx_count, %generation, "Updated pre-confirmed data (windowed)");
+                    }
+                    Err(e) => tracing::info!(
+                        block_number = %number, error = %e,
+                        "Failed to build windowed pre-confirmed data, skipping update"
+                    ),
+                }
+            }
+            // Nothing new to serve for this tip, keep the cache fresh for cold-start readers.
+            Some(_) => {
+                tracing::trace!("No change in pre-confirmed block data");
+                cache.mark_fresh();
+            }
+            // We failed to fetch a missing block or the tip is not ahead of committed. Keep the
+            // last good view.
+            None => {
+                if number > committed {
+                    tracing::debug!(
+                        block_number = %number, %committed,
+                        "Pre-confirmed window has a hole; deferring until retry on the next poll"
+                    );
+                }
+                cache.mark_fresh();
+            }
+        }
+
+        // Complete the previous block off the critical path. Any missing tail data will
+        // be filled in the window, incrementing its generation, which is a signal to
+        // serve the fresher data on the next poll.
+        if let Some(prev) = prev_to_complete {
+            let sequencer = sequencer.clone();
+            let window = window.clone();
+            tokio::spawn(async move {
+                complete_previous_block(&sequencer, prev, &window).await;
+            });
         }
 
         // Wait for the next tick.
         wait_for_next_poll(t_fetch + poll_interval, &cache).await;
     }
+}
+
+/// If necessary: fetch missing blocks in the range `(committed, number)` all at
+/// once, fill the window with them and return the collected parents and updated
+/// generation. Best-effort.
+async fn fetch_missing_blocks<S: GatewayApi + Clone + Send + 'static>(
+    sequencer: &S,
+    window: &Arc<Mutex<Window>>,
+    committed: BlockNumber,
+    number: BlockNumber,
+    bridge: Option<Vec<Arc<PreLatestData>>>,
+    generation: u64,
+) -> (Option<Vec<Arc<PreLatestData>>>, u64) {
+    // No hole or tip not ahead
+    if bridge.is_some() || number <= committed {
+        return (bridge, generation);
+    }
+
+    let missing = window.lock().unwrap().missing(committed, number);
+    if missing.is_empty() {
+        return (bridge, generation);
+    }
+
+    let concurrency = missing.len();
+    let fetched = futures::stream::iter(missing)
+        .map(|n| fetch_missing_block(sequencer, n))
+        .buffer_unordered(concurrency)
+        .collect::<Vec<_>>()
+        .await;
+    let mut window = window.lock().unwrap();
+    for entry in fetched.into_iter().flatten() {
+        let n = entry.block.number;
+        window.record(n, entry, true);
+    }
+    (window.collect(committed, number), window.generation)
+}
+
+/// Fetch a missing window block by number and convert it to a window entry.
+/// Best-effort.
+async fn fetch_missing_block<S: GatewayApi + Send + 'static>(
+    sequencer: &S,
+    number: BlockNumber,
+) -> Option<Arc<PreLatestData>> {
+    let response = match sequencer.preconfirmed_block(number.into(), None, 0).await {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::debug!(%number, %err, "Failed to fetch missing window block");
+            return None;
+        }
+    };
+
+    let mut state = State::new(number);
+    if state.apply(response) {
+        if let Some(block) = state.accumulated {
+            match run_cpu_bound(|| {
+                PendingData::try_from_pre_confirmed_block(Box::new(block), number)
+            }) {
+                Ok(pending) => return Some(Arc::new(pending.to_pre_latest_data())),
+                Err(e) => tracing::debug!(%number, error = %e, "Could not convert gap-fill block"),
+            }
+        }
+    }
+    None
 }
 
 /// Sleeps until `deadline`, returning early if the cache is read.
@@ -261,13 +476,23 @@ async fn wait_for_next_poll(deadline: Instant, cache: &PendingDataCache) {
     }
 }
 
-/// Fetch the previously-tracked block one final time to capture any
-/// transactions that landed before it was superseded. Best-effort.
+/// Run a CPU-bound closure without starving the async runtime. Falls back to
+/// inline execution on a current-thread runtime (e.g. in tests).
+fn run_cpu_bound<R>(f: impl FnOnce() -> R) -> R {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+    match Handle::try_current().map(|h| h.runtime_flavor()) {
+        Ok(RuntimeFlavor::MultiThread) => tokio::task::block_in_place(f),
+        _ => f(),
+    }
+}
+
+/// Fetch any missing tail data for the previous pre-confirmed block and upgrade
+/// its window entry to a complete block so the next poll serves it in an
+/// updated view with by-then likely updated new tip.
 async fn complete_previous_block<S: GatewayApi + Send + 'static>(
     sequencer: &S,
-    state: &mut State,
-    cache: &PendingDataCache,
-    committed_head: BlockNumber,
+    mut state: State,
+    window: &Mutex<Window>,
 ) {
     let response = match sequencer
         .preconfirmed_block(
@@ -284,176 +509,55 @@ async fn complete_previous_block<S: GatewayApi + Send + 'static>(
         }
     };
 
-    if state.apply(response, false) {
+    if state.apply(response) {
         let accumulated = state
             .accumulated
             .as_ref()
             .expect("accumulated present after successful completion apply");
-        store_pre_confirmed(
-            cache,
-            committed_head,
-            state.block_number,
-            accumulated.clone().into(),
-            None,
-        );
-    }
-}
-
-/// Validate a fresh pre-confirmed view against the committed head and, when it
-/// chains, convert it to [`PendingData`] and store it in the cache.
-///
-/// `committed_head` is the latest block already in storage, mirrored by the
-/// `current` watch. A view that doesn't chain to it is dropped.
-fn store_pre_confirmed(
-    cache: &PendingDataCache,
-    committed_head: BlockNumber,
-    number: BlockNumber,
-    block: Box<PreConfirmedBlock>,
-    pre_latest_data: Option<Box<(BlockNumber, PreLatestBlock, StateUpdate)>>,
-) {
-    // Reject views that don't chain to the committed head.
-    let next_block_number = pre_latest_data
-        .as_ref()
-        .map(|pre_latest| pre_latest.0)
-        .unwrap_or(number);
-
-    if next_block_number != committed_head + 1 {
-        tracing::debug!(
-            %number, %committed_head,
-            "Pre-confirmed doesn't chain to committed head; skipping store"
-        );
-        return;
-    }
-
-    // Convert and store.
-    match PendingData::try_from_pre_confirmed_and_pre_latest(block, number, pre_latest_data) {
-        Ok(pending) => {
-            let pre_latest_tx_count = pending.pre_latest_transactions().map(|txs| txs.len());
-            let pre_confirmed_tx_count = pending.pre_confirmed_transactions().len();
-            cache.store(pending);
-            tracing::debug!(block_number = %number, %pre_confirmed_tx_count, ?pre_latest_tx_count, "Updated pre-confirmed data");
-        }
-        Err(e) => {
-            tracing::info!(block_number=%number, error=%e, "Failed to validate pre-confirmed data, skipping update");
+        let number = state.block_number;
+        let converted = run_cpu_bound(|| {
+            PendingData::try_from_pre_confirmed_block(Box::new(accumulated.clone()), number)
+        });
+        match converted {
+            Ok(pending) => {
+                // Upgrade the window entry to the complete block (full transactions,
+                // receipts/events and composed state diff).
+                window
+                    .lock()
+                    .unwrap()
+                    .record(number, Arc::new(pending.to_pre_latest_data()), true);
+            }
+            Err(e) => tracing::info!(
+                block_number = %number, error = %e,
+                "Failed to convert completed pre-confirmed block; skipping window upgrade"
+            ),
         }
     }
-}
-
-/// Fetch the pending block from the sequencer and classify it as
-/// [pre-latest](starknet_gateway_types::reply::PreLatestBlock) if its parent
-/// hash matches our latest block hash.
-///
-/// If the pre-latest block (N) exists, the sequencer has already started
-/// building the next pre-confirmed block (N + 1).
-async fn fetch_pre_latest<S: GatewayApi + Send + 'static>(
-    sequencer: &S,
-    our_latest_number: BlockNumber,
-    our_latest_hash: BlockHash,
-) -> anyhow::Result<
-    Option<(
-        BlockNumber,
-        starknet_gateway_types::reply::PreLatestBlock,
-        pathfinder_common::StateUpdate,
-    )>,
-> {
-    let (pending_block, state_update) = sequencer
-        .pending_block()
-        .await
-        .context("Fetching pre-latest block from sequencer")?;
-
-    let pre_latest_data = (pending_block.parent_hash == our_latest_hash).then_some((
-        our_latest_number + 1,
-        pending_block,
-        state_update,
-    ));
-    Ok(pre_latest_data)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, LazyLock};
+    use std::sync::{Arc, Mutex};
 
     use pathfinder_common::macro_prelude::*;
     use pathfinder_common::prelude::*;
     use pathfinder_common::transaction::{L1HandlerTransaction, Transaction, TransactionVariant};
     use pathfinder_pending_data::PendingDataCache;
     use starknet_gateway_client::MockGatewayApi;
-    use starknet_gateway_types::reply::{
-        Block,
-        GasPrices,
-        L1DataAvailabilityMode,
-        PreConfirmedBlock,
-        PreConfirmedPollResponse,
-        PreLatestBlock,
-        Status,
-    };
+    use starknet_gateway_types::reply::{PreConfirmedBlock, PreConfirmedPollResponse, Status};
     use tokio::sync::watch;
 
-    use super::{complete_previous_block, poll_pre_confirmed, store_pre_confirmed, State};
+    use super::{complete_previous_block, poll_pre_confirmed, State};
 
     const TEST_IN_SYNC_THRESHOLD: u64 = 6;
-    const PARENT_HASH: BlockHash = block_hash!("0x1234");
-    const PARENT_ROOT: StateCommitment = state_commitment_bytes!(b"parent root");
-
-    pub static NEXT_BLOCK: LazyLock<Block> = LazyLock::new(|| Block {
-        block_hash: block_hash!("0xabcd"),
-        block_number: BlockNumber::new_or_panic(1),
-        l1_gas_price: Default::default(),
-        l1_data_gas_price: Default::default(),
-        l2_gas_price: Default::default(),
-        parent_block_hash: PARENT_HASH,
-        sequencer_address: None,
-        state_commitment: PARENT_ROOT,
-        status: Status::AcceptedOnL2,
-        timestamp: BlockTimestamp::new_or_panic(10),
-        transaction_receipts: Vec::new(),
-        transactions: Vec::new(),
-        starknet_version: StarknetVersion::default(),
-        l1_da_mode: Default::default(),
-        transaction_commitment: Default::default(),
-        event_commitment: Default::default(),
-        receipt_commitment: Default::default(),
-        state_diff_commitment: Default::default(),
-        state_diff_length: Default::default(),
-    });
-
-    pub static PENDING_UPDATE: LazyLock<StateUpdate> =
-        LazyLock::new(|| StateUpdate::default().with_parent_state_commitment(PARENT_ROOT));
-
-    pub static PRE_LATEST_BLOCK: LazyLock<PreLatestBlock> = LazyLock::new(|| PreLatestBlock {
-        l1_gas_price: GasPrices {
-            price_in_wei: GasPrice(11),
-            ..Default::default()
-        },
-        l1_data_gas_price: Default::default(),
-        l2_gas_price: Default::default(),
-        parent_hash: NEXT_BLOCK.parent_block_hash,
-        sequencer_address: sequencer_address_bytes!(b"seqeunecer address"),
-        status: Status::Pending,
-        timestamp: BlockTimestamp::new_or_panic(20),
-        transaction_receipts: Vec::new(),
-        transactions: vec![pathfinder_common::transaction::Transaction {
-            hash: transaction_hash!("0x22"),
-            variant: pathfinder_common::transaction::TransactionVariant::L1Handler(
-                L1HandlerTransaction {
-                    contract_address: contract_address!("0x1"),
-                    entry_point_selector: entry_point!("0x55"),
-                    nonce: transaction_nonce!("0x2"),
-                    calldata: Vec::new(),
-                },
-            ),
-        }],
-        starknet_version: StarknetVersion::new(0, 14, 0, 0),
-        l1_da_mode: L1DataAvailabilityMode::Calldata,
-    });
 
     /// Arbitrary upper bound for awaiting a cache update in tests, so a failing
     /// test fails fast instead of hanging.
     const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
     /// A pre-confirmed block whose every transaction carries a receipt, so the
-    /// `try_from_pre_confirmed_and_pre_latest` conversion accepts it (it
-    /// rejects blocks containing candidate transactions).
+    /// `try_from_pre_confirmed_block` conversion accepts it (it rejects blocks
+    /// containing candidate transactions).
     fn all_receipted_block(n: usize) -> PreConfirmedBlock {
         let receipted_tx = |i: usize| {
             let hash = match i {
@@ -520,105 +624,6 @@ mod tests {
         });
     }
 
-    #[tokio::test]
-    async fn store_pre_confirmed_stores_and_converts_a_chaining_view() {
-        // Committed head 1; pre-confirmed at 3 chains via a pre-latest at 2.
-        let cache = PendingDataCache::new();
-        let mut rx = cache.subscribe();
-        let _ = rx.borrow_and_update();
-
-        let committed = BlockNumber::new_or_panic(1);
-        let pre_latest = Box::new((
-            committed + 1,
-            PRE_LATEST_BLOCK.clone(),
-            PENDING_UPDATE.clone(),
-        ));
-        store_pre_confirmed(
-            &cache,
-            committed,
-            BlockNumber::new_or_panic(3),
-            Box::new(all_receipted_block(2)),
-            Some(pre_latest),
-        );
-
-        assert!(
-            rx.has_changed().unwrap(),
-            "a chaining view should be stored"
-        );
-        let pending = rx.borrow().clone();
-        assert_eq!(
-            pending.pre_confirmed_block_number(),
-            BlockNumber::new_or_panic(3)
-        );
-        assert_eq!(pending.pre_latest_block_number(), Some(committed + 1));
-        assert_eq!(pending.pre_confirmed_transactions().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn store_pre_confirmed_skips_a_non_chaining_view() {
-        // Committed head 1, pre-confirmed at 5: gap > 1, so it doesn't chain.
-        let cache = PendingDataCache::new();
-        let mut rx = cache.subscribe();
-        let _ = rx.borrow_and_update();
-
-        store_pre_confirmed(
-            &cache,
-            BlockNumber::new_or_panic(1),
-            BlockNumber::new_or_panic(5),
-            Box::new(all_receipted_block(2)),
-            None,
-        );
-
-        assert!(
-            !rx.has_changed().unwrap(),
-            "a non-chaining view must not be stored"
-        );
-    }
-
-    #[tokio::test]
-    async fn fetch_pre_latest_returns_some_when_parent_matches() {
-        let mut sequencer = MockGatewayApi::new();
-        let our_latest_number = NEXT_BLOCK.block_number - 1;
-        let our_latest_hash = NEXT_BLOCK.parent_block_hash;
-
-        sequencer
-            .expect_pending_block()
-            .returning(move || Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
-
-        let (number, block, state_update) =
-            super::fetch_pre_latest(&sequencer, our_latest_number, our_latest_hash)
-                .await
-                .unwrap()
-                .unwrap();
-
-        assert_eq!(number, NEXT_BLOCK.block_number);
-        assert_eq!(block.parent_hash, our_latest_hash);
-        assert_eq!(state_update, PENDING_UPDATE.clone());
-    }
-
-    #[tokio::test]
-    async fn fetch_pre_latest_returns_none_when_parent_differs() {
-        let mut sequencer = MockGatewayApi::new();
-        let our_latest_number = NEXT_BLOCK.block_number - 1;
-        let our_latest_hash = NEXT_BLOCK.parent_block_hash;
-        let different_hash = block_hash!("0xdeadbeef");
-
-        let pending_block = PreLatestBlock {
-            parent_hash: different_hash,
-            ..PRE_LATEST_BLOCK.clone()
-        };
-
-        sequencer
-            .expect_pending_block()
-            .returning(move || Ok((pending_block.clone(), PENDING_UPDATE.clone())));
-
-        let result = super::fetch_pre_latest(&sequencer, our_latest_number, our_latest_hash)
-            .await
-            .unwrap();
-
-        assert!(result.is_none());
-    }
-
     mod apply {
         use pathfinder_common::macro_prelude::*;
         use pathfinder_common::transaction::{
@@ -662,7 +667,7 @@ mod tests {
             }
         }
 
-        fn state(identifier: Option<&str>, txs: usize, pre_latest: bool) -> State {
+        fn state(identifier: Option<&str>, txs: usize) -> State {
             State {
                 block_number: BlockNumber::new_or_panic(10),
                 block_identifier: identifier.map(String::from),
@@ -671,49 +676,43 @@ mod tests {
                 } else {
                     None
                 },
-                pre_latest_data_present: pre_latest,
             }
         }
 
         #[test]
         fn unchanged_response_is_noop() {
-            let mut s = state(Some("abc"), 1, false);
+            let mut s = state(Some("abc"), 1);
             let original_accumulated = s.accumulated.clone();
             let original_identifier = s.block_identifier.clone();
             let original_number = s.block_number;
 
-            let emitted = s.apply(PreConfirmedPollResponse::Unchanged, true);
+            let emitted = s.apply(PreConfirmedPollResponse::Unchanged);
 
             assert!(!emitted);
             assert_eq!(s.accumulated, original_accumulated);
             assert_eq!(s.block_identifier, original_identifier);
             assert_eq!(s.block_number, original_number);
-            // apply always writes the new pre-latest presence
-            assert!(s.pre_latest_data_present);
         }
 
         #[test]
         fn delta_with_mismatching_identifier_is_skipped() {
-            let mut s = state(Some("abc"), 1, false);
+            let mut s = state(Some("abc"), 1);
             let original_accumulated = s.accumulated.clone();
 
-            let emitted = s.apply(
-                PreConfirmedPollResponse::Delta {
-                    identifier: "xyz".into(),
-                    new_transactions: vec![Transaction {
-                        hash: transaction_hash!("0x99"),
-                        variant: TransactionVariant::L1Handler(L1HandlerTransaction {
-                            contract_address: contract_address!("0x1"),
-                            entry_point_selector: entry_point!("0x55"),
-                            nonce: transaction_nonce!("0x0"),
-                            calldata: Vec::new(),
-                        }),
-                    }],
-                    new_receipts: vec![None],
-                    new_state_diffs: vec![None],
-                },
-                false,
-            );
+            let emitted = s.apply(PreConfirmedPollResponse::Delta {
+                identifier: "xyz".into(),
+                new_transactions: vec![Transaction {
+                    hash: transaction_hash!("0x99"),
+                    variant: TransactionVariant::L1Handler(L1HandlerTransaction {
+                        contract_address: contract_address!("0x1"),
+                        entry_point_selector: entry_point!("0x55"),
+                        nonce: transaction_nonce!("0x0"),
+                        calldata: Vec::new(),
+                    }),
+                }],
+                new_receipts: vec![None],
+                new_state_diffs: vec![None],
+            });
 
             assert!(!emitted);
             assert_eq!(s.accumulated, original_accumulated);
@@ -722,18 +721,15 @@ mod tests {
 
         #[test]
         fn delta_with_matching_identifier_and_empty_transactions_is_noop() {
-            let mut s = state(Some("abc"), 1, false);
+            let mut s = state(Some("abc"), 1);
             let original_accumulated = s.accumulated.clone();
 
-            let emitted = s.apply(
-                PreConfirmedPollResponse::Delta {
-                    identifier: "abc".into(),
-                    new_transactions: vec![],
-                    new_receipts: vec![],
-                    new_state_diffs: vec![],
-                },
-                false,
-            );
+            let emitted = s.apply(PreConfirmedPollResponse::Delta {
+                identifier: "abc".into(),
+                new_transactions: vec![],
+                new_receipts: vec![],
+                new_state_diffs: vec![],
+            });
 
             assert!(!emitted);
             assert_eq!(s.accumulated, original_accumulated);
@@ -742,7 +738,7 @@ mod tests {
 
         #[test]
         fn delta_with_matching_identifier_appends() {
-            let mut s = state(Some("abc"), 1, false);
+            let mut s = state(Some("abc"), 1);
 
             let new_tx = Transaction {
                 hash: transaction_hash!("0x99"),
@@ -754,15 +750,12 @@ mod tests {
                 }),
             };
 
-            let emitted = s.apply(
-                PreConfirmedPollResponse::Delta {
-                    identifier: "abc".into(),
-                    new_transactions: vec![new_tx],
-                    new_receipts: vec![None],
-                    new_state_diffs: vec![None],
-                },
-                false,
-            );
+            let emitted = s.apply(PreConfirmedPollResponse::Delta {
+                identifier: "abc".into(),
+                new_transactions: vec![new_tx],
+                new_receipts: vec![None],
+                new_state_diffs: vec![None],
+            });
 
             assert!(emitted);
             let acc = s.accumulated.as_ref().unwrap();
@@ -774,17 +767,14 @@ mod tests {
 
         #[test]
         fn full_with_changed_identifier_emits() {
-            let mut s = state(Some("abc"), 1, false);
+            let mut s = state(Some("abc"), 1);
             let new_block = block_with_txs(1);
 
-            let emitted = s.apply(
-                PreConfirmedPollResponse::Full {
-                    identifier: "xyz".into(),
-                    block_number: Some(BlockNumber::new_or_panic(10)),
-                    block: new_block.clone(),
-                },
-                false,
-            );
+            let emitted = s.apply(PreConfirmedPollResponse::Full {
+                identifier: "xyz".into(),
+                block_number: Some(BlockNumber::new_or_panic(10)),
+                block: new_block.clone(),
+            });
 
             assert!(emitted);
             assert_eq!(s.block_identifier, Some("xyz".into()));
@@ -793,56 +783,31 @@ mod tests {
 
         #[test]
         fn full_with_more_transactions_emits() {
-            let mut s = state(Some("abc"), 1, false);
+            let mut s = state(Some("abc"), 1);
             let new_block = block_with_txs(2);
 
-            let emitted = s.apply(
-                PreConfirmedPollResponse::Full {
-                    identifier: "abc".into(),
-                    block_number: Some(BlockNumber::new_or_panic(10)),
-                    block: new_block.clone(),
-                },
-                false,
-            );
+            let emitted = s.apply(PreConfirmedPollResponse::Full {
+                identifier: "abc".into(),
+                block_number: Some(BlockNumber::new_or_panic(10)),
+                block: new_block.clone(),
+            });
 
             assert!(emitted);
             assert_eq!(s.accumulated.as_ref().unwrap().transactions.len(), 2);
         }
 
         #[test]
-        fn full_with_pre_latest_finalised_emits() {
-            let mut s = state(Some("abc"), 2, true);
-            let same_block = block_with_txs(2);
-
-            // pre_latest transitions true → false: should force an emit
-            let emitted = s.apply(
-                PreConfirmedPollResponse::Full {
-                    identifier: "abc".into(),
-                    block_number: Some(BlockNumber::new_or_panic(10)),
-                    block: same_block.clone(),
-                },
-                false,
-            );
-
-            assert!(emitted);
-            assert_eq!(s.accumulated, Some(same_block));
-        }
-
-        #[test]
         fn full_with_no_signals_is_deduped() {
-            let mut s = state(Some("abc"), 2, false);
+            let mut s = state(Some("abc"), 2);
             let same_block = block_with_txs(2);
             let original_accumulated = s.accumulated.clone();
 
-            // Same identifier, no new txs, no pre-latest transition: nothing to emit
-            let emitted = s.apply(
-                PreConfirmedPollResponse::Full {
-                    identifier: "abc".into(),
-                    block_number: Some(BlockNumber::new_or_panic(10)),
-                    block: same_block,
-                },
-                false,
-            );
+            // Same identifier and no new txs: nothing to emit.
+            let emitted = s.apply(PreConfirmedPollResponse::Full {
+                identifier: "abc".into(),
+                block_number: Some(BlockNumber::new_or_panic(10)),
+                block: same_block,
+            });
 
             assert!(!emitted);
             assert_eq!(s.accumulated, original_accumulated);
@@ -860,9 +825,6 @@ mod tests {
         static COUNT: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
 
         let mut sequencer = MockGatewayApi::new();
-        sequencer
-            .expect_pending_block()
-            .returning(|| Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
         sequencer.expect_preconfirmed_block().returning(|_, _, _| {
             let mut count = COUNT.lock().unwrap();
             let block_number = match *count {
@@ -950,54 +912,68 @@ mod tests {
         assert!(err.to_string().contains("syncing"), "got: {err}");
     }
 
-    /// A failed pre-confirmed fetch marks the cache unavailable with
-    /// "gateway error", so reads fail fast rather than blocking.
-    #[tokio::test(start_paused = true)]
-    async fn gateway_error_marks_cache_unavailable() {
+    /// Once a view is published, a failing gateway must not take the cache
+    /// down: the last good view keeps being served rather than blanking to an
+    /// error.
+    #[tokio::test]
+    async fn retains_last_good_view_on_fetch_failure() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
         use starknet_gateway_types::error::SequencerError;
 
-        // In sync (latest == current) so the loop reaches the fetch, which fails.
+        let calls = Arc::new(AtomicUsize::new(0));
         let mut sequencer = MockGatewayApi::new();
+        // The first poll succeeds and publishes tip 101 (gap of one → no
+        // parents to complete); every poll after it fails.
         sequencer
             .expect_preconfirmed_block()
-            .returning(|_, _, _| Err(SequencerError::InvalidResponse("boom".into())));
-        sequencer
-            .expect_pending_block()
-            .returning(|| Err(SequencerError::InvalidResponse("boom".into())));
-        let sequencer = Arc::new(sequencer);
+            .returning(move |_, _, _| {
+                if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Ok(PreConfirmedPollResponse::Full {
+                        identifier: "id-101".into(),
+                        block_number: Some(BlockNumber::new_or_panic(101)),
+                        block: all_receipted_block(1),
+                    })
+                } else {
+                    Err(SequencerError::InvalidResponse("boom".into()))
+                }
+            });
 
-        let hash = block_hash!("0xabcd");
-        let number = BlockNumber::new_or_panic(10);
-        let (_tx_latest, latest) = watch::channel((number, hash));
-        let (_tx_current, current) = watch::channel((number, hash));
-
+        let committed = BlockNumber::new_or_panic(100);
         let cache = Arc::new(PendingDataCache::new());
-        let _jh = tokio::spawn({
-            let cache = cache.clone();
-            async move {
-                super::poll_pre_confirmed(
-                    sequencer,
-                    std::time::Duration::from_secs(1),
-                    cache,
-                    latest,
-                    current,
-                    TEST_IN_SYNC_THRESHOLD,
-                )
-                .await
-            }
-        });
+        let mut sub = cache.subscribe();
+        let _ = sub.borrow_and_update();
 
+        spawn_producer(sequencer, committed, block_hash!("0xc0"), cache.clone());
+
+        // The first poll publishes the good view.
+        tokio::time::timeout(TEST_TIMEOUT, sub.changed())
+            .await
+            .expect("first view should be published")
+            .unwrap();
+        assert_eq!(
+            sub.borrow().pre_confirmed_block_number(),
+            BlockNumber::new_or_panic(101)
+        );
+
+        // Let the failing polls run.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let err = cache.read().await.unwrap_err();
-        assert!(err.to_string().contains("gateway error"), "got: {err}");
+        // The cache still serves the last good view rather than an error.
+        let served = cache.read().await.expect("cache must stay serviceable");
+        assert_eq!(
+            served.pre_confirmed_block_number(),
+            BlockNumber::new_or_panic(101)
+        );
     }
 
     /// The completion query for a superseded block carries any tail
-    /// transactions that landed just before it advanced; they must reach
-    /// the cache.
+    /// transactions that landed just before it advanced; the completion must
+    /// record the full block (with the tail) as a *complete* window entry so
+    /// the next poll re-serves the tip with it. It publishes nothing
+    /// itself.
     #[tokio::test]
-    async fn complete_previous_block_applies_the_tail_delta() {
+    async fn complete_previous_block_records_the_completed_block() {
         const BLOCK_ID: &str = "id-11";
 
         let tail_hash = transaction_hash!("0x012345");
@@ -1029,42 +1005,340 @@ mod tests {
             });
 
         // We're tracking block 11 with one receipted transaction already merged.
-        let mut state = State {
+        let state = State {
             block_number: BlockNumber::new_or_panic(11),
             block_identifier: Some(BLOCK_ID.to_string()),
             accumulated: Some(all_receipted_block(1)),
-            pre_latest_data_present: false,
         };
 
-        let cache = PendingDataCache::new();
-        let mut rx = cache.subscribe();
-        let _ = rx.borrow_and_update();
+        // The completion records the completed block as a complete window
+        // entry, carrying the tail transaction — ready for the next poll to
+        // re-serve the tip with it.
+        let window = std::sync::Mutex::new(super::Window::default());
+        complete_previous_block(&sequencer, state, &window).await;
 
-        // Committed head 10, so block 11 still chains and is stored.
-        complete_previous_block(
-            &sequencer,
-            &mut state,
-            &cache,
-            BlockNumber::new_or_panic(10),
-        )
-        .await;
-
+        let guard = window.lock().unwrap();
+        let entry = guard
+            .blocks
+            .get(&BlockNumber::new_or_panic(11))
+            .expect("the completion should record the block in the window");
+        assert!(entry.complete, "the recorded entry should be complete");
         assert!(
-            rx.has_changed().unwrap(),
-            "the completion should store the block"
-        );
-        let pending = rx.borrow().clone();
-        assert_eq!(
-            pending.pre_confirmed_block_number(),
-            BlockNumber::new_or_panic(11)
-        );
-        assert!(
-            pending
-                .pre_confirmed_transactions()
+            entry
+                .data
+                .block
+                .transactions
                 .iter()
                 .any(|t| t.hash == tail_hash),
-            "the tail transaction should be in the completed block"
+            "the tail transaction should be in the recorded block"
         );
+    }
+
+    mod window {
+        use std::sync::Arc;
+
+        use pathfinder_common::BlockNumber;
+        use pathfinder_pending_data::{PreLatestBlock, PreLatestData};
+
+        use super::super::Window;
+
+        fn bn(n: u64) -> BlockNumber {
+            BlockNumber::new_or_panic(n)
+        }
+
+        // An entry stamped with its block number, as the producer records it.
+        fn entry(n: u64) -> Arc<PreLatestData> {
+            Arc::new(PreLatestData {
+                block: PreLatestBlock {
+                    number: bn(n),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+        }
+
+        fn with_blocks(complete: &[u64], provisional: &[u64]) -> Window {
+            let mut window = Window::default();
+            for &n in complete {
+                window.record(bn(n), entry(n), true);
+            }
+            for &n in provisional {
+                window.record(bn(n), entry(n), false);
+            }
+            window
+        }
+
+        fn parent_numbers(parents: &[Arc<PreLatestData>]) -> Vec<u64> {
+            parents.iter().map(|p| p.block.number.get()).collect()
+        }
+
+        #[test]
+        fn collect_gap_of_one_needs_no_parents() {
+            let window = Window::default();
+            let parents = window.collect(bn(5), bn(6)).unwrap();
+            assert!(parents.is_empty());
+        }
+
+        #[test]
+        fn collect_contiguous_window_collects_every_parent() {
+            let window = with_blocks(&[6, 7, 8], &[9, 10]);
+            let parents = window.collect(bn(5), bn(11)).unwrap();
+            assert_eq!(parent_numbers(&parents), vec![6, 7, 8, 9, 10]);
+        }
+
+        #[test]
+        fn collect_with_a_hole_returns_none() {
+            let window = with_blocks(&[6, 8], &[]);
+            assert!(window.collect(bn(5), bn(9)).is_none());
+        }
+
+        #[test]
+        fn collect_ignores_blocks_outside_the_open_range() {
+            let window = with_blocks(&[4, 5, 6, 7, 8, 9, 10], &[]);
+            let parents = window.collect(bn(5), bn(9)).unwrap();
+            assert_eq!(parent_numbers(&parents), vec![6, 7, 8]);
+        }
+
+        #[test]
+        fn record_complete_entry_upgrades_provisional_and_bumps_generation() {
+            let mut window = Window::default();
+            window.record(bn(7), entry(7), false);
+            let after_provisional = window.generation;
+            assert!(
+                after_provisional > 0,
+                "inserting provisional bumps the generation"
+            );
+            assert!(!window.blocks[&bn(7)].complete);
+
+            window.record(bn(7), entry(7), true);
+            assert!(window.blocks[&bn(7)].complete);
+            assert!(
+                window.generation > after_provisional,
+                "an upgrade bumps the generation"
+            );
+        }
+
+        #[test]
+        fn record_does_not_upgrade_a_complete_entry_or_bump() {
+            let mut window = Window::default();
+            window.record(bn(7), entry(7), true);
+            let gen = window.generation;
+
+            // Upgrading with another provisional entry is a no-op.
+            window.record(bn(7), entry(7), false);
+            // Upgrading with another complete entry is a no-op.
+            window.record(bn(7), entry(7), true);
+            assert_eq!(window.generation, gen);
+            assert!(window.blocks[&bn(7)].complete);
+        }
+
+        #[test]
+        fn record_provisional_does_not_replace_provisional() {
+            let mut window = Window::default();
+            window.record(bn(7), entry(7), false);
+            let gen = window.generation;
+            // A second provisional record for the same block is a no-op.
+            window.record(bn(7), entry(7), false);
+            assert_eq!(window.generation, gen);
+        }
+
+        #[test]
+        fn prune_drops_committed_blocks() {
+            let mut window = with_blocks(&[6, 7, 8], &[]);
+            window.prune(bn(7));
+            assert!(!window.blocks.contains_key(&bn(6)));
+            assert!(!window.blocks.contains_key(&bn(7)));
+            assert!(window.blocks.contains_key(&bn(8)));
+        }
+
+        #[test]
+        fn missing_reports_holes_in_the_open_range() {
+            let window = with_blocks(&[6, 8], &[]);
+            assert_eq!(window.missing(bn(5), bn(9)), vec![bn(7)]);
+        }
+
+        #[test]
+        fn missing_reports_empty_for_a_complete_window() {
+            let window = with_blocks(&[6, 7, 8], &[]);
+            assert!(window.missing(bn(5), bn(9)).is_empty());
+        }
+
+        #[test]
+        fn missing_covers_the_whole_open_range_for_empty_window() {
+            let window = with_blocks(&[], &[]);
+            assert_eq!(window.missing(bn(5), bn(9)), vec![bn(6), bn(7), bn(8)]);
+        }
+    }
+
+    fn block_with_tx(tag: TransactionHash) -> PreConfirmedBlock {
+        let tx = Transaction {
+            hash: tag,
+            variant: TransactionVariant::L1Handler(L1HandlerTransaction {
+                contract_address: contract_address!("0x1"),
+                entry_point_selector: entry_point!("0x55"),
+                nonce: transaction_nonce!("0x0"),
+                calldata: Vec::new(),
+            }),
+        };
+        let receipt = pathfinder_common::receipt::Receipt {
+            transaction_hash: tag,
+            transaction_index: TransactionIndex::new_or_panic(0),
+            ..Default::default()
+        };
+        PreConfirmedBlock {
+            status: Status::PreConfirmed,
+            transactions: vec![tx],
+            transaction_receipts: vec![Some((receipt, vec![]))],
+            transaction_state_diffs: vec![None],
+            ..Default::default()
+        }
+    }
+
+    fn tx_for(height: u64) -> TransactionHash {
+        match height {
+            11 => transaction_hash!("0x11"),
+            12 => transaction_hash!("0x12"),
+            _ => transaction_hash!("0x13"),
+        }
+    }
+
+    fn tx_at(height: u64) -> TransactionHash {
+        TransactionHash(pathfinder_crypto::Felt::from_u64(height))
+    }
+
+    /// End-to-end: with finalisation lagging (committed head fixed, no gateway
+    /// pre-latest), the producer fills its window from block *completions* and
+    /// serves a multi-block view whose deep ancestor's transactions are
+    /// present. This proves no tail is lost for a window wider than two
+    /// blocks, and that the re-serve-on-warm path fires (the tip's contents
+    /// don't change between the poll that first sees it and the poll that
+    /// finally bridges it).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn windowed_serve_preserves_deep_ancestor_tail() {
+        use starknet_gateway_client::BlockId;
+
+        let mut sequencer = MockGatewayApi::new();
+
+        // `Latest` polls advance the tip 11, 12, 13 (then hold at 13, with a stable
+        // identifier so the contents stop changing - forcing the re-serve to rely on
+        // the window warming up, not on a content change). Concrete-number queries are
+        // completions and return that block in full.
+        static HEIGHT: Mutex<u64> = Mutex::new(10);
+        sequencer
+            .expect_preconfirmed_block()
+            .returning(move |block_id, _, _| match block_id {
+                BlockId::Latest => {
+                    let mut height = HEIGHT.lock().unwrap();
+                    if *height < 13 {
+                        *height += 1;
+                    }
+                    let height = *height;
+                    Ok(PreConfirmedPollResponse::Full {
+                        identifier: format!("tip-{height}"),
+                        block_number: Some(BlockNumber::new_or_panic(height)),
+                        block: block_with_tx(tx_for(height)),
+                    })
+                }
+                BlockId::Number(number) => {
+                    let number = number.get();
+                    Ok(PreConfirmedPollResponse::Full {
+                        identifier: format!("complete-{number}"),
+                        block_number: Some(BlockNumber::new_or_panic(number)),
+                        block: block_with_tx(tx_for(number)),
+                    })
+                }
+                other => panic!("unexpected block id: {other:?}"),
+            });
+
+        let committed = BlockNumber::new_or_panic(10);
+        let cache = Arc::new(PendingDataCache::new());
+        let mut sub = cache.subscribe();
+        let _ = sub.borrow_and_update();
+
+        spawn_producer(sequencer, committed, block_hash!("0xbeef"), cache.clone());
+
+        // Wait until the producer serves block 13 with its full window: deep ancestor
+        // 11 plus immediate parent 12.
+        let deadline = tokio::time::Instant::now() + TEST_TIMEOUT;
+        loop {
+            tokio::time::timeout_at(deadline, sub.changed())
+                .await
+                .expect("producer should serve the windowed view before timeout")
+                .unwrap();
+            let pending = sub.borrow().clone();
+            if pending.pre_confirmed_block_number() != BlockNumber::new_or_panic(13) {
+                continue;
+            }
+            let parents: Vec<_> = pending.parent_blocks().map(|p| p.block.number).collect();
+            if parents != vec![BlockNumber::new_or_panic(11), BlockNumber::new_or_panic(12)] {
+                continue;
+            }
+
+            // The deep ancestor's, the immediate parent's and the tip's transactions are
+            // all present - no tail lost across the window.
+            assert!(pending.find_transaction(tx_for(11)).is_some());
+            assert!(pending.find_transaction(tx_for(12)).is_some());
+            assert!(pending.find_transaction(tx_for(13)).is_some());
+            break;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn windowed_serve_does_not_wait_for_completions() {
+        use std::sync::Mutex as StdMutex;
+
+        use starknet_gateway_client::BlockId;
+        use starknet_gateway_types::error::SequencerError;
+
+        let mut sequencer = MockGatewayApi::new();
+
+        static HEIGHT: StdMutex<u64> = StdMutex::new(10);
+        sequencer
+            .expect_preconfirmed_block()
+            .returning(move |block_id, _, _| match block_id {
+                BlockId::Latest => {
+                    let mut height = HEIGHT.lock().unwrap();
+                    if *height < 13 {
+                        *height += 1;
+                    }
+                    let height = *height;
+                    Ok(PreConfirmedPollResponse::Full {
+                        identifier: format!("tip-{height}"),
+                        block_number: Some(BlockNumber::new_or_panic(height)),
+                        block: block_with_tx(tx_for(height)),
+                    })
+                }
+                // Completion fetches always fail — serving must not depend on them.
+                _ => Err(SequencerError::InvalidResponse("no completions".into())),
+            });
+
+        let committed = BlockNumber::new_or_panic(10);
+        let cache = Arc::new(PendingDataCache::new());
+        let mut sub = cache.subscribe();
+        let _ = sub.borrow_and_update();
+
+        spawn_producer(sequencer, committed, block_hash!("0xbeef"), cache.clone());
+
+        let deadline = tokio::time::Instant::now() + TEST_TIMEOUT;
+        loop {
+            tokio::time::timeout_at(deadline, sub.changed())
+                .await
+                .expect("producer should serve from provisional entries before timeout")
+                .unwrap();
+            let pending = sub.borrow().clone();
+            if pending.pre_confirmed_block_number() != BlockNumber::new_or_panic(13) {
+                continue;
+            }
+            let parents: Vec<_> = pending.parent_blocks().map(|p| p.block.number).collect();
+            if parents != vec![BlockNumber::new_or_panic(11), BlockNumber::new_or_panic(12)] {
+                continue;
+            }
+            // Both un-committed parents are present from provisional data alone.
+            assert!(pending.find_transaction(tx_for(11)).is_some());
+            assert!(pending.find_transaction(tx_for(12)).is_some());
+            assert!(pending.find_transaction(tx_for(13)).is_some());
+            break;
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -1077,9 +1351,6 @@ mod tests {
 
         let calls = Arc::new(std::sync::Mutex::new(0u64));
         let mut sequencer = MockGatewayApi::new();
-        sequencer
-            .expect_pending_block()
-            .returning(|| Ok((PRE_LATEST_BLOCK.clone(), PENDING_UPDATE.clone())));
         {
             let calls = calls.clone();
             sequencer
@@ -1095,7 +1366,7 @@ mod tests {
                 });
         }
 
-        let latest_hash = PRE_LATEST_BLOCK.parent_hash;
+        let latest_hash = block_hash!("0xabcd");
         let committed = BlockNumber::new_or_panic(1);
         let (_latest_tx, latest) = watch::channel((committed, latest_hash));
         let (_current_tx, current) = watch::channel((committed, latest_hash));
@@ -1136,5 +1407,116 @@ mod tests {
             *calls.lock().unwrap() > count_at_idle,
             "polling should resume after a cache read"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cold_start_gap_is_filled_and_served() {
+        use starknet_gateway_client::BlockId;
+
+        let mut sequencer = MockGatewayApi::new();
+        sequencer
+            .expect_preconfirmed_block()
+            .returning(move |block_id, _, _| {
+                let number = match block_id {
+                    BlockId::Latest => 14,
+                    BlockId::Number(n) => n.get(),
+                    other => panic!("unexpected block id: {other:?}"),
+                };
+                Ok(PreConfirmedPollResponse::Full {
+                    identifier: format!("id-{number}"),
+                    block_number: Some(BlockNumber::new_or_panic(number)),
+                    block: block_with_tx(tx_at(number)),
+                })
+            });
+
+        let committed = BlockNumber::new_or_panic(10);
+        let cache = Arc::new(PendingDataCache::new());
+        let mut sub = cache.subscribe();
+        let _ = sub.borrow_and_update();
+
+        spawn_producer(sequencer, committed, block_hash!("0xbeef"), cache.clone());
+
+        let deadline = tokio::time::Instant::now() + TEST_TIMEOUT;
+        loop {
+            tokio::time::timeout_at(deadline, sub.changed())
+                .await
+                .expect("producer should serve the full window before timeout")
+                .unwrap();
+            let pending = sub.borrow().clone();
+            if pending.pre_confirmed_block_number() != BlockNumber::new_or_panic(14) {
+                continue;
+            }
+            let parents: Vec<_> = pending.parent_blocks().map(|p| p.block.number).collect();
+            assert_eq!(
+                parents,
+                vec![
+                    BlockNumber::new_or_panic(11),
+                    BlockNumber::new_or_panic(12),
+                    BlockNumber::new_or_panic(13),
+                ]
+            );
+            // All transactions are present, the entire window was filled and served.
+            assert!(pending.find_transaction(tx_at(11)).is_some());
+            assert!(pending.find_transaction(tx_at(12)).is_some());
+            assert!(pending.find_transaction(tx_at(13)).is_some());
+            assert!(pending.find_transaction(tx_at(14)).is_some());
+            break;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn gap_fill_retries_after_a_failed_fetch() {
+        use starknet_gateway_client::BlockId;
+        use starknet_gateway_types::error::SequencerError;
+
+        let mut sequencer = MockGatewayApi::new();
+        // The first fetch of block 12 fails, others succeed.
+        static BLOCK_12_CALLS: Mutex<u64> = Mutex::new(0);
+        sequencer
+            .expect_preconfirmed_block()
+            .returning(move |block_id, _, _| {
+                let number = match block_id {
+                    BlockId::Latest => 13,
+                    BlockId::Number(n) => n.get(),
+                    other => panic!("unexpected block id: {other:?}"),
+                };
+                if number == 12 {
+                    let mut calls = BLOCK_12_CALLS.lock().unwrap();
+                    *calls += 1;
+                    if *calls == 1 {
+                        return Err(SequencerError::InvalidResponse("boom".into()));
+                    }
+                }
+                Ok(PreConfirmedPollResponse::Full {
+                    identifier: format!("id-{number}"),
+                    block_number: Some(BlockNumber::new_or_panic(number)),
+                    block: block_with_tx(tx_at(number)),
+                })
+            });
+
+        let committed = BlockNumber::new_or_panic(10);
+        let cache = Arc::new(PendingDataCache::new());
+        let mut sub = cache.subscribe();
+        let _ = sub.borrow_and_update();
+
+        spawn_producer(sequencer, committed, block_hash!("0xbeef"), cache.clone());
+
+        let deadline = tokio::time::Instant::now() + TEST_TIMEOUT;
+        loop {
+            tokio::time::timeout_at(deadline, sub.changed())
+                .await
+                .expect("producer serve the full window before timeout")
+                .unwrap();
+            let pending = sub.borrow().clone();
+            if pending.pre_confirmed_block_number() != BlockNumber::new_or_panic(13) {
+                continue;
+            }
+            let parents: Vec<_> = pending.parent_blocks().map(|p| p.block.number).collect();
+            if parents == vec![BlockNumber::new_or_panic(11), BlockNumber::new_or_panic(12)] {
+                // Fetching block 12 was retried.
+                assert!(*BLOCK_12_CALLS.lock().unwrap() >= 2);
+                break;
+            }
+        }
     }
 }

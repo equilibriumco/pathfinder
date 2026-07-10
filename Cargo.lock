@@ -9024,6 +9024,7 @@ version = "0.22.7"
 dependencies = [
  "anyhow",
  "pathfinder-common",
+ "pathfinder-crypto",
  "starknet-gateway-types",
  "thiserror 2.0.18",
  "tokio",
