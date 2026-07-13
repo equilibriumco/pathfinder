@@ -191,9 +191,7 @@ pub async fn get_events(
         let pending: Option<PendingData> = if requires_pre_confirmed {
             Some(context.pending_data.get(&transaction)?)
         } else {
-            context
-                .pending_data
-                .get_optional(&transaction)?
+            context.pending_data.get_optional(&transaction)?
         };
 
         // Replace from/to blocks with `BlockId::PreConfirmed` if their numbers match
