@@ -68,10 +68,7 @@ pub async fn get_state_update(
         let tx = db.transaction().context("Creating database transaction")?;
 
         if input.block_id.is_pending() {
-            let mut state_update = context
-                .pending_data
-                .get(&tx)?
-                .pre_confirmed_state_update();
+            let mut state_update = context.pending_data.get(&tx)?.pre_confirmed_state_update();
             if !input.contract_addresses.is_empty() {
                 let mut own_state_update = state_update.as_ref().clone();
                 filter_state_update_contracts(&mut own_state_update, &input.contract_addresses);
