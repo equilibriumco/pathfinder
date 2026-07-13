@@ -514,7 +514,7 @@ mod tests {
         // Window of two: pre-latest at latest + 1, pre-confirmed at latest + 2.
         cache.store(valid_pre_confirmed_block_with_pre_latest(&latest));
 
-        let result = uut.get(&tx, RpcVersion::V09).unwrap();
+        let result = uut.get(&tx).unwrap();
 
         assert!(
             result.pre_latest_block().is_some(),
