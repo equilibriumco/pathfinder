@@ -245,7 +245,7 @@
                     {
                         "title": "Event",
                         "description": "The event information",
-                        "$ref": "./v07/starknet_api_openrpc.json#/components/schemas/EVENT"
+                        "$ref": "./v10/starknet_api_openrpc.json#/components/schemas/EVENT"
                     },
                     {
                         "title": "Event context",
