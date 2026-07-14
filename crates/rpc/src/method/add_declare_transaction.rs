@@ -48,7 +48,7 @@ impl From<AddDeclareTransactionError> for crate::error::ApplicationError {
                 Self::InsufficientAccountBalance
             }
             AddDeclareTransactionError::ValidationFailure(message) => {
-                Self::ValidationFailureV06(message)
+                Self::ValidationFailure(message)
             }
             AddDeclareTransactionError::CompilationFailed(data) => Self::CompilationFailed { data },
             AddDeclareTransactionError::ContractClassSizeIsTooLarge => {

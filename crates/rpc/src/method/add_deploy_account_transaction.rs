@@ -129,7 +129,7 @@ impl From<AddDeployAccountTransactionError> for crate::error::ApplicationError {
             InvalidTransactionNonce(data) => Self::InvalidTransactionNonce { data },
             InsufficientResourcesForValidate => Self::InsufficientResourcesForValidate,
             InsufficientAccountBalance => Self::InsufficientAccountBalance,
-            ValidationFailure(message) => Self::ValidationFailureV06(message),
+            ValidationFailure(message) => Self::ValidationFailure(message),
             DuplicateTransaction => Self::DuplicateTransaction,
             NonAccount => Self::NonAccount,
             UnsupportedTransactionVersion => Self::UnsupportedTxVersion,

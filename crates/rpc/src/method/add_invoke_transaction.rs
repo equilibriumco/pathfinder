@@ -145,9 +145,7 @@ impl From<AddInvokeTransactionError> for crate::error::ApplicationError {
             AddInvokeTransactionError::InsufficientAccountBalance => {
                 Self::InsufficientAccountBalance
             }
-            AddInvokeTransactionError::ValidationFailure(error) => {
-                Self::ValidationFailureV06(error)
-            }
+            AddInvokeTransactionError::ValidationFailure(error) => Self::ValidationFailure(error),
             AddInvokeTransactionError::DuplicateTransaction => Self::DuplicateTransaction,
             AddInvokeTransactionError::NonAccount => Self::NonAccount,
             AddInvokeTransactionError::UnsupportedTransactionVersion => Self::UnsupportedTxVersion,

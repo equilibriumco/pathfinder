@@ -64,9 +64,7 @@ pub enum ApplicationError {
     )]
     InsufficientAccountBalance,
     #[error("Account validation failed")]
-    ValidationFailure,
-    #[error("Account validation failed")]
-    ValidationFailureV06(String),
+    ValidationFailure(String),
     #[error("Compilation failed")]
     CompilationFailed { data: String },
     #[error("Contract class size is too large")]
@@ -154,7 +152,7 @@ impl ApplicationError {
             ApplicationError::InvalidTransactionNonce { .. } => 52,
             ApplicationError::InsufficientResourcesForValidate => 53,
             ApplicationError::InsufficientAccountBalance => 54,
-            ApplicationError::ValidationFailure | ApplicationError::ValidationFailureV06(_) => 55,
+            ApplicationError::ValidationFailure(_) => 55,
             ApplicationError::CompilationFailed { .. } => 56,
             ApplicationError::ContractClassSizeIsTooLarge => 57,
             ApplicationError::NonAccount => 58,
@@ -206,8 +204,7 @@ impl ApplicationError {
                 "insufficient_resources_for_validate"
             }
             ApplicationError::InsufficientAccountBalance => "insufficient_account_balance",
-            ApplicationError::ValidationFailure => "validation_failure",
-            ApplicationError::ValidationFailureV06(_) => "validation_failure",
+            ApplicationError::ValidationFailure(_) => "validation_failure",
             ApplicationError::CompilationFailed { .. } => "compilation_failed",
             ApplicationError::ContractClassSizeIsTooLarge => "contract_class_size_too_large",
             ApplicationError::NonAccount => "non_account",
@@ -263,7 +260,6 @@ impl ApplicationError {
             ApplicationError::InvalidTransactionNonce { data } => Some(json!(data)),
             ApplicationError::InsufficientResourcesForValidate => None,
             ApplicationError::InsufficientAccountBalance => None,
-            ApplicationError::ValidationFailure => None,
             ApplicationError::CompilationFailed { data } => Some(json!(data)),
             ApplicationError::ContractClassSizeIsTooLarge => None,
             ApplicationError::NonAccount => None,
@@ -339,7 +335,7 @@ impl ApplicationError {
             ApplicationError::SubscriptionGatewayDown { subscription_id } => Some(json!({
                 "subscription_id": subscription_id,
             })),
-            ApplicationError::ValidationFailureV06(error) => Some(json!(error)),
+            ApplicationError::ValidationFailure(error) => Some(json!(error)),
         }
     }
 }
