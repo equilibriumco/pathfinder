@@ -1,33 +1,21 @@
-//! A websocket subscription service, inspired by [Ethereum](https://ethereum.org/en/developers/tutorials/using-websockets/)
-//! See also the [Infura Ethereum API spec](https://docs.infura.io/networks/ethereum/json-rpc-methods/subscription-methods/eth_subscribe)
-//! as well as the [Alchemy subscription API doc](https://docs.alchemy.com/reference/subscription-api)
+//! A websocket subscription service, inspired by
+//! [Ethereum](https://ethereum.org/en/developers/tutorials/using-websockets/)
+//! See also the [Alchemy subscription API
+//! doc](https://docs.alchemy.com/reference/subscription-api)
 //!
-//! See the [OpenRPC](../../../specs/rpc/pathfinder_ws.json) spec for this
-//! implementation.
+//! See the [OpenRPC](../../../specs/rpc/v10/starknet_ws_api.json)
+//! spec for the supported methods.
 //!
 //! Requires the `--rpc.websocket.enabled` cli option.
 //!
 //!
 //! Manual testing can be performed using `wscat`:
 //! ```ignore
-//! > pierre:~/pathfinder$ wscat -c ws://localhost:9545/ws
+//! > ~/pathfinder$ wscat -c ws://localhost:9545/rpc/v0_10
 //! Connected (press CTRL+C to quit)
-//! > {"jsonrpc":"2.0", "id": 1, "method": "pathfinder_subscribe", "params": ["newHeads"]}
-//! < {"jsonrpc":"2.0","result":0,"id":1}
-//! < {"jsonrpc":"2.0","method":"pathfinder_subscription","result":{"subscription":0,"event":{"class_commitment":"0x4a1c4c3cd477eb052655963781fd7ae0cd647752f01595e4e33fed2ab0eff90","eth_l1_gas_price":1000000015,"event_commitment":"0x79789afccc8f0cac4a3992b2b52cc15f560b4f5a997d883b29d73236b2dfce7","event_count":387,"hash":"0x412edf5929693f8d6bb29512d1a777066dfbf493f3ee64bcb14c64165f5006b","number":908104,"parent_hash":"0x16562de7d258e27809ec6b3d3da5edaedc6526a046442f2f5d72fe7c5dc0a1d","sequencer_address":"0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8","starknet_version":"0.12.3","state_commitment":"0x1d00410c349e70996834a144598bc762602df09cd38a51c25528fb2fd662403","storage_commitment":"0x5129d4a27efa0429975f67440314ab921cc554681ac3ecf476850c1f6b723bf","strk_l1_gas_price":0,"timestamp":1700823087,"transaction_commitment":"0x273bfec6af3c812b59a864e67334132d5bd26c570a9b202e0adce2bb4d6b0cf","transaction_count":36}}}
-//! ```
-//!
-//! Subscriptions may lag behind because of a slow network or slow client and
-//! result in an error:
-//! ```ignore
-//! > pierre:~/pathfinder$ wscat -c ws://localhost:9545/ws
-//! Connected (press CTRL+C to quit)
-//! > {"jsonrpc":"2.0", "id": 1, "method": "pathfinder_subscribe", "params":
-//! > ["newHeads"]}
-//! < {"jsonrpc":"2.0","result":0,"id":1}
-//! < {"jsonrpc":"2.0","error":{"code":-32099,"message":"Websocket subscription
-//! closed","data":{"id":0,"reason":"Lagging stream, some headers were skipped.
-//! Closing subscription."}},"id":null}
+//! > {"jsonrpc":"2.0", "id": 1, "method": "starknet_subscribeNewHeads", "params": []}
+//! < {"id":1,"jsonrpc":"2.0","result":"0"}
+//! < {"jsonrpc":"2.0","method":"starknet_subscriptionNewHeads","params":{"result":{"block_hash":"0x66626f1f0038c608f8d4ee10c39c9d4f0b98a9866b086cb32e8f919ee6b43aa","block_number":11834642,"event_commitment":"0x0","event_count":0,"l1_da_mode":"BLOB","l1_data_gas_price":{"price_in_fri":"0x10a3324ecd","price_in_wei":"0x11b45d"},"l1_gas_price":{"price_in_fri":"0x411936095dbe","price_in_wei":"0x45460c02"},"l2_gas_price":{"price_in_fri":"0x712f2ffc7","price_in_wei":"0x78718"},"new_root":"0x4cfd667f0ab6ab2e6041564b0b11288e0eb4b81b53d5301c53ea21667d937be","parent_hash":"0x668a2e83e0daeb3036a80a3007d44f0b8153d1f21209bb82fabdeaf45238a8b","receipt_commitment":"0x0","sequencer_address":"0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8","starknet_version":"0.14.3","state_diff_commitment":"0x5d2704f07aae8cbd3cfcfe831d9d735198b7499a38817cb5dc5f23217340b91","state_diff_length":1,"timestamp":1784019750,"transaction_commitment":"0x0","transaction_count":0},"subscription_id":"0"}}
 //! ```
 
 use std::time::Duration;
