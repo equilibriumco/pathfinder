@@ -216,67 +216,6 @@ impl crate::dto::SerializeForVersion for &pathfinder_executor::types::MsgToL1 {
     }
 }
 
-struct ComputationResources<'a>(&'a pathfinder_executor::types::ComputationResources);
-
-impl crate::dto::SerializeForVersion for ComputationResources<'_> {
-    fn serialize(
-        &self,
-        serializer: crate::dto::Serializer,
-    ) -> Result<crate::dto::Ok, crate::dto::Error> {
-        let mut serializer = serializer.serialize_struct()?;
-        serializer.serialize_field("steps", &self.0.steps)?;
-        if self.0.memory_holes != 0 {
-            serializer.serialize_field("memory_holes", &self.0.memory_holes)?;
-        }
-        if self.0.range_check_builtin_applications != 0 {
-            serializer.serialize_field(
-                "range_check_builtin_applications",
-                &self.0.range_check_builtin_applications,
-            )?;
-        }
-        if self.0.pedersen_builtin_applications != 0 {
-            serializer.serialize_field(
-                "pedersen_builtin_applications",
-                &self.0.pedersen_builtin_applications,
-            )?;
-        }
-        if self.0.poseidon_builtin_applications != 0 {
-            serializer.serialize_field(
-                "poseidon_builtin_applications",
-                &self.0.poseidon_builtin_applications,
-            )?;
-        }
-        if self.0.ec_op_builtin_applications != 0 {
-            serializer.serialize_field(
-                "ec_op_builtin_applications",
-                &self.0.ec_op_builtin_applications,
-            )?;
-        }
-        if self.0.ecdsa_builtin_applications != 0 {
-            serializer.serialize_field(
-                "ecdsa_builtin_applications",
-                &self.0.ecdsa_builtin_applications,
-            )?;
-        }
-        if self.0.bitwise_builtin_applications != 0 {
-            serializer.serialize_field(
-                "bitwise_builtin_applications",
-                &self.0.bitwise_builtin_applications,
-            )?;
-        }
-        if self.0.keccak_builtin_applications != 0 {
-            serializer.serialize_field(
-                "keccak_builtin_applications",
-                &self.0.keccak_builtin_applications,
-            )?;
-        }
-        if self.0.segment_arena_builtin != 0 {
-            serializer.serialize_field("segment_arena_builtin", &self.0.segment_arena_builtin)?;
-        }
-        serializer.end()
-    }
-}
-
 struct InnerCallExecutionResources<'a>(&'a pathfinder_executor::types::InnerCallExecutionResources);
 
 impl crate::dto::SerializeForVersion for InnerCallExecutionResources<'_> {
@@ -702,7 +641,6 @@ mod tests {
     use crate::context::RpcContext;
     use crate::dto::{
         CallType,
-        ComputationResources,
         ExecutionResources,
         SerializeForVersion,
         Serializer,

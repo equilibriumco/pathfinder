@@ -24,8 +24,7 @@ pub struct FinalizedTxData {
     pub finality_status: crate::dto::TxnFinalityStatus,
 }
 
-/// Validates the cached pre-confirmed data against the latest block in
-/// storage and the JSON-RPC version before returning it.
+/// Validates the cached pre-confirmed data against the latest block in storage.
 #[derive(Clone)]
 pub struct PendingWatcher {
     cache: Arc<PendingDataCache>,
