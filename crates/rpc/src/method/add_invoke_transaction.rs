@@ -127,6 +127,25 @@ pub enum AddInvokeTransactionError {
     ForwardedError(reqwest::Error),
 }
 
+impl PartialEq for AddInvokeTransactionError {
+    fn eq(&self, other: &Self) -> bool {
+        use AddInvokeTransactionError::*;
+        match (self, other) {
+            (InvalidTransactionNonce(a), InvalidTransactionNonce(b)) => a == b,
+            (InsufficientResourcesForValidate, InsufficientResourcesForValidate) => true,
+            (InsufficientAccountBalance, InsufficientAccountBalance) => true,
+            (ValidationFailure(a), ValidationFailure(b)) => a == b,
+            (DuplicateTransaction, DuplicateTransaction) => true,
+            (NonAccount, NonAccount) => true,
+            (UnsupportedTransactionVersion, UnsupportedTransactionVersion) => true,
+            (InvalidProof, InvalidProof) => true,
+            (UnexpectedError(a), UnexpectedError(b)) => a == b,
+            (ForwardedError(a), ForwardedError(b)) => a.to_string() == b.to_string(),
+            _ => false,
+        }
+    }
+}
+
 impl From<anyhow::Error> for AddInvokeTransactionError {
     fn from(e: anyhow::Error) -> Self {
         AddInvokeTransactionError::UnexpectedError(e.to_string())
@@ -352,181 +371,8 @@ mod tests {
     use super::*;
     use crate::types::request::BroadcastedInvokeTransactionV1;
 
-    fn test_invoke_txn() -> Transaction {
-        Transaction::Invoke(BroadcastedInvokeTransaction::V1(
-            BroadcastedInvokeTransactionV1 {
-                version: TransactionVersion::ONE,
-                max_fee: fee!("0x4F388496839"),
-                signature: vec![
-                    transaction_signature_elem!(
-                        "0x07dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5"
-                    ),
-                    transaction_signature_elem!(
-                        "0x071456dded17015d1234779889d78f3e7c763ddcfd2662b19e7843c7542614f8"
-                    ),
-                ],
-                nonce: transaction_nonce!("0x1"),
-                sender_address: contract_address!(
-                    "0x023371b227eaecd8e8920cd429357edddd2cd0f3fee6abaacca08d3ab82a7cdd"
-                ),
-                calldata: vec![
-                    call_param!("0x1"),
-                    call_param!(
-                        "0x0677bb1cdc050e8d63855e8743ab6e09179138def390676cc03c484daf112ba1"
-                    ),
-                    call_param!(
-                        "0x0362398bec32bc0ebb411203221a35a0301193a96f317ebe5e40be9f60d15320"
-                    ),
-                    call_param!("0x0"),
-                    call_param!("0x1"),
-                    call_param!("0x1"),
-                    call_param!("0x2b"),
-                    call_param!("0x0"),
-                ],
-            },
-        ))
-    }
-
-    mod parsing {
-        use serde_json::json;
-
-        use super::*;
-        use crate::dto::{DeserializeForVersion, SerializeForVersion, Serializer};
-
-        #[test]
-        fn positional_args() {
-            let positional = json!([
-                {
-                    "type": "INVOKE",
-                    "version": "0x1",
-                    "max_fee": "0x4f388496839",
-                    "signature": [
-                        "0x07dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5",
-                        "0x071456dded17015d1234779889d78f3e7c763ddcfd2662b19e7843c7542614f8"
-                    ],
-                    "nonce": "0x1",
-                    "sender_address": "0x023371b227eaecd8e8920cd429357edddd2cd0f3fee6abaacca08d3ab82a7cdd",
-                    "calldata": [
-                        "0x1",
-                        "0x0677bb1cdc050e8d63855e8743ab6e09179138def390676cc03c484daf112ba1",
-                        "0x0362398bec32bc0ebb411203221a35a0301193a96f317ebe5e40be9f60d15320",
-                        "0x0",
-                        "0x1",
-                        "0x1",
-                        "0x2b",
-                        "0x0"
-                    ]
-                }
-            ]);
-
-            let input =
-                Input::deserialize(crate::dto::Value::new(positional, crate::RpcVersion::V09))
-                    .unwrap();
-            let expected = Input {
-                invoke_transaction: test_invoke_txn(),
-            };
-            pretty_assertions_sorted::assert_eq!(input, expected);
-        }
-
-        #[test]
-        fn named_args() {
-            let named = json!({
-                "invoke_transaction": {
-                    "type": "INVOKE",
-                    "version": "0x1",
-                    "max_fee": "0x4f388496839",
-                    "signature": [
-                        "0x07dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5",
-                        "0x071456dded17015d1234779889d78f3e7c763ddcfd2662b19e7843c7542614f8"
-                    ],
-                    "nonce": "0x1",
-                    "sender_address": "0x023371b227eaecd8e8920cd429357edddd2cd0f3fee6abaacca08d3ab82a7cdd",
-                    "calldata": [
-                        "0x1",
-                        "0x0677bb1cdc050e8d63855e8743ab6e09179138def390676cc03c484daf112ba1",
-                        "0x0362398bec32bc0ebb411203221a35a0301193a96f317ebe5e40be9f60d15320",
-                        "0x0",
-                        "0x1",
-                        "0x1",
-                        "0x2b",
-                        "0x0"
-                    ]
-                }
-            });
-
-            let input =
-                Input::deserialize(crate::dto::Value::new(named, crate::RpcVersion::V09)).unwrap();
-            let expected = Input {
-                invoke_transaction: test_invoke_txn(),
-            };
-            assert_eq!(input, expected);
-        }
-
-        #[test]
-        fn unexpected_error_message() {
-            use starknet_gateway_types::error::{
-                KnownStarknetErrorCode,
-                StarknetError,
-                StarknetErrorCode,
-            };
-            let starknet_error = SequencerError::StarknetError(StarknetError {
-                code: StarknetErrorCode::Known(KnownStarknetErrorCode::TransactionLimitExceeded),
-                message: "StarkNet Alpha throughput limit reached, please wait a few minutes and \
-                          try again."
-                    .to_string(),
-            });
-
-            let error = AddInvokeTransactionError::from(starknet_error);
-            let error = crate::error::ApplicationError::from(error);
-            let error = crate::jsonrpc::RpcError::from(error);
-            let error = error
-                .serialize(Serializer::new(crate::RpcVersion::V09))
-                .unwrap();
-
-            let expected = json!({
-                "code": 63,
-                "message": "An unexpected error occurred",
-                "data": "StarkNet Alpha throughput limit reached, please wait a few minutes and try again."
-            });
-
-            assert_eq!(error, expected);
-        }
-    }
-
-    #[rstest::rstest]
-    #[case::v0_is_unsupported(Input::for_test_with_v0_transaction(), false)]
-    #[case::v1_is_unsupported(Input::for_test_with_v1_transaction(), false)]
-    #[case::v3_is_supported(Input::for_test_with_v3_transaction(), true)]
-    #[tokio::test]
-    async fn only_v3_transactions_are_accepted(#[case] input: Input, #[case] is_supported: bool) {
-        let context = RpcContext::for_tests();
-        let result = add_invoke_transaction(context, input).await;
-        assert_eq!(
-            !is_supported,
-            matches!(
-                result,
-                Err(AddInvokeTransactionError::UnsupportedTransactionVersion)
-            )
-        );
-    }
-
-    #[tokio::test]
-    // https://external.integration.starknet.io/feeder_gateway/get_transaction?transactionHash=0x41906f1c314cca5f43170ea75d3b1904196a10101190d2b12a41cc61cfd17c
-    async fn duplicate_v3_transaction() {
-        let (body, code) = test_response_from(KnownStarknetErrorCode::DuplicatedTransaction);
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/gateway/add_transaction"))
-            .respond_with(ResponseTemplate::new(code).set_body_string(body))
-            .mount(&server)
-            .await;
-        let mut context = RpcContext::for_tests_on(pathfinder_common::Chain::SepoliaIntegration);
-        context.sequencer =
-            starknet_gateway_client::Client::for_test(server.uri().parse().unwrap())
-                .unwrap()
-                .disable_retry_for_tests();
-
-        let input = Input {
+    fn v3_input() -> Input {
+        Input {
             invoke_transaction: Transaction::Invoke(BroadcastedInvokeTransaction::V3(
                 crate::types::request::BroadcastedInvokeTransactionV3 {
                     version: TransactionVersion::THREE,
@@ -556,9 +402,391 @@ mod tests {
                     proof: Proof::default(),
                 },
             )),
-        };
+        }
+    }
 
-        let error = add_invoke_transaction(context, input).await.unwrap_err();
-        assert_matches::assert_matches!(error, AddInvokeTransactionError::DuplicateTransaction);
+    mod parsing {
+        mod v0 {
+            use serde_json::json;
+
+            use super::super::*;
+            use crate::dto::DeserializeForVersion;
+
+            fn test_txn() -> Transaction {
+                Transaction::Invoke(BroadcastedInvokeTransaction::V0(
+                    crate::types::request::BroadcastedInvokeTransactionV0 {
+                        version: TransactionVersion::ZERO,
+                        max_fee: fee!("0x4f388496839"),
+                        signature: vec![
+                            transaction_signature_elem!(
+                                "0x07dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5"
+                            ),
+                            transaction_signature_elem!(
+                                "0x071456dded17015d1234779889d78f3e7c763ddcfd2662b19e7843c7542614f8"
+                            ),
+                        ],
+                        contract_address: contract_address!(
+                            "0x023371b227eaecd8e8920cd429357edddd2cd0f3fee6abaacca08d3ab82a7cdd"
+                        ),
+                        entry_point_selector: entry_point!(
+                            "0x015d40a3d6ca2ac30f4031e42be28da9b056fef9bb7357ac5e85627ee876e5ad"
+                        ),
+                        calldata: vec![call_param!("0x1"), call_param!("0x2b")],
+                    },
+                ))
+            }
+
+            fn test_txn_json() -> serde_json::Value {
+                json!({
+                    "type": "INVOKE",
+                    "version": "0x0",
+                    "max_fee": "0x4f388496839",
+                    "signature": [
+                        "0x07dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5",
+                        "0x071456dded17015d1234779889d78f3e7c763ddcfd2662b19e7843c7542614f8"
+                    ],
+                    "contract_address": "0x023371b227eaecd8e8920cd429357edddd2cd0f3fee6abaacca08d3ab82a7cdd",
+                    "entry_point_selector": "0x015d40a3d6ca2ac30f4031e42be28da9b056fef9bb7357ac5e85627ee876e5ad",
+                    "calldata": ["0x1", "0x2b"]
+                })
+            }
+
+            #[test]
+            fn positional_args() {
+                let positional = json!([test_txn_json()]);
+                let input =
+                    Input::deserialize(crate::dto::Value::new(positional, crate::RpcVersion::V09))
+                        .unwrap();
+                let expected = Input {
+                    invoke_transaction: test_txn(),
+                };
+                pretty_assertions_sorted::assert_eq!(input, expected);
+            }
+
+            #[test]
+            fn named_args() {
+                let named = json!({ "invoke_transaction": test_txn_json() });
+                let input =
+                    Input::deserialize(crate::dto::Value::new(named, crate::RpcVersion::V09))
+                        .unwrap();
+                let expected = Input {
+                    invoke_transaction: test_txn(),
+                };
+                pretty_assertions_sorted::assert_eq!(input, expected);
+            }
+        }
+
+        mod v1 {
+            use serde_json::json;
+
+            use super::super::*;
+            use crate::dto::{DeserializeForVersion, SerializeForVersion, Serializer};
+
+            fn test_txn() -> Transaction {
+                Transaction::Invoke(BroadcastedInvokeTransaction::V1(
+                    BroadcastedInvokeTransactionV1 {
+                        version: TransactionVersion::ONE,
+                        max_fee: fee!("0x4F388496839"),
+                        signature: vec![
+                            transaction_signature_elem!(
+                                "0x07dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5"
+                            ),
+                            transaction_signature_elem!(
+                                "0x071456dded17015d1234779889d78f3e7c763ddcfd2662b19e7843c7542614f8"
+                            ),
+                        ],
+                        nonce: transaction_nonce!("0x1"),
+                        sender_address: contract_address!(
+                            "0x023371b227eaecd8e8920cd429357edddd2cd0f3fee6abaacca08d3ab82a7cdd"
+                        ),
+                        calldata: vec![
+                            call_param!("0x1"),
+                            call_param!(
+                                "0x0677bb1cdc050e8d63855e8743ab6e09179138def390676cc03c484daf112ba1"
+                            ),
+                            call_param!(
+                                "0x0362398bec32bc0ebb411203221a35a0301193a96f317ebe5e40be9f60d15320"
+                            ),
+                            call_param!("0x0"),
+                            call_param!("0x1"),
+                            call_param!("0x1"),
+                            call_param!("0x2b"),
+                            call_param!("0x0"),
+                        ],
+                    },
+                ))
+            }
+
+            fn test_txn_json() -> serde_json::Value {
+                json!({
+                    "type": "INVOKE",
+                    "version": "0x1",
+                    "max_fee": "0x4f388496839",
+                    "signature": [
+                        "0x07dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5",
+                        "0x071456dded17015d1234779889d78f3e7c763ddcfd2662b19e7843c7542614f8"
+                    ],
+                    "nonce": "0x1",
+                    "sender_address": "0x023371b227eaecd8e8920cd429357edddd2cd0f3fee6abaacca08d3ab82a7cdd",
+                    "calldata": [
+                        "0x1",
+                        "0x0677bb1cdc050e8d63855e8743ab6e09179138def390676cc03c484daf112ba1",
+                        "0x0362398bec32bc0ebb411203221a35a0301193a96f317ebe5e40be9f60d15320",
+                        "0x0",
+                        "0x1",
+                        "0x1",
+                        "0x2b",
+                        "0x0"
+                    ]
+                })
+            }
+
+            #[test]
+            fn positional_args() {
+                let positional = json!([test_txn_json()]);
+                let input =
+                    Input::deserialize(crate::dto::Value::new(positional, crate::RpcVersion::V09))
+                        .unwrap();
+                let expected = Input {
+                    invoke_transaction: test_txn(),
+                };
+                pretty_assertions_sorted::assert_eq!(input, expected);
+            }
+
+            #[test]
+            fn named_args() {
+                let named = json!({ "invoke_transaction": test_txn_json() });
+                let input =
+                    Input::deserialize(crate::dto::Value::new(named, crate::RpcVersion::V09))
+                        .unwrap();
+                let expected = Input {
+                    invoke_transaction: test_txn(),
+                };
+                assert_eq!(input, expected);
+            }
+
+            #[test]
+            fn unexpected_error_message() {
+                use starknet_gateway_types::error::{
+                    KnownStarknetErrorCode,
+                    StarknetError,
+                    StarknetErrorCode,
+                };
+                let starknet_error = SequencerError::StarknetError(StarknetError {
+                    code: StarknetErrorCode::Known(
+                        KnownStarknetErrorCode::TransactionLimitExceeded,
+                    ),
+                    message: "StarkNet Alpha throughput limit reached, please wait a few minutes \
+                              and try again."
+                        .to_string(),
+                });
+
+                let error = AddInvokeTransactionError::from(starknet_error);
+                let error = crate::error::ApplicationError::from(error);
+                let error = crate::jsonrpc::RpcError::from(error);
+                let error = error
+                    .serialize(Serializer::new(crate::RpcVersion::V09))
+                    .unwrap();
+
+                let expected = json!({
+                    "code": 63,
+                    "message": "An unexpected error occurred",
+                    "data": "StarkNet Alpha throughput limit reached, please wait a few minutes and try again."
+                });
+
+                assert_eq!(error, expected);
+            }
+        }
+
+        mod v3 {
+            use serde_json::json;
+
+            use super::super::*;
+            use crate::dto::DeserializeForVersion;
+
+            fn test_txn() -> Transaction {
+                Transaction::Invoke(BroadcastedInvokeTransaction::V3(
+                    crate::types::request::BroadcastedInvokeTransactionV3 {
+                        version: TransactionVersion::THREE,
+                        signature: vec![],
+                        nonce: transaction_nonce!("0x8a9"),
+                        resource_bounds: ResourceBounds {
+                            l1_gas: ResourceBound {
+                                max_amount: ResourceAmount(0x186a0),
+                                max_price_per_unit: ResourcePricePerUnit(0x5af3107a4000),
+                            },
+                            l2_gas: ResourceBound {
+                                max_amount: ResourceAmount(0),
+                                max_price_per_unit: ResourcePricePerUnit(0),
+                            },
+                            l1_data_gas: Some(ResourceBound {
+                                max_amount: ResourceAmount(0),
+                                max_price_per_unit: ResourcePricePerUnit(0),
+                            }),
+                        },
+                        tip: Tip(0),
+                        paymaster_data: vec![],
+                        account_deployment_data: vec![],
+                        nonce_data_availability_mode: DataAvailabilityMode::L1,
+                        fee_data_availability_mode: DataAvailabilityMode::L1,
+                        sender_address: contract_address!(
+                            "0x3f6f3bc663aedc5285d6013cc3ffcbc4341d86ab488b8b68d297f8258793c41"
+                        ),
+                        calldata: vec![],
+                        proof_facts: vec![],
+                        proof: Proof::default(),
+                    },
+                ))
+            }
+
+            fn test_txn_json() -> serde_json::Value {
+                json!({
+                    "type": "INVOKE",
+                    "version": "0x3",
+                    "signature": [],
+                    "nonce": "0x8a9",
+                    "resource_bounds": {
+                        "l1_gas": {
+                            "max_amount": "0x186a0",
+                            "max_price_per_unit": "0x5af3107a4000"
+                        },
+                        "l2_gas": {
+                            "max_amount": "0x0",
+                            "max_price_per_unit": "0x0"
+                        },
+                        "l1_data_gas": {
+                            "max_amount": "0x0",
+                            "max_price_per_unit": "0x0"
+                        }
+                    },
+                    "tip": "0x0",
+                    "paymaster_data": [],
+                    "account_deployment_data": [],
+                    "nonce_data_availability_mode": "L1",
+                    "fee_data_availability_mode": "L1",
+                    "sender_address": "0x3f6f3bc663aedc5285d6013cc3ffcbc4341d86ab488b8b68d297f8258793c41",
+                    "calldata": []
+                })
+            }
+
+            #[test]
+            fn positional_args() {
+                let positional = json!([test_txn_json()]);
+                let input =
+                    Input::deserialize(crate::dto::Value::new(positional, crate::RpcVersion::V09))
+                        .unwrap();
+                let expected = Input {
+                    invoke_transaction: test_txn(),
+                };
+                pretty_assertions_sorted::assert_eq!(input, expected);
+            }
+
+            #[test]
+            fn named_args() {
+                let named = json!({ "invoke_transaction": test_txn_json() });
+                let input =
+                    Input::deserialize(crate::dto::Value::new(named, crate::RpcVersion::V09))
+                        .unwrap();
+                let expected = Input {
+                    invoke_transaction: test_txn(),
+                };
+                pretty_assertions_sorted::assert_eq!(input, expected);
+            }
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::v0_is_unsupported(Input::for_test_with_v0_transaction(), false)]
+    #[case::v1_is_unsupported(Input::for_test_with_v1_transaction(), false)]
+    #[case::v3_is_supported(Input::for_test_with_v3_transaction(), true)]
+    #[tokio::test]
+    async fn only_v3_transactions_are_accepted(#[case] input: Input, #[case] is_supported: bool) {
+        let context = RpcContext::for_tests();
+        let result = add_invoke_transaction(context, input).await;
+        assert_eq!(
+            !is_supported,
+            matches!(
+                result,
+                Err(AddInvokeTransactionError::UnsupportedTransactionVersion)
+            )
+        );
+    }
+
+    #[rstest::rstest]
+    #[case(
+        KnownStarknetErrorCode::DuplicatedTransaction,
+        "",
+        AddInvokeTransactionError::DuplicateTransaction
+    )]
+    #[case(
+        KnownStarknetErrorCode::InsufficientAccountBalance,
+        "",
+        AddInvokeTransactionError::InsufficientAccountBalance
+    )]
+    #[case(
+        KnownStarknetErrorCode::InsufficientMaxFee,
+        "",
+        AddInvokeTransactionError::InsufficientResourcesForValidate
+    )]
+    #[case(
+        KnownStarknetErrorCode::InvalidTransactionNonce,
+        "invalid nonce",
+        AddInvokeTransactionError::InvalidTransactionNonce("invalid nonce".to_owned())
+    )]
+    #[case(
+        KnownStarknetErrorCode::ValidateFailure,
+        "validation failed",
+        AddInvokeTransactionError::ValidationFailure("validation failed".to_owned())
+    )]
+    #[case(
+        KnownStarknetErrorCode::ValidateFailure,
+        "Invalid transaction nonce. Expected: 1, got: 2",
+        AddInvokeTransactionError::InvalidTransactionNonce(
+            "Invalid transaction nonce. Expected: 1, got: 2".to_owned()
+        )
+    )]
+    #[case(
+        KnownStarknetErrorCode::InvalidTransactionVersion,
+        "",
+        AddInvokeTransactionError::UnsupportedTransactionVersion
+    )]
+    #[case(
+        KnownStarknetErrorCode::EntryPointNotFound,
+        "",
+        AddInvokeTransactionError::NonAccount
+    )]
+    #[case(
+        KnownStarknetErrorCode::InvalidProof,
+        "",
+        AddInvokeTransactionError::InvalidProof
+    )]
+    #[case(
+        KnownStarknetErrorCode::InvalidProgram,
+        "invalid program",
+        AddInvokeTransactionError::UnexpectedError("invalid program".to_owned())
+    )]
+    #[test_log::test(tokio::test)]
+    async fn e2e_error_mapping(
+        #[case] mock_error_code: KnownStarknetErrorCode,
+        #[case] message: &str,
+        #[case] expected_error: AddInvokeTransactionError,
+    ) {
+        let (body, code) = test_response_from(mock_error_code, message);
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/gateway/add_transaction"))
+            .respond_with(ResponseTemplate::new(code).set_body_string(body))
+            .mount(&server)
+            .await;
+        let mut context = RpcContext::for_tests();
+        context.sequencer =
+            starknet_gateway_client::Client::for_test(server.uri().parse().unwrap())
+                .unwrap()
+                .disable_retry_for_tests();
+
+        let actual_error = add_invoke_transaction(context, v3_input())
+            .await
+            .unwrap_err();
+        assert_eq!(actual_error, expected_error);
     }
 }

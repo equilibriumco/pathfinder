@@ -59,7 +59,7 @@ async fn all_counter_types_including_tags() {
         // Any valid fixture
         (r#"{"block_hash": "0x7d328a71faf48c5c3857e99f20a77b18522480956d1cd5bff1ff2df3c8b427b", "block_number": 0}"#.to_owned(), 200),
         // 1 Starknet error
-        test_response_from(KnownStarknetErrorCode::BlockNotFound),
+        test_response_from(KnownStarknetErrorCode::BlockNotFound, ""),
         // 2 decode errors
         (r#"{"not":"valid"}"#.to_owned(), 200),
         (r#"{"not":"valid, again"}"#.to_owned(), 200),

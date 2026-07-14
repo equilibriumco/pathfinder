@@ -145,10 +145,10 @@ pub enum KnownStarknetErrorCode {
 /// The `message` field is always an empty string.
 /// The HTTP status code for this response is always `500` (`Internal Server
 /// Error`).
-pub fn test_response_from(code: KnownStarknetErrorCode) -> (String, u16) {
+pub fn test_response_from(code: KnownStarknetErrorCode, message: &str) -> (String, u16) {
     let e = StarknetError {
         code: code.into(),
-        message: "".to_string(),
+        message: message.to_string(),
     };
     (serde_json::to_string(&e).unwrap(), 500)
 }

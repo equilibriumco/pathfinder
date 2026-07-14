@@ -115,6 +115,25 @@ pub enum AddDeployAccountTransactionError {
     ForwardedError(reqwest::Error),
 }
 
+impl PartialEq for AddDeployAccountTransactionError {
+    fn eq(&self, other: &Self) -> bool {
+        use AddDeployAccountTransactionError::*;
+        match (self, other) {
+            (ClassHashNotFound, ClassHashNotFound) => true,
+            (InvalidTransactionNonce(a), InvalidTransactionNonce(b)) => a == b,
+            (InsufficientResourcesForValidate, InsufficientResourcesForValidate) => true,
+            (InsufficientAccountBalance, InsufficientAccountBalance) => true,
+            (ValidationFailure(a), ValidationFailure(b)) => a == b,
+            (DuplicateTransaction, DuplicateTransaction) => true,
+            (NonAccount, NonAccount) => true,
+            (UnsupportedTransactionVersion, UnsupportedTransactionVersion) => true,
+            (UnexpectedError(a), UnexpectedError(b)) => a == b,
+            (ForwardedError(a), ForwardedError(b)) => a.to_string() == b.to_string(),
+            _ => false,
+        }
+    }
+}
+
 impl From<anyhow::Error> for AddDeployAccountTransactionError {
     fn from(value: anyhow::Error) -> Self {
         AddDeployAccountTransactionError::UnexpectedError(value.to_string())
@@ -391,6 +410,98 @@ mod tests {
         assert_eq!(input, get_input());
     }
 
+    const INPUT_JSON_V3: &str = r#"{
+        "type": "DEPLOY_ACCOUNT",
+        "version": "0x3",
+        "signature": [],
+        "nonce": "0x0",
+        "resource_bounds": {
+            "l1_gas": {
+                "max_amount": "0x186a0",
+                "max_price_per_unit": "0x5af3107a4000"
+            },
+            "l2_gas": {
+                "max_amount": "0x0",
+                "max_price_per_unit": "0x0"
+            },
+            "l1_data_gas": {
+                "max_amount": "0x0",
+                "max_price_per_unit": "0x0"
+            }
+        },
+        "tip": "0x0",
+        "paymaster_data": [],
+        "nonce_data_availability_mode": "L1",
+        "fee_data_availability_mode": "L1",
+        "contract_address_salt": "0x0",
+        "constructor_calldata": [
+            "0x5cd65f3d7daea6c63939d659b8473ea0c5cd81576035a4d34e52fb06840196c"
+        ],
+        "class_hash": "0x2338634f11772ea342365abd5be9d9dc8a6f44f159ad782fdebd3db5d969738"
+    }"#;
+
+    #[tokio::test]
+    async fn test_parse_input_named_v3() {
+        let json: serde_json::Value = serde_json::from_str(&format!(
+            "{{\"deploy_account_transaction\":{INPUT_JSON_V3}}}"
+        ))
+        .unwrap();
+        let input: Input = crate::dto::Value::new(json, crate::RpcVersion::V09)
+            .deserialize()
+            .unwrap();
+
+        assert_eq!(input, get_input_v3());
+    }
+
+    #[tokio::test]
+    async fn test_parse_input_positional_v3() {
+        let json: serde_json::Value = serde_json::from_str(&format!("[{INPUT_JSON_V3}]")).unwrap();
+        let input: Input = crate::dto::Value::new(json, crate::RpcVersion::V09)
+            .deserialize()
+            .unwrap();
+
+        assert_eq!(input, get_input_v3());
+    }
+
+    /// The expected parse of [`INPUT_JSON_V3`]. Note `l1_data_gas` is `Some`
+    /// here (unlike [`v3_input`]) because the JSON carries it, as V09 requires.
+    fn get_input_v3() -> Input {
+        Input {
+            deploy_account_transaction: Transaction::DeployAccount(
+                BroadcastedDeployAccountTransaction::V3(BroadcastedDeployAccountTransactionV3 {
+                    version: TransactionVersion::THREE,
+                    signature: vec![],
+                    nonce: transaction_nonce!("0x0"),
+                    resource_bounds: ResourceBounds {
+                        l1_gas: ResourceBound {
+                            max_amount: ResourceAmount(0x186a0),
+                            max_price_per_unit: ResourcePricePerUnit(0x5af3107a4000),
+                        },
+                        l2_gas: ResourceBound {
+                            max_amount: ResourceAmount(0),
+                            max_price_per_unit: ResourcePricePerUnit(0),
+                        },
+                        l1_data_gas: Some(ResourceBound {
+                            max_amount: ResourceAmount(0),
+                            max_price_per_unit: ResourcePricePerUnit(0),
+                        }),
+                    },
+                    tip: Tip(0),
+                    paymaster_data: vec![],
+                    nonce_data_availability_mode: DataAvailabilityMode::L1,
+                    fee_data_availability_mode: DataAvailabilityMode::L1,
+                    contract_address_salt: contract_address_salt!("0x0"),
+                    constructor_calldata: vec![call_param!(
+                        "0x5cd65f3d7daea6c63939d659b8473ea0c5cd81576035a4d34e52fb06840196c"
+                    )],
+                    class_hash: class_hash!(
+                        "0x2338634f11772ea342365abd5be9d9dc8a6f44f159ad782fdebd3db5d969738"
+                    ),
+                }),
+            ),
+        }
+    }
+
     #[rstest::rstest]
     #[case::v1_is_unsupported(Input::for_test_with_v1_transaction(), false)]
     #[case::v3_is_supported(Input::for_test_with_v3_transaction(), true)]
@@ -463,23 +574,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    // https://external.integration.starknet.io/feeder_gateway/get_transaction?transactionHash=0x29fd7881f14380842414cdfdd8d6c0b1f2174f8916edcfeb1ede1eb26ac3ef0
-    async fn duplicate_v3_transaction() {
-        let (body, code) = test_response_from(KnownStarknetErrorCode::DuplicatedTransaction);
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/gateway/add_transaction"))
-            .respond_with(ResponseTemplate::new(code).set_body_string(body))
-            .mount(&server)
-            .await;
-        let mut context = RpcContext::for_tests_on(pathfinder_common::Chain::SepoliaIntegration);
-        context.sequencer =
-            starknet_gateway_client::Client::for_test(server.uri().parse().unwrap())
-                .unwrap()
-                .disable_retry_for_tests();
-
-        let input = Input {
+    fn v3_input() -> Input {
+        Input {
             deploy_account_transaction: Transaction::DeployAccount(
                 BroadcastedDeployAccountTransaction::V3(BroadcastedDeployAccountTransactionV3 {
                     version: TransactionVersion::THREE,
@@ -509,14 +605,84 @@ mod tests {
                     ),
                 }),
             ),
-        };
+        }
+    }
 
-        let error = add_deploy_account_transaction(context, input)
+    #[rstest::rstest]
+    #[case(
+        KnownStarknetErrorCode::UndeclaredClass,
+        "",
+        AddDeployAccountTransactionError::ClassHashNotFound
+    )]
+    #[case(
+        KnownStarknetErrorCode::DuplicatedTransaction,
+        "",
+        AddDeployAccountTransactionError::DuplicateTransaction
+    )]
+    #[case(
+        KnownStarknetErrorCode::InsufficientAccountBalance,
+        "",
+        AddDeployAccountTransactionError::InsufficientAccountBalance
+    )]
+    #[case(
+        KnownStarknetErrorCode::InsufficientMaxFee,
+        "",
+        AddDeployAccountTransactionError::InsufficientResourcesForValidate
+    )]
+    #[case(
+        KnownStarknetErrorCode::InvalidTransactionNonce,
+        "invalid nonce",
+        AddDeployAccountTransactionError::InvalidTransactionNonce("invalid nonce".to_owned())
+    )]
+    #[case(
+        KnownStarknetErrorCode::ValidateFailure,
+        "validation failed",
+        AddDeployAccountTransactionError::ValidationFailure("validation failed".to_owned())
+    )]
+    #[case(
+        KnownStarknetErrorCode::ValidateFailure,
+        "Invalid transaction nonce. Expected: 1, got: 2",
+        AddDeployAccountTransactionError::InvalidTransactionNonce(
+            "Invalid transaction nonce. Expected: 1, got: 2".to_owned()
+        )
+    )]
+    #[case(
+        KnownStarknetErrorCode::InvalidTransactionVersion,
+        "",
+        AddDeployAccountTransactionError::UnsupportedTransactionVersion
+    )]
+    #[case(
+        KnownStarknetErrorCode::EntryPointNotFound,
+        "",
+        AddDeployAccountTransactionError::NonAccount
+    )]
+    #[case(
+        KnownStarknetErrorCode::InvalidProgram,
+        "invalid program",
+        AddDeployAccountTransactionError::UnexpectedError("invalid program".to_owned())
+    )]
+    #[test_log::test(tokio::test)]
+    async fn e2e_error_mapping(
+        #[case] mock_error_code: KnownStarknetErrorCode,
+        #[case] message: &str,
+        #[case] expected_error: AddDeployAccountTransactionError,
+    ) {
+        let (body, code) = test_response_from(mock_error_code, message);
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/gateway/add_transaction"))
+            .respond_with(ResponseTemplate::new(code).set_body_string(body))
+            .mount(&server)
+            .await;
+        let mut context = RpcContext::for_tests();
+        context.sequencer =
+            starknet_gateway_client::Client::for_test(server.uri().parse().unwrap())
+                .unwrap()
+                .disable_retry_for_tests();
+
+        let actual_error = add_deploy_account_transaction(context, v3_input())
             .await
-            .expect_err("add_deploy_account_transaction");
-        assert_matches::assert_matches!(
-            error,
-            AddDeployAccountTransactionError::DuplicateTransaction
-        );
+            .unwrap_err();
+        assert_eq!(actual_error, expected_error);
     }
 }
