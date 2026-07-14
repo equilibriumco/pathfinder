@@ -214,6 +214,10 @@ pub async fn add_invoke_transaction(
     context: RpcContext,
     input: Input,
 ) -> Result<Output, AddInvokeTransactionError> {
+    if !input.is_v3_transaction() {
+        return Err(AddInvokeTransactionError::UnsupportedTransactionVersion);
+    }
+
     let Transaction::Invoke(tx) = input.invoke_transaction;
     let (transaction_hash, variant) = add_invoke_transaction_impl(&context, tx).await?;
     context.submission_tracker.insert(
@@ -489,38 +493,21 @@ mod tests {
         }
     }
 
+    #[rstest::rstest]
+    #[case::v0_is_unsupported(Input::for_test_with_v0_transaction(), false)]
+    #[case::v1_is_unsupported(Input::for_test_with_v1_transaction(), false)]
+    #[case::v3_is_supported(Input::for_test_with_v3_transaction(), true)]
     #[tokio::test]
-    async fn duplicate_transaction() {
-        let (body, code) = test_response_from(KnownStarknetErrorCode::DuplicatedTransaction);
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/gateway/add_transaction"))
-            .respond_with(ResponseTemplate::new(code).set_body_string(body))
-            .mount(&server)
-            .await;
-        let mut context = RpcContext::for_tests();
-        context.sequencer =
-            starknet_gateway_client::Client::for_test(server.uri().parse().unwrap())
-                .unwrap()
-                .disable_retry_for_tests();
-
-        let input = Input {
-            invoke_transaction: Transaction::Invoke(BroadcastedInvokeTransaction::V1(
-                crate::types::request::BroadcastedInvokeTransactionV1 {
-                    version: TransactionVersion::ONE,
-                    max_fee: fee!("0x630a0aff77"),
-                    signature: vec![],
-                    nonce: transaction_nonce!("0x2"),
-                    sender_address: contract_address!(
-                        "0x03fdcbeb68e607c8febf01d7ef274cbf68091a0bd1556c0b8f8e80d732f7850f"
-                    ),
-                    calldata: vec![],
-                },
-            )),
-        };
-
-        let error = add_invoke_transaction(context, input).await.unwrap_err();
-        assert_matches::assert_matches!(error, AddInvokeTransactionError::DuplicateTransaction);
+    async fn only_v3_transactions_are_accepted(#[case] input: Input, #[case] is_supported: bool) {
+        let context = RpcContext::for_tests();
+        let result = add_invoke_transaction(context, input).await;
+        assert_eq!(
+            !is_supported,
+            matches!(
+                result,
+                Err(AddInvokeTransactionError::UnsupportedTransactionVersion)
+            )
+        );
     }
 
     #[tokio::test]

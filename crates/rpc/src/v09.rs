@@ -1,7 +1,3 @@
-pub mod method;
-
-use method as v09_method;
-
 use crate::jsonrpc::{RpcRouter, RpcRouterBuilder};
 use crate::method::subscribe_events::SubscribeEvents;
 use crate::method::subscribe_new_heads::SubscribeNewHeads;
@@ -13,9 +9,9 @@ use crate::method::subscribe_transaction_status::SubscribeTransactionStatus;
 pub fn register_routes() -> RpcRouterBuilder {
     RpcRouter::builder(crate::RpcVersion::V09)
         .register("pathfinder_lastL1AcceptedBlockHashAndNumber",  crate::method::last_l1_accepted_block_hash_and_number)
-        .register("starknet_addDeclareTransaction",               v09_method::add_declare_transaction)
-        .register("starknet_addDeployAccountTransaction",         v09_method::add_deploy_account_transaction)
-        .register("starknet_addInvokeTransaction",                v09_method::add_invoke_transaction)
+        .register("starknet_addDeclareTransaction",               crate::method::add_declare_transaction)
+        .register("starknet_addDeployAccountTransaction",         crate::method::add_deploy_account_transaction)
+        .register("starknet_addInvokeTransaction",                crate::method::add_invoke_transaction)
         .register("starknet_blockHashAndNumber",                  crate::method::block_hash_and_number)
         .register("starknet_blockNumber",                         crate::method::block_number)
         .register("starknet_call",                                crate::method::call)
