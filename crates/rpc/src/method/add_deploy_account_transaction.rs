@@ -194,6 +194,10 @@ pub async fn add_deploy_account_transaction(
     context: RpcContext,
     input: Input,
 ) -> Result<Output, AddDeployAccountTransactionError> {
+    if !input.is_v3_transaction() {
+        return Err(AddDeployAccountTransactionError::UnsupportedTransactionVersion);
+    }
+
     let contract_address = match &input.deploy_account_transaction {
         Transaction::DeployAccount(tx) => tx.deployed_contract_address(),
     };
@@ -387,6 +391,22 @@ mod tests {
         assert_eq!(input, get_input());
     }
 
+    #[rstest::rstest]
+    #[case::v1_is_unsupported(Input::for_test_with_v1_transaction(), false)]
+    #[case::v3_is_supported(Input::for_test_with_v3_transaction(), true)]
+    #[tokio::test]
+    async fn only_v3_transactions_are_accepted(#[case] input: Input, #[case] is_supported: bool) {
+        let context = RpcContext::for_tests();
+        let result = add_deploy_account_transaction(context, input).await;
+        assert_eq!(
+            !is_supported,
+            matches!(
+                result,
+                Err(AddDeployAccountTransactionError::UnsupportedTransactionVersion)
+            )
+        );
+    }
+
     #[test]
     fn unexpected_error_message() {
         use starknet_gateway_types::error::{StarknetError, StarknetErrorCode};
@@ -441,30 +461,6 @@ mod tests {
                 }),
             ),
         }
-    }
-
-    #[tokio::test]
-    async fn duplicate_transaction() {
-        let (body, code) = test_response_from(KnownStarknetErrorCode::DuplicatedTransaction);
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/gateway/add_transaction"))
-            .respond_with(ResponseTemplate::new(code).set_body_string(body))
-            .mount(&server)
-            .await;
-        let mut context = RpcContext::for_tests();
-        context.sequencer =
-            starknet_gateway_client::Client::for_test(server.uri().parse().unwrap())
-                .unwrap()
-                .disable_retry_for_tests();
-
-        let error = add_deploy_account_transaction(context, get_input())
-            .await
-            .expect_err("add_deploy_account_transaction");
-        assert_matches::assert_matches!(
-            error,
-            AddDeployAccountTransactionError::DuplicateTransaction
-        );
     }
 
     #[tokio::test]

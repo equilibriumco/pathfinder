@@ -4,16 +4,14 @@ use crate::method::subscribe_new_heads::SubscribeNewHeads;
 use crate::method::subscribe_new_transaction_receipts::SubscribeNewTransactionReceipts;
 use crate::method::subscribe_new_transactions::SubscribeNewTransactions;
 use crate::method::subscribe_transaction_status::SubscribeTransactionStatus;
-// re-using v09-specific methods
-use crate::v09::method as v09_method;
 
 #[rustfmt::skip]
 pub fn register_routes() -> RpcRouterBuilder {
     RpcRouter::builder(crate::RpcVersion::V10)
         .register("pathfinder_lastL1AcceptedBlockHashAndNumber",  crate::method::last_l1_accepted_block_hash_and_number)
-        .register("starknet_addDeclareTransaction",               v09_method::add_declare_transaction)
-        .register("starknet_addDeployAccountTransaction",         v09_method::add_deploy_account_transaction)
-        .register("starknet_addInvokeTransaction",                v09_method::add_invoke_transaction)
+        .register("starknet_addDeclareTransaction",               crate::method::add_declare_transaction)
+        .register("starknet_addDeployAccountTransaction",         crate::method::add_deploy_account_transaction)
+        .register("starknet_addInvokeTransaction",                crate::method::add_invoke_transaction)
         .register("starknet_blockHashAndNumber",                  crate::method::block_hash_and_number)
         .register("starknet_blockNumber",                         crate::method::block_number)
         .register("starknet_call",                                crate::method::call)

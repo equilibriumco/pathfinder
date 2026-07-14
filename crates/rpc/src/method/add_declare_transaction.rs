@@ -314,6 +314,10 @@ pub async fn add_declare_transaction(
     context: RpcContext,
     input: Input,
 ) -> Result<Output, AddDeclareTransactionError> {
+    if !input.is_v3_transaction() {
+        return Err(AddDeclareTransactionError::UnsupportedTransactionVersion);
+    }
+
     use starknet_gateway_types::request::add_transaction;
 
     match input.declare_transaction {
@@ -479,12 +483,7 @@ mod tests {
     use super::*;
     use crate::types::class::cairo::CairoContractClass;
     use crate::types::class::sierra::SierraContractClass;
-    use crate::types::request::{
-        BroadcastedDeclareTransaction,
-        BroadcastedDeclareTransactionV1,
-        BroadcastedDeclareTransactionV2,
-        BroadcastedDeclareTransactionV3,
-    };
+    use crate::types::request::{BroadcastedDeclareTransaction, BroadcastedDeclareTransactionV3};
     use crate::types::ContractClass;
 
     pub static CONTRACT_CLASS: LazyLock<CairoContractClass> = LazyLock::new(|| {
@@ -495,25 +494,6 @@ mod tests {
         .as_cairo()
         .unwrap()
     });
-
-    pub static CONTRACT_CLASS_WITH_INVALID_PRIME: LazyLock<CairoContractClass> =
-        LazyLock::new(|| {
-            let mut definition: serde_json::Value =
-                serde_json::from_slice(CONTRACT_DEFINITION).unwrap();
-            // change program.prime to an invalid one
-            *definition
-                .get_mut("program")
-                .unwrap()
-                .get_mut("prime")
-                .unwrap() = serde_json::json!("0x1");
-            let definition = serde_json::to_vec(&definition).unwrap();
-            ContractClass::from_serialized_def(&SerializedOpaqueClassDefinition::from_slice(
-                &definition,
-            ))
-            .unwrap()
-            .as_cairo()
-            .unwrap()
-        });
 
     pub static SIERRA_CLASS: LazyLock<SierraContractClass> = LazyLock::new(|| {
         ContractClass::from_serialized_def(&SerializedOpaqueClassDefinition::from_slice(
@@ -532,6 +512,42 @@ mod tests {
         .as_sierra()
         .unwrap()
     });
+
+    fn v3_input() -> Input {
+        Input {
+            declare_transaction: Transaction::Declare(BroadcastedDeclareTransaction::V3(
+                BroadcastedDeclareTransactionV3 {
+                    version: TransactionVersion::THREE,
+                    signature: vec![],
+                    nonce: transaction_nonce!("0x1"),
+                    resource_bounds: ResourceBounds {
+                        l1_gas: ResourceBound {
+                            max_amount: ResourceAmount(0x186a0),
+                            max_price_per_unit: ResourcePricePerUnit(0x5af3107a4000),
+                        },
+                        l2_gas: ResourceBound {
+                            max_amount: ResourceAmount(0),
+                            max_price_per_unit: ResourcePricePerUnit(0),
+                        },
+                        l1_data_gas: None,
+                    },
+                    tip: Tip(0),
+                    paymaster_data: vec![],
+                    account_deployment_data: vec![],
+                    nonce_data_availability_mode: DataAvailabilityMode::L1,
+                    fee_data_availability_mode: DataAvailabilityMode::L1,
+                    compiled_class_hash: casm_hash!(
+                        "0x1add56d64bebf8140f3b8a38bdf102b7874437f0c861ab4ca7526ec33b4d0f8"
+                    ),
+                    contract_class: INTEGRATION_SIERRA_CLASS.clone(),
+                    sender_address: contract_address!(
+                        "0x2fab82e4aef1d8664874e1f194951856d48463c3e6bf9a8c68e234a629a6f50"
+                    ),
+                },
+            )),
+            token: None,
+        }
+    }
 
     mod parsing {
         mod v1 {
@@ -700,6 +716,24 @@ mod tests {
         }
     }
 
+    #[rstest::rstest]
+    #[case::v0_is_unsupported(Input::for_test_with_v0_transaction(), false)]
+    #[case::v1_is_unsupported(Input::for_test_with_v1_transaction(), false)]
+    #[case::v2_is_unsupported(Input::for_test_with_v2_transaction(), false)]
+    #[case::v3_is_supported(Input::for_test_with_v3_transaction(), true)]
+    #[tokio::test]
+    async fn only_v3_transactions_are_accepted(#[case] input: Input, #[case] is_supported: bool) {
+        let context = RpcContext::for_tests();
+        let result = add_declare_transaction(context, input).await;
+        assert_eq!(
+            !is_supported,
+            matches!(
+                result,
+                Err(AddDeclareTransactionError::UnsupportedTransactionVersion)
+            )
+        );
+    }
+
     #[test_log::test(tokio::test)]
     async fn invalid_contract_definition_v1() {
         let (body, code) = test_response_from(KnownStarknetErrorCode::InvalidContractDefinition);
@@ -715,20 +749,9 @@ mod tests {
                 .unwrap()
                 .disable_retry_for_tests();
 
-        let input = Input {
-            declare_transaction: Transaction::Declare(BroadcastedDeclareTransaction::V1(
-                BroadcastedDeclareTransactionV1 {
-                    version: TransactionVersion::ONE,
-                    max_fee: Fee(Default::default()),
-                    signature: vec![],
-                    nonce: TransactionNonce(Default::default()),
-                    contract_class: CONTRACT_CLASS.clone(),
-                    sender_address: ContractAddress::new_or_panic(Felt::from_u64(1)),
-                },
-            )),
-            token: None,
-        };
-        let error = add_declare_transaction(context, input).await.unwrap_err();
+        let error = add_declare_transaction(context, v3_input())
+            .await
+            .unwrap_err();
         assert_matches::assert_matches!(error, AddDeclareTransactionError::UnexpectedError(_));
     }
 
@@ -747,23 +770,9 @@ mod tests {
                 .unwrap()
                 .disable_retry_for_tests();
 
-        let input = Input {
-            declare_transaction: Transaction::Declare(BroadcastedDeclareTransaction::V2(
-                BroadcastedDeclareTransactionV2 {
-                    version: TransactionVersion::TWO,
-                    max_fee: Fee(Felt::from_be_slice(&u64::MAX.to_be_bytes()).unwrap()),
-                    signature: vec![],
-                    nonce: TransactionNonce(Default::default()),
-                    contract_class: SIERRA_CLASS.clone(),
-                    sender_address: ContractAddress::new_or_panic(Felt::from_u64(1)),
-                    compiled_class_hash: casm_hash!(
-                        "0x711c0c3e56863e29d3158804aac47f424241eda64db33e2cc2999d60ee5105"
-                    ),
-                },
-            )),
-            token: None,
-        };
-        let error = add_declare_transaction(context, input).await.unwrap_err();
+        let error = add_declare_transaction(context, v3_input())
+            .await
+            .unwrap_err();
         assert_matches::assert_matches!(error, AddDeclareTransactionError::UnexpectedError(_));
     }
 
@@ -782,20 +791,9 @@ mod tests {
                 .unwrap()
                 .disable_retry_for_tests();
 
-        let input = Input {
-            declare_transaction: Transaction::Declare(BroadcastedDeclareTransaction::V1(
-                BroadcastedDeclareTransactionV1 {
-                    version: TransactionVersion::ONE,
-                    max_fee: fee!("0xfffffffffff"),
-                    signature: vec![],
-                    nonce: TransactionNonce(Default::default()),
-                    contract_class: CONTRACT_CLASS_WITH_INVALID_PRIME.clone(),
-                    sender_address: ContractAddress::new_or_panic(Felt::from_u64(1)),
-                },
-            )),
-            token: None,
-        };
-        let error = add_declare_transaction(context, input).await.unwrap_err();
+        let error = add_declare_transaction(context, v3_input())
+            .await
+            .unwrap_err();
         assert_matches::assert_matches!(error, AddDeclareTransactionError::UnexpectedError(_));
     }
 
@@ -814,20 +812,9 @@ mod tests {
                 .unwrap()
                 .disable_retry_for_tests();
 
-        let input = Input {
-            declare_transaction: Transaction::Declare(BroadcastedDeclareTransaction::V1(
-                BroadcastedDeclareTransactionV1 {
-                    version: TransactionVersion::ONE,
-                    max_fee: Fee(Felt::from_be_slice(&u64::MAX.to_be_bytes()).unwrap()),
-                    signature: vec![],
-                    nonce: TransactionNonce(Default::default()),
-                    contract_class: CONTRACT_CLASS.clone(),
-                    sender_address: ContractAddress::new_or_panic(Felt::from_u64(1)),
-                },
-            )),
-            token: None,
-        };
-        let error = add_declare_transaction(context, input).await.unwrap_err();
+        let error = add_declare_transaction(context, v3_input())
+            .await
+            .unwrap_err();
         assert_matches::assert_matches!(error, AddDeclareTransactionError::DuplicateTransaction);
     }
 
@@ -846,23 +833,9 @@ mod tests {
                 .unwrap()
                 .disable_retry_for_tests();
 
-        let input = Input {
-            declare_transaction: Transaction::Declare(BroadcastedDeclareTransaction::V2(
-                BroadcastedDeclareTransactionV2 {
-                    version: TransactionVersion::TWO,
-                    max_fee: Fee(felt!("0x01")),
-                    signature: vec![],
-                    nonce: TransactionNonce(Default::default()),
-                    contract_class: SIERRA_CLASS.clone(),
-                    sender_address: ContractAddress::new_or_panic(Felt::from_u64(1)),
-                    compiled_class_hash: casm_hash!(
-                        "0x688e44b1d8612222a25cf742c8e1493af4640fa74b1a7707bde2002df51ea8c"
-                    ),
-                },
-            )),
-            token: None,
-        };
-        let err = add_declare_transaction(context, input).await.unwrap_err();
+        let err = add_declare_transaction(context, v3_input())
+            .await
+            .unwrap_err();
         assert_matches::assert_matches!(
             err,
             AddDeclareTransactionError::InsufficientAccountBalance
@@ -884,23 +857,9 @@ mod tests {
                 .unwrap()
                 .disable_retry_for_tests();
 
-        let input = Input {
-            declare_transaction: Transaction::Declare(BroadcastedDeclareTransaction::V2(
-                BroadcastedDeclareTransactionV2 {
-                    version: TransactionVersion::TWO,
-                    max_fee: Fee(Felt::from_be_slice(&u64::MAX.to_be_bytes()).unwrap()),
-                    signature: vec![],
-                    nonce: TransactionNonce(Default::default()),
-                    contract_class: SIERRA_CLASS.clone(),
-                    sender_address: ContractAddress::new_or_panic(Felt::from_u64(1)),
-                    compiled_class_hash: casm_hash!(
-                        "0x688e44b1d8612222a25cf742c8e1493af4640fa74b1a7707bde2002df51ea8c"
-                    ),
-                },
-            )),
-            token: None,
-        };
-        let err = add_declare_transaction(context, input).await.unwrap_err();
+        let err = add_declare_transaction(context, v3_input())
+            .await
+            .unwrap_err();
         assert_matches::assert_matches!(
             err,
             AddDeclareTransactionError::InsufficientAccountBalance
