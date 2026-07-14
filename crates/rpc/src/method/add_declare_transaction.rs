@@ -34,6 +34,29 @@ pub enum AddDeclareTransactionError {
     ForwardedError(reqwest::Error),
 }
 
+impl PartialEq for AddDeclareTransactionError {
+    fn eq(&self, other: &Self) -> bool {
+        use AddDeclareTransactionError::*;
+        match (self, other) {
+            (ClassAlreadyDeclared, ClassAlreadyDeclared) => true,
+            (InvalidTransactionNonce(a), InvalidTransactionNonce(b)) => a == b,
+            (InsufficientResourcesForValidate, InsufficientResourcesForValidate) => true,
+            (InsufficientAccountBalance, InsufficientAccountBalance) => true,
+            (ValidationFailure(a), ValidationFailure(b)) => a == b,
+            (CompilationFailed(a), CompilationFailed(b)) => a == b,
+            (ContractClassSizeIsTooLarge, ContractClassSizeIsTooLarge) => true,
+            (DuplicateTransaction, DuplicateTransaction) => true,
+            (CompiledClassHashMismatch, CompiledClassHashMismatch) => true,
+            (NonAccount, NonAccount) => true,
+            (UnsupportedTransactionVersion, UnsupportedTransactionVersion) => true,
+            (UnsupportedContractClassVersion, UnsupportedContractClassVersion) => true,
+            (UnexpectedError(a), UnexpectedError(b)) => a == b,
+            (ForwardedError(a), ForwardedError(b)) => a.to_string() == b.to_string(),
+            _ => false,
+        }
+    }
+}
+
 impl From<AddDeclareTransactionError> for crate::error::ApplicationError {
     fn from(value: AddDeclareTransactionError) -> Self {
         match value {
@@ -477,7 +500,11 @@ mod tests {
         CAIRO_2_0_0_STACK_OVERFLOW,
         CONTRACT_DEFINITION,
     };
-    use starknet_gateway_types::error::{test_response_from, KnownStarknetErrorCode};
+    use starknet_gateway_types::error::{
+        test_response_from,
+        KnownStarknetErrorCode,
+        StarknetError,
+    };
     use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
     use super::*;
@@ -616,11 +643,7 @@ mod tests {
 
             #[test]
             fn unexpected_error_message() {
-                use starknet_gateway_types::error::{
-                    KnownStarknetErrorCode,
-                    StarknetError,
-                    StarknetErrorCode,
-                };
+                use starknet_gateway_types::error::{KnownStarknetErrorCode, StarknetErrorCode};
                 let starknet_error = SequencerError::StarknetError(StarknetError {
                     code: StarknetErrorCode::Known(
                         KnownStarknetErrorCode::TransactionLimitExceeded,
@@ -714,6 +737,112 @@ mod tests {
                 pretty_assertions_sorted::assert_eq!(input, expected);
             }
         }
+
+        mod v3 {
+            use pathfinder_common::transaction::{
+                DataAvailabilityMode,
+                ResourceBound,
+                ResourceBounds,
+            };
+            use serde_json::json;
+
+            use super::super::*;
+            use crate::dto::DeserializeForVersion;
+            use crate::types::request::BroadcastedDeclareTransactionV3;
+            use crate::RpcVersion;
+
+            fn test_declare_txn() -> Transaction {
+                Transaction::Declare(BroadcastedDeclareTransaction::V3(
+                    BroadcastedDeclareTransactionV3 {
+                        version: TransactionVersion::THREE,
+                        signature: vec![],
+                        nonce: TransactionNonce(Felt::ZERO),
+                        resource_bounds: ResourceBounds {
+                            l1_gas: ResourceBound {
+                                max_amount: ResourceAmount(0x100),
+                                max_price_per_unit: ResourcePricePerUnit(0xa),
+                            },
+                            l2_gas: ResourceBound {
+                                max_amount: ResourceAmount(0),
+                                max_price_per_unit: ResourcePricePerUnit(0),
+                            },
+                            l1_data_gas: Some(ResourceBound {
+                                max_amount: ResourceAmount(0),
+                                max_price_per_unit: ResourcePricePerUnit(0),
+                            }),
+                        },
+                        tip: Tip(0),
+                        paymaster_data: vec![],
+                        account_deployment_data: vec![],
+                        nonce_data_availability_mode: DataAvailabilityMode::L1,
+                        fee_data_availability_mode: DataAvailabilityMode::L1,
+                        compiled_class_hash: CasmHash(Felt::from_u64(1)),
+                        contract_class: SIERRA_CLASS.clone(),
+                        sender_address: ContractAddress::new_or_panic(Felt::from_u64(1)),
+                    },
+                ))
+            }
+
+            fn test_declare_txn_json() -> serde_json::Value {
+                json!({
+                    "type": "DECLARE",
+                    "version": "0x3",
+                    "signature": [],
+                    "nonce": "0x0",
+                    "resource_bounds": {
+                        "l1_gas": {
+                            "max_amount": "0x100",
+                            "max_price_per_unit": "0xa"
+                        },
+                        "l2_gas": {
+                            "max_amount": "0x0",
+                            "max_price_per_unit": "0x0"
+                        },
+                        "l1_data_gas": {
+                            "max_amount": "0x0",
+                            "max_price_per_unit": "0x0"
+                        }
+                    },
+                    "tip": "0x0",
+                    "paymaster_data": [],
+                    "account_deployment_data": [],
+                    "nonce_data_availability_mode": "L1",
+                    "fee_data_availability_mode": "L1",
+                    "compiled_class_hash": "0x1",
+                    "contract_class": SIERRA_CLASS.clone(),
+                    "sender_address": "0x1"
+                })
+            }
+
+            #[test]
+            fn positional_args() {
+                let positional = json!([test_declare_txn_json()]);
+
+                let input = Input::deserialize(crate::dto::Value::new(positional, RpcVersion::V09))
+                    .unwrap();
+                let expected = Input {
+                    declare_transaction: test_declare_txn(),
+                    token: None,
+                };
+                pretty_assertions_sorted::assert_eq!(input, expected);
+            }
+
+            #[test]
+            fn named_args() {
+                let named = json!({
+                    "declare_transaction": test_declare_txn_json(),
+                    "token": "token"
+                });
+
+                let input =
+                    Input::deserialize(crate::dto::Value::new(named, RpcVersion::V09)).unwrap();
+                let expected = Input {
+                    declare_transaction: test_declare_txn(),
+                    token: Some("token".to_owned()),
+                };
+                pretty_assertions_sorted::assert_eq!(input, expected);
+            }
+        }
     }
 
     #[rstest::rstest]
@@ -734,9 +863,96 @@ mod tests {
         );
     }
 
+    #[rstest::rstest]
+    #[case(
+        KnownStarknetErrorCode::ClassAlreadyDeclared,
+        "",
+        AddDeclareTransactionError::ClassAlreadyDeclared
+    )]
+    #[case(
+        KnownStarknetErrorCode::CompilationFailed,
+        "compilation failed",
+        AddDeclareTransactionError::CompilationFailed("compilation failed".to_owned())
+    )]
+    #[case(
+        KnownStarknetErrorCode::ContractBytecodeSizeTooLarge,
+        "",
+        AddDeclareTransactionError::ContractClassSizeIsTooLarge
+    )]
+    #[case(
+        KnownStarknetErrorCode::ContractClassObjectSizeTooLarge,
+        "",
+        AddDeclareTransactionError::ContractClassSizeIsTooLarge
+    )]
+    #[case(
+        KnownStarknetErrorCode::DuplicatedTransaction,
+        "",
+        AddDeclareTransactionError::DuplicateTransaction
+    )]
+    #[case(
+        KnownStarknetErrorCode::InsufficientAccountBalance,
+        "",
+        AddDeclareTransactionError::InsufficientAccountBalance
+    )]
+    #[case(
+        KnownStarknetErrorCode::InsufficientMaxFee,
+        "",
+        AddDeclareTransactionError::InsufficientResourcesForValidate
+    )]
+    #[case(
+        KnownStarknetErrorCode::InvalidTransactionNonce,
+        "invalid nonce",
+        AddDeclareTransactionError::InvalidTransactionNonce("invalid nonce".to_owned())
+    )]
+    #[case(
+        KnownStarknetErrorCode::ValidateFailure,
+        "validation failed",
+        AddDeclareTransactionError::ValidationFailure("validation failed".to_owned())
+    )]
+    #[case(
+        KnownStarknetErrorCode::ValidateFailure,
+        "Invalid transaction nonce. Expected: 1, got: 2",
+        AddDeclareTransactionError::InvalidTransactionNonce(
+            "Invalid transaction nonce. Expected: 1, got: 2".to_owned()
+        )
+    )]
+    #[case(
+        KnownStarknetErrorCode::InvalidCompiledClassHash,
+        "",
+        AddDeclareTransactionError::CompiledClassHashMismatch
+    )]
+    #[case(
+        KnownStarknetErrorCode::InvalidTransactionVersion,
+        "",
+        AddDeclareTransactionError::UnsupportedTransactionVersion
+    )]
+    #[case(
+        KnownStarknetErrorCode::InvalidContractClassVersion,
+        "",
+        AddDeclareTransactionError::UnsupportedContractClassVersion
+    )]
+    #[case(
+        KnownStarknetErrorCode::EntryPointNotFound,
+        "",
+        AddDeclareTransactionError::NonAccount
+    )]
+    #[case(
+        KnownStarknetErrorCode::InvalidProgram,
+        "invalid program",
+        AddDeclareTransactionError::UnexpectedError("invalid program".to_owned())
+    )]
+    #[case(
+        KnownStarknetErrorCode::InvalidContractDefinition,
+        "invalid contract definition",
+        AddDeclareTransactionError::UnexpectedError("invalid contract definition".to_owned())
+    )]
     #[test_log::test(tokio::test)]
-    async fn invalid_contract_definition_v1() {
-        let (body, code) = test_response_from(KnownStarknetErrorCode::InvalidContractDefinition);
+    async fn e2e_error_mapping(
+        #[case] mock_error_code: KnownStarknetErrorCode,
+        #[case] message: &str,
+        #[case] expected_error: AddDeclareTransactionError,
+    ) {
+        let (body, code) = test_response_from(mock_error_code, message);
         let server = MockServer::start().await;
         Mock::given(matchers::method("POST"))
             .and(matchers::path("/gateway/add_transaction"))
@@ -749,177 +965,9 @@ mod tests {
                 .unwrap()
                 .disable_retry_for_tests();
 
-        let error = add_declare_transaction(context, v3_input())
+        let actual_error = add_declare_transaction(context, v3_input())
             .await
             .unwrap_err();
-        assert_matches::assert_matches!(error, AddDeclareTransactionError::UnexpectedError(_));
-    }
-
-    #[test_log::test(tokio::test)]
-    async fn invalid_contract_definition_v2() {
-        let (body, code) = test_response_from(KnownStarknetErrorCode::InvalidContractDefinition);
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/gateway/add_transaction"))
-            .respond_with(ResponseTemplate::new(code).set_body_string(body))
-            .mount(&server)
-            .await;
-        let mut context = RpcContext::for_tests_on(pathfinder_common::Chain::SepoliaIntegration);
-        context.sequencer =
-            starknet_gateway_client::Client::for_test(server.uri().parse().unwrap())
-                .unwrap()
-                .disable_retry_for_tests();
-
-        let error = add_declare_transaction(context, v3_input())
-            .await
-            .unwrap_err();
-        assert_matches::assert_matches!(error, AddDeclareTransactionError::UnexpectedError(_));
-    }
-
-    #[test_log::test(tokio::test)]
-    async fn invalid_contract_class() {
-        let (body, code) = test_response_from(KnownStarknetErrorCode::InvalidProgram);
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/gateway/add_transaction"))
-            .respond_with(ResponseTemplate::new(code).set_body_string(body))
-            .mount(&server)
-            .await;
-        let mut context = RpcContext::for_tests();
-        context.sequencer =
-            starknet_gateway_client::Client::for_test(server.uri().parse().unwrap())
-                .unwrap()
-                .disable_retry_for_tests();
-
-        let error = add_declare_transaction(context, v3_input())
-            .await
-            .unwrap_err();
-        assert_matches::assert_matches!(error, AddDeclareTransactionError::UnexpectedError(_));
-    }
-
-    #[test_log::test(tokio::test)]
-    async fn duplicate_transaction() {
-        let (body, code) = test_response_from(KnownStarknetErrorCode::DuplicatedTransaction);
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/gateway/add_transaction"))
-            .respond_with(ResponseTemplate::new(code).set_body_string(body))
-            .mount(&server)
-            .await;
-        let mut context = RpcContext::for_tests();
-        context.sequencer =
-            starknet_gateway_client::Client::for_test(server.uri().parse().unwrap())
-                .unwrap()
-                .disable_retry_for_tests();
-
-        let error = add_declare_transaction(context, v3_input())
-            .await
-            .unwrap_err();
-        assert_matches::assert_matches!(error, AddDeclareTransactionError::DuplicateTransaction);
-    }
-
-    #[test_log::test(tokio::test)]
-    async fn insufficient_max_fee() {
-        let (body, code) = test_response_from(KnownStarknetErrorCode::InsufficientAccountBalance);
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/gateway/add_transaction"))
-            .respond_with(ResponseTemplate::new(code).set_body_string(body))
-            .mount(&server)
-            .await;
-        let mut context = RpcContext::for_tests_on(pathfinder_common::Chain::SepoliaIntegration);
-        context.sequencer =
-            starknet_gateway_client::Client::for_test(server.uri().parse().unwrap())
-                .unwrap()
-                .disable_retry_for_tests();
-
-        let err = add_declare_transaction(context, v3_input())
-            .await
-            .unwrap_err();
-        assert_matches::assert_matches!(
-            err,
-            AddDeclareTransactionError::InsufficientAccountBalance
-        );
-    }
-
-    #[test_log::test(tokio::test)]
-    async fn insufficient_account_balance() {
-        let (body, code) = test_response_from(KnownStarknetErrorCode::InsufficientAccountBalance);
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/gateway/add_transaction"))
-            .respond_with(ResponseTemplate::new(code).set_body_string(body))
-            .mount(&server)
-            .await;
-        let mut context = RpcContext::for_tests_on(pathfinder_common::Chain::SepoliaIntegration);
-        context.sequencer =
-            starknet_gateway_client::Client::for_test(server.uri().parse().unwrap())
-                .unwrap()
-                .disable_retry_for_tests();
-
-        let err = add_declare_transaction(context, v3_input())
-            .await
-            .unwrap_err();
-        assert_matches::assert_matches!(
-            err,
-            AddDeclareTransactionError::InsufficientAccountBalance
-        );
-    }
-
-    #[tokio::test]
-    // https://external.integration.starknet.io/feeder_gateway/get_transaction?transactionHash=0x41d1f5206ef58a443e7d3d1ca073171ec25fa75313394318fc83a074a6631c3
-    async fn duplicate_v3_transaction() {
-        let (body, code) = test_response_from(KnownStarknetErrorCode::InsufficientAccountBalance);
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/gateway/add_transaction"))
-            .respond_with(ResponseTemplate::new(code).set_body_string(body))
-            .mount(&server)
-            .await;
-        let mut context = RpcContext::for_tests_on(pathfinder_common::Chain::SepoliaIntegration);
-        context.sequencer =
-            starknet_gateway_client::Client::for_test(server.uri().parse().unwrap())
-                .unwrap()
-                .disable_retry_for_tests();
-
-        let input = Input {
-            declare_transaction: Transaction::Declare(BroadcastedDeclareTransaction::V3(
-                BroadcastedDeclareTransactionV3 {
-                    version: TransactionVersion::THREE,
-                    signature: vec![],
-                    nonce: transaction_nonce!("0x1"),
-                    resource_bounds: ResourceBounds {
-                        l1_gas: ResourceBound {
-                            max_amount: ResourceAmount(0x186a0),
-                            max_price_per_unit: ResourcePricePerUnit(0x5af3107a4000),
-                        },
-                        l2_gas: ResourceBound {
-                            max_amount: ResourceAmount(0),
-                            max_price_per_unit: ResourcePricePerUnit(0),
-                        },
-                        l1_data_gas: None,
-                    },
-                    tip: Tip(0),
-                    paymaster_data: vec![],
-                    account_deployment_data: vec![],
-                    nonce_data_availability_mode: DataAvailabilityMode::L1,
-                    fee_data_availability_mode: DataAvailabilityMode::L1,
-                    compiled_class_hash: casm_hash!(
-                        "0x1add56d64bebf8140f3b8a38bdf102b7874437f0c861ab4ca7526ec33b4d0f8"
-                    ),
-                    contract_class: INTEGRATION_SIERRA_CLASS.clone(),
-                    sender_address: contract_address!(
-                        "0x2fab82e4aef1d8664874e1f194951856d48463c3e6bf9a8c68e234a629a6f50"
-                    ),
-                },
-            )),
-            token: None,
-        };
-
-        let err = add_declare_transaction(context, input).await.unwrap_err();
-        assert_matches::assert_matches!(
-            err,
-            AddDeclareTransactionError::InsufficientAccountBalance
-        );
+        assert_eq!(actual_error, expected_error);
     }
 }

@@ -749,7 +749,7 @@ mod tests {
     }
 
     fn response_body_from(code: KnownStarknetErrorCode) -> serde_json::Value {
-        let (s, _) = test_response_from(code);
+        let (s, _) = test_response_from(code, "");
         serde_json::from_str(&s).unwrap()
     }
 
