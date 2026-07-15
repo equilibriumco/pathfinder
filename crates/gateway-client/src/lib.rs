@@ -19,6 +19,9 @@ use starknet_gateway_types::{reply, request};
 mod builder;
 mod metrics;
 
+/// Max wait time for the sequencer to accept our tx.
+const ADD_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// A way of identifying a specific block.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BlockId {
@@ -643,7 +646,7 @@ impl GatewayApi for Client {
             .compress(self.compress_gateway_requests && !invoke.is_proof_empty())
             .post_with_json(
                 &request::add_transaction::AddTransaction::Invoke(invoke),
-                Some(Duration::MAX),
+                Some(ADD_TRANSACTION_TIMEOUT),
             )
             .await
     }
@@ -666,7 +669,7 @@ impl GatewayApi for Client {
             .retry(false)
             .post_with_json(
                 &request::add_transaction::AddTransaction::Declare(declare),
-                Some(Duration::MAX),
+                Some(ADD_TRANSACTION_TIMEOUT),
             )
             .await
     }
@@ -685,7 +688,7 @@ impl GatewayApi for Client {
             .retry(false)
             .post_with_json(
                 &request::add_transaction::AddTransaction::DeployAccount(deploy),
-                Some(Duration::MAX),
+                Some(ADD_TRANSACTION_TIMEOUT),
             )
             .await
     }
