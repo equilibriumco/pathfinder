@@ -157,8 +157,10 @@ pub async fn task_syncing(user: &mut GooseUser) -> TransactionResult {
 }
 
 pub async fn task_call(user: &mut GooseUser) -> TransactionResult {
+    let default_mode = std::env::var("LOAD_TEST_PRE_CONFIRMED").is_err();
     call(
         user,
+        // StarkGate: ETH Token
         Felt::from_hex_str("0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7")
             .unwrap(),
         &[
@@ -167,6 +169,8 @@ pub async fn task_call(user: &mut GooseUser) -> TransactionResult {
         ],
         // "balanceOf" entry point
         "0x2e4263afad30923c891518314c3c95dbe830a16874e8abc5777a9a20b54c76e",
+        // token deployed in block 1407
+        default_mode.then_some(1500),
     )
     .await?;
     Ok(())
@@ -295,12 +299,13 @@ pub async fn task_get_storage_at(user: &mut GooseUser) -> TransactionResult {
 }
 
 pub async fn task_get_nonce(user: &mut GooseUser) -> TransactionResult {
-    let _ = get_nonce(
-        user,
+    let default_mode = std::env::var("LOAD_TEST_PRE_CONFIRMED").is_err();
+    let contract_address =
         Felt::from_hex_str("0x01b68f7c1bbcaf9017bd8e2f3be124c01525341603e5c76a06870c32e10473c7")
-            .unwrap(),
-    )
-    .await?;
+            .unwrap();
+    // same as in estimate_fee_for_invoke
+    let block_number = default_mode.then_some(499999);
+    let _ = get_nonce(user, contract_address, block_number).await?;
 
     Ok(())
 }

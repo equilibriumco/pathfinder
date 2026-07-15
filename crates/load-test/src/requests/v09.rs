@@ -15,6 +15,14 @@ use crate::types::{
 
 pub type MethodResult<T> = Result<T, Box<goose::goose::TransactionError>>;
 
+fn block_number_to_json(block_number: Option<u64>) -> serde_json::Value {
+    if let Some(bn) = block_number {
+        json!({"block_number": bn})
+    } else {
+        json!("pre_confirmed")
+    }
+}
+
 pub async fn get_block_by_number(user: &mut GooseUser, block_number: u64) -> MethodResult<Block> {
     post_jsonrpc_request(
         user,
@@ -227,20 +235,17 @@ pub async fn call(
     contract_address: Felt,
     call_data: &[&str],
     entry_point_selector: &str,
+    block_number: Option<u64>,
 ) -> MethodResult<Vec<String>> {
-    post_jsonrpc_request(
-        user,
-        "starknet_call",
-        json!({
-            "request": {
-                "contract_address": contract_address,
-                "calldata": call_data,
-                "entry_point_selector": entry_point_selector,
-            },
-            "block_id": "pre_confirmed",
-        }),
-    )
-    .await
+    let mut params = json!({
+        "request": {
+            "contract_address": contract_address,
+            "calldata": call_data,
+            "entry_point_selector": entry_point_selector,
+        }
+    });
+    params["block_id"] = block_number_to_json(block_number);
+    post_jsonrpc_request(user, "starknet_call", params).await
 }
 
 pub async fn estimate_fee_for_invoke(
@@ -275,16 +280,16 @@ pub async fn estimate_fee_for_invoke(
     .await
 }
 
-pub async fn get_nonce(user: &mut GooseUser, contract_address: Felt) -> MethodResult<Felt> {
-    post_jsonrpc_request(
-        user,
-        "starknet_getNonce",
-        json!({
-            "block_id": "pre_confirmed",
-            "contract_address": contract_address
-        }),
-    )
-    .await
+pub async fn get_nonce(
+    user: &mut GooseUser,
+    contract_address: Felt,
+    block_number: Option<u64>,
+) -> MethodResult<Felt> {
+    let mut params = json!({
+        "contract_address": contract_address
+    });
+    params["block_id"] = block_number_to_json(block_number);
+    post_jsonrpc_request(user, "starknet_getNonce", params).await
 }
 
 async fn post_jsonrpc_request<T: DeserializeOwned>(
