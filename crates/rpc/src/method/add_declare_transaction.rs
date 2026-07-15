@@ -425,10 +425,12 @@ pub async fn add_declare_transaction(
             })
         }
         Transaction::Declare(BroadcastedDeclareTransaction::V3(tx)) => {
-            let contract_definition: SierraContractDefinition = tx
-                .contract_class
-                .try_into()
-                .map_err(|e| anyhow::anyhow!("Failed to convert contract definition: {e}"))?;
+            let contract_class = tx.contract_class;
+            let contract_definition: SierraContractDefinition =
+                util::task::spawn_blocking(move |_| contract_class.try_into())
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Sierra compression task failed: {e}"))?
+                    .map_err(|e| anyhow::anyhow!("Failed to convert contract definition: {e}"))?;
 
             let response = context
                 .sequencer
