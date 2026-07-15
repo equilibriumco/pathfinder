@@ -10,6 +10,13 @@
 //! ```
 //! cargo run --release -- -H http://127.0.0.1:9545 --report-file /tmp/report.html -u 30 -r 5 -t 60 --no-gzip
 //! ```
+//! By default, the tests do not request any pre-confirmed data. To
+//! enable pre-confirmed tests (which require the tested pathfinder
+//! node to be _fully_ synced), define
+//! ```
+//! export LOAD_TEST_PRE_CONFIRMED=1
+//! ```
+//! before running the load test.
 use goose::prelude::*;
 
 mod requests;
