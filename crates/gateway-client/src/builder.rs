@@ -13,6 +13,8 @@
 //!   4. [Final](stage::Final) where you select the REST operation type, which
 //!      is then executed.
 
+use std::io::Write;
+
 use backon::Retryable;
 use pathfinder_common::{ClassHash, TransactionHash};
 use reqwest::header::CONTENT_ENCODING;
@@ -370,13 +372,20 @@ impl Request<stage::Final> {
                     None => request,
                 };
                 if compress {
-                    let mut encoder =
-                        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-                    serde_json::to_writer(&mut encoder, json)
+                    let uncompressed = serde_json::to_vec(json)
                         .map_err(|e| SequencerError::GatewayRequestCreationError(e.into()))?;
-                    let compressed_body = encoder
-                        .finish()
-                        .map_err(|e| SequencerError::GatewayRequestCreationError(e.into()))?;
+                    let compressed_body = tokio::task::spawn_blocking(move || {
+                        let mut encoder = flate2::write::GzEncoder::new(
+                            Vec::new(),
+                            flate2::Compression::default(),
+                        );
+                        encoder.write_all(&uncompressed)?;
+                        encoder.finish()
+                    })
+                    .await
+                    .map_err(std::io::Error::other)
+                    .and_then(|body| body)
+                    .map_err(|e| SequencerError::GatewayRequestCreationError(e.into()))?;
                     let request = request
                         .header(CONTENT_ENCODING, "gzip")
                         .body(compressed_body);
