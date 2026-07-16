@@ -196,124 +196,6 @@ pub struct Input {
     token: Option<String>,
 }
 
-impl Input {
-    pub fn is_v3_transaction(&self) -> bool {
-        matches!(
-            self.declare_transaction,
-            Transaction::Declare(BroadcastedDeclareTransaction::V3(_))
-        )
-    }
-}
-
-#[cfg(test)]
-impl Input {
-    pub(crate) fn for_test_with_v0_transaction() -> Self {
-        Self {
-            declare_transaction: Transaction::Declare(BroadcastedDeclareTransaction::V0(
-                crate::types::request::BroadcastedDeclareTransactionV0 {
-                    max_fee: Default::default(),
-                    version: pathfinder_common::TransactionVersion::ZERO,
-                    signature: Default::default(),
-                    contract_class: crate::types::class::cairo::CairoContractClass {
-                        program: Default::default(),
-                        entry_points_by_type:
-                            crate::types::class::cairo::entry_point::ContractEntryPoints {
-                                constructor: Default::default(),
-                                external: Default::default(),
-                                l1_handler: Default::default(),
-                            },
-                        abi: Default::default(),
-                    },
-                    sender_address: Default::default(),
-                },
-            )),
-            token: None,
-        }
-    }
-
-    pub(crate) fn for_test_with_v1_transaction() -> Self {
-        Self {
-            declare_transaction: Transaction::Declare(BroadcastedDeclareTransaction::V1(
-                crate::types::request::BroadcastedDeclareTransactionV1 {
-                    max_fee: Default::default(),
-                    version: pathfinder_common::TransactionVersion::ONE,
-                    signature: Default::default(),
-                    nonce: Default::default(),
-                    contract_class: crate::types::class::cairo::CairoContractClass {
-                        program: Default::default(),
-                        entry_points_by_type:
-                            crate::types::class::cairo::entry_point::ContractEntryPoints {
-                                constructor: Default::default(),
-                                external: Default::default(),
-                                l1_handler: Default::default(),
-                            },
-                        abi: Default::default(),
-                    },
-                    sender_address: Default::default(),
-                },
-            )),
-            token: None,
-        }
-    }
-
-    pub(crate) fn for_test_with_v2_transaction() -> Self {
-        Self {
-            declare_transaction: Transaction::Declare(BroadcastedDeclareTransaction::V2(
-                crate::types::request::BroadcastedDeclareTransactionV2 {
-                    max_fee: Default::default(),
-                    version: pathfinder_common::TransactionVersion::TWO,
-                    signature: Default::default(),
-                    nonce: Default::default(),
-                    compiled_class_hash: Default::default(),
-                    contract_class: crate::types::class::sierra::SierraContractClass {
-                        sierra_program: Default::default(),
-                        contract_class_version: Default::default(),
-                        entry_points_by_type: crate::types::class::sierra::SierraEntryPoints {
-                            constructor: Default::default(),
-                            external: Default::default(),
-                            l1_handler: Default::default(),
-                        },
-                        abi: Default::default(),
-                    },
-                    sender_address: Default::default(),
-                },
-            )),
-            token: None,
-        }
-    }
-
-    pub(crate) fn for_test_with_v3_transaction() -> Self {
-        Self {
-            declare_transaction: Transaction::Declare(BroadcastedDeclareTransaction::V3(
-                crate::types::request::BroadcastedDeclareTransactionV3 {
-                    version: pathfinder_common::TransactionVersion::THREE,
-                    signature: Default::default(),
-                    nonce: Default::default(),
-                    resource_bounds: Default::default(),
-                    tip: Default::default(),
-                    paymaster_data: Default::default(),
-                    account_deployment_data: Default::default(),
-                    nonce_data_availability_mode: Default::default(),
-                    fee_data_availability_mode: Default::default(),
-                    compiled_class_hash: Default::default(),
-                    contract_class: crate::types::class::sierra::SierraContractClass {
-                        sierra_program: Default::default(),
-                        contract_class_version: Default::default(),
-                        entry_points_by_type: crate::types::class::sierra::SierraEntryPoints {
-                            constructor: Default::default(),
-                            external: Default::default(),
-                            l1_handler: Default::default(),
-                        },
-                        abi: Default::default(),
-                    },
-                    sender_address: Default::default(),
-                },
-            )),
-            token: None,
-        }
-    }
-}
-
 impl crate::dto::DeserializeForVersion for Input {
     fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
         value.deserialize_map(|value| {
@@ -337,10 +219,6 @@ pub async fn add_declare_transaction(
     context: RpcContext,
     input: Input,
 ) -> Result<Output, AddDeclareTransactionError> {
-    if !input.is_v3_transaction() {
-        return Err(AddDeclareTransactionError::UnsupportedTransactionVersion);
-    }
-
     use starknet_gateway_types::request::add_transaction;
 
     match input.declare_transaction {
@@ -498,31 +376,14 @@ mod tests {
     use pathfinder_common::prelude::*;
     use pathfinder_common::transaction::{DataAvailabilityMode, ResourceBound, ResourceBounds};
     use pathfinder_crypto::Felt;
-    use starknet_gateway_test_fixtures::class_definitions::{
-        CAIRO_2_0_0_STACK_OVERFLOW,
-        CONTRACT_DEFINITION,
-    };
-    use starknet_gateway_types::error::{
-        test_response_from,
-        KnownStarknetErrorCode,
-        StarknetError,
-    };
+    use starknet_gateway_test_fixtures::class_definitions::CAIRO_2_0_0_STACK_OVERFLOW;
+    use starknet_gateway_types::error::{test_response_from, KnownStarknetErrorCode};
     use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::types::class::cairo::CairoContractClass;
     use crate::types::class::sierra::SierraContractClass;
     use crate::types::request::{BroadcastedDeclareTransaction, BroadcastedDeclareTransactionV3};
     use crate::types::ContractClass;
-
-    pub static CONTRACT_CLASS: LazyLock<CairoContractClass> = LazyLock::new(|| {
-        ContractClass::from_serialized_def(&SerializedOpaqueClassDefinition::from_slice(
-            CONTRACT_DEFINITION,
-        ))
-        .unwrap()
-        .as_cairo()
-        .unwrap()
-    });
 
     pub static SIERRA_CLASS: LazyLock<SierraContractClass> = LazyLock::new(|| {
         ContractClass::from_serialized_def(&SerializedOpaqueClassDefinition::from_slice(
@@ -579,167 +440,6 @@ mod tests {
     }
 
     mod parsing {
-        mod v1 {
-            use serde_json::json;
-
-            use super::super::*;
-            use crate::dto::{DeserializeForVersion, SerializeForVersion, Serializer};
-            use crate::types::request::BroadcastedDeclareTransactionV1;
-            use crate::RpcVersion;
-
-            fn test_declare_txn() -> Transaction {
-                Transaction::Declare(BroadcastedDeclareTransaction::V1(
-                    BroadcastedDeclareTransactionV1 {
-                        max_fee: fee!("0x1"),
-                        version: TransactionVersion::ONE,
-                        signature: vec![],
-                        nonce: TransactionNonce(Felt::ZERO),
-                        contract_class: CONTRACT_CLASS.clone(),
-                        sender_address: ContractAddress::new_or_panic(Felt::from_u64(1)),
-                    },
-                ))
-            }
-
-            #[test]
-            fn positional_args() {
-                let positional = json!([{
-                    "type": "DECLARE",
-                    "version": "0x1",
-                    "max_fee": "0x1",
-                    "signature": [],
-                    "nonce": "0x0",
-                    "contract_class": CONTRACT_CLASS.clone(),
-                    "sender_address": "0x1"
-                }]);
-                let input = Input::deserialize(crate::dto::Value::new(positional, RpcVersion::V09))
-                    .unwrap();
-                let expected = Input {
-                    declare_transaction: test_declare_txn(),
-                    token: None,
-                };
-                assert_eq!(input, expected);
-            }
-
-            #[test]
-            fn named_args() {
-                let named = json!({
-                    "declare_transaction": {
-                        "type": "DECLARE",
-                        "version": "0x1",
-                        "max_fee": "0x1",
-                        "signature": [],
-                        "nonce": "0x0",
-                        "contract_class": CONTRACT_CLASS.clone(),
-                        "sender_address": "0x1"
-                    },
-                    "token": "token"
-                });
-                let input =
-                    Input::deserialize(crate::dto::Value::new(named, RpcVersion::V09)).unwrap();
-                let expected = Input {
-                    declare_transaction: test_declare_txn(),
-                    token: Some("token".to_owned()),
-                };
-                assert_eq!(input, expected);
-            }
-
-            #[test]
-            fn unexpected_error_message() {
-                use starknet_gateway_types::error::{KnownStarknetErrorCode, StarknetErrorCode};
-                let starknet_error = SequencerError::StarknetError(StarknetError {
-                    code: StarknetErrorCode::Known(
-                        KnownStarknetErrorCode::TransactionLimitExceeded,
-                    ),
-                    message: "StarkNet Alpha throughput limit reached, please wait a few minutes \
-                              and try again."
-                        .to_string(),
-                });
-
-                let error = AddDeclareTransactionError::from(starknet_error);
-                let error = crate::error::ApplicationError::from(error);
-                let error = crate::jsonrpc::RpcError::from(error);
-                let error = error.serialize(Serializer::new(RpcVersion::V09)).unwrap();
-
-                let expected = json!({
-                    "code": 63,
-                    "message": "An unexpected error occurred",
-                    "data": "StarkNet Alpha throughput limit reached, please wait a few minutes and try again."
-                });
-
-                assert_eq!(error, expected);
-            }
-        }
-
-        mod v2 {
-            use serde_json::json;
-
-            use super::super::*;
-            use crate::dto::DeserializeForVersion;
-            use crate::types::request::BroadcastedDeclareTransactionV2;
-            use crate::RpcVersion;
-
-            fn test_declare_txn() -> Transaction {
-                Transaction::Declare(BroadcastedDeclareTransaction::V2(
-                    BroadcastedDeclareTransactionV2 {
-                        max_fee: fee!("0x1"),
-                        version: TransactionVersion::TWO,
-                        signature: vec![],
-                        nonce: TransactionNonce(Felt::ZERO),
-                        contract_class: SIERRA_CLASS.clone(),
-                        sender_address: ContractAddress::new_or_panic(Felt::from_u64(1)),
-                        compiled_class_hash: CasmHash(Felt::from_u64(1)),
-                    },
-                ))
-            }
-
-            #[test]
-            fn positional_args() {
-                let positional = json!([{
-                    "type": "DECLARE",
-                    "version": "0x2",
-                    "max_fee": "0x1",
-                    "signature": [],
-                    "nonce": "0x0",
-                    "contract_class": SIERRA_CLASS.clone(),
-                    "sender_address": "0x1",
-                    "compiled_class_hash": "0x1"
-                }]);
-
-                let input = Input::deserialize(crate::dto::Value::new(positional, RpcVersion::V09))
-                    .unwrap();
-                let expected = Input {
-                    declare_transaction: test_declare_txn(),
-                    token: None,
-                };
-                pretty_assertions_sorted::assert_eq!(input, expected);
-            }
-
-            #[test]
-            fn named_args() {
-                let named = json!({
-                    "declare_transaction": {
-                        "type": "DECLARE",
-                        "version": "0x2",
-                        "max_fee": "0x1",
-                        "signature": [],
-                        "nonce": "0x0",
-                        "contract_class": SIERRA_CLASS.clone(),
-                        "sender_address": "0x1",
-                        "compiled_class_hash": "0x1"
-                    },
-                    "token": "token"
-                });
-
-                let input =
-                    Input::deserialize(crate::dto::Value::new(named, RpcVersion::V09)).unwrap();
-                let expected = Input {
-                    declare_transaction: test_declare_txn(),
-                    token: Some("token".to_owned()),
-                };
-                pretty_assertions_sorted::assert_eq!(input, expected);
-            }
-        }
-
         mod v3 {
             use pathfinder_common::transaction::{
                 DataAvailabilityMode,
@@ -845,24 +545,6 @@ mod tests {
                 pretty_assertions_sorted::assert_eq!(input, expected);
             }
         }
-    }
-
-    #[rstest::rstest]
-    #[case::v0_is_unsupported(Input::for_test_with_v0_transaction(), false)]
-    #[case::v1_is_unsupported(Input::for_test_with_v1_transaction(), false)]
-    #[case::v2_is_unsupported(Input::for_test_with_v2_transaction(), false)]
-    #[case::v3_is_supported(Input::for_test_with_v3_transaction(), true)]
-    #[tokio::test]
-    async fn only_v3_transactions_are_accepted(#[case] input: Input, #[case] is_supported: bool) {
-        let context = RpcContext::for_tests();
-        let result = add_declare_transaction(context, input).await;
-        assert_eq!(
-            !is_supported,
-            matches!(
-                result,
-                Err(AddDeclareTransactionError::UnsupportedTransactionVersion)
-            )
-        );
     }
 
     #[rstest::rstest]
