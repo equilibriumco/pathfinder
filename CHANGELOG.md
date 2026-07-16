@@ -7,6 +7,13 @@ More expansive patch notes and explanations may be found in the specific [pathfi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- JSON-RPC 0.8, 0.7 and 0.6 API support has been removed.
+- JSON-RPC API version 0.9 is now served by default on the `/` path.
+
 ## [0.22.8-beta.1] - 2026-07-13
 
 ### Added
