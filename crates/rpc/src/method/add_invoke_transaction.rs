@@ -1,9 +1,3 @@
-use pathfinder_common::transaction::{
-    InvokeTransactionV0,
-    InvokeTransactionV1,
-    InvokeTransactionV3,
-    TransactionVariant,
-};
 use pathfinder_common::TransactionHash;
 use serde::de::Error;
 use starknet_gateway_client::GatewayApi;
@@ -238,19 +232,14 @@ pub async fn add_invoke_transaction(
     }
 
     let Transaction::Invoke(tx) = input.invoke_transaction;
-    let (transaction_hash, variant) = add_invoke_transaction_impl(&context, tx).await?;
-    context.submission_tracker.insert(
-        transaction_hash,
-        super::get_latest_block_or_genesis(&context.storage)?,
-        variant,
-    );
+    let transaction_hash = add_invoke_transaction_impl(&context, tx).await?;
     Ok(Output { transaction_hash })
 }
 
 pub(crate) async fn add_invoke_transaction_impl(
     context: &RpcContext,
     tx: BroadcastedInvokeTransaction,
-) -> Result<(TransactionHash, TransactionVariant), SequencerError> {
+) -> Result<TransactionHash, SequencerError> {
     use starknet_gateway_types::request::add_transaction;
 
     let success = match tx {
@@ -268,18 +257,7 @@ pub(crate) async fn add_invoke_transaction_impl(
                     },
                 ))
                 .await?;
-            let new_tx = InvokeTransactionV0 {
-                calldata: tx.calldata,
-                sender_address: tx.contract_address,
-                entry_point_selector: tx.entry_point_selector,
-                entry_point_type: None,
-                max_fee: tx.max_fee,
-                signature: tx.signature,
-            };
-            (
-                response.transaction_hash,
-                TransactionVariant::InvokeV0(new_tx),
-            )
+            response.transaction_hash
         }
         BroadcastedInvokeTransaction::V1(tx) => {
             let response = context
@@ -295,17 +273,7 @@ pub(crate) async fn add_invoke_transaction_impl(
                     },
                 ))
                 .await?;
-            let new_tx = InvokeTransactionV1 {
-                calldata: tx.calldata,
-                sender_address: tx.sender_address,
-                max_fee: tx.max_fee,
-                signature: tx.signature,
-                nonce: tx.nonce,
-            };
-            (
-                response.transaction_hash,
-                TransactionVariant::InvokeV1(new_tx),
-            )
+            response.transaction_hash
         }
         BroadcastedInvokeTransaction::V3(tx) => {
             let response = context
@@ -327,23 +295,7 @@ pub(crate) async fn add_invoke_transaction_impl(
                     },
                 ))
                 .await?;
-            let new_tx = InvokeTransactionV3 {
-                signature: tx.signature,
-                nonce: tx.nonce,
-                nonce_data_availability_mode: tx.nonce_data_availability_mode,
-                fee_data_availability_mode: tx.fee_data_availability_mode,
-                resource_bounds: tx.resource_bounds,
-                tip: tx.tip,
-                paymaster_data: tx.paymaster_data,
-                account_deployment_data: tx.account_deployment_data,
-                calldata: tx.calldata,
-                sender_address: tx.sender_address,
-                proof_facts: tx.proof_facts,
-            };
-            (
-                response.transaction_hash,
-                TransactionVariant::InvokeV3(new_tx),
-            )
+            response.transaction_hash
         }
     };
     Ok(success)
