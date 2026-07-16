@@ -34,70 +34,6 @@ pub struct Input {
     invoke_transaction: Transaction,
 }
 
-impl Input {
-    pub fn is_v3_transaction(&self) -> bool {
-        matches!(
-            self.invoke_transaction,
-            Transaction::Invoke(BroadcastedInvokeTransaction::V3(_))
-        )
-    }
-}
-
-#[cfg(test)]
-impl Input {
-    pub(crate) fn for_test_with_v0_transaction() -> Self {
-        Self {
-            invoke_transaction: Transaction::Invoke(BroadcastedInvokeTransaction::V0(
-                crate::types::request::BroadcastedInvokeTransactionV0 {
-                    version: pathfinder_common::TransactionVersion::ZERO,
-                    max_fee: Default::default(),
-                    signature: Default::default(),
-                    contract_address: Default::default(),
-                    entry_point_selector: Default::default(),
-                    calldata: Default::default(),
-                },
-            )),
-        }
-    }
-
-    pub(crate) fn for_test_with_v1_transaction() -> Self {
-        Self {
-            invoke_transaction: Transaction::Invoke(BroadcastedInvokeTransaction::V1(
-                crate::types::request::BroadcastedInvokeTransactionV1 {
-                    version: pathfinder_common::TransactionVersion::ONE,
-                    max_fee: Default::default(),
-                    signature: Default::default(),
-                    nonce: Default::default(),
-                    sender_address: Default::default(),
-                    calldata: Default::default(),
-                },
-            )),
-        }
-    }
-
-    pub(crate) fn for_test_with_v3_transaction() -> Self {
-        Self {
-            invoke_transaction: Transaction::Invoke(BroadcastedInvokeTransaction::V3(
-                crate::types::request::BroadcastedInvokeTransactionV3 {
-                    version: pathfinder_common::TransactionVersion::THREE,
-                    signature: Default::default(),
-                    nonce: Default::default(),
-                    resource_bounds: Default::default(),
-                    tip: Default::default(),
-                    paymaster_data: Default::default(),
-                    account_deployment_data: Default::default(),
-                    nonce_data_availability_mode: Default::default(),
-                    fee_data_availability_mode: Default::default(),
-                    sender_address: Default::default(),
-                    calldata: Default::default(),
-                    proof_facts: Default::default(),
-                    proof: Default::default(),
-                },
-            )),
-        }
-    }
-}
-
 impl crate::dto::DeserializeForVersion for Input {
     fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
         value.deserialize_map(|value| {
@@ -233,10 +169,6 @@ pub async fn add_invoke_transaction(
     context: RpcContext,
     input: Input,
 ) -> Result<Output, AddInvokeTransactionError> {
-    if !input.is_v3_transaction() {
-        return Err(AddInvokeTransactionError::UnsupportedTransactionVersion);
-    }
-
     let Transaction::Invoke(tx) = input.invoke_transaction;
     let (transaction_hash, variant) = add_invoke_transaction_impl(&context, tx).await?;
     context.submission_tracker.insert(
@@ -369,7 +301,6 @@ mod tests {
     use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::types::request::BroadcastedInvokeTransactionV1;
 
     fn v3_input() -> Input {
         Input {
@@ -406,198 +337,6 @@ mod tests {
     }
 
     mod parsing {
-        mod v0 {
-            use serde_json::json;
-
-            use super::super::*;
-            use crate::dto::DeserializeForVersion;
-
-            fn test_txn() -> Transaction {
-                Transaction::Invoke(BroadcastedInvokeTransaction::V0(
-                    crate::types::request::BroadcastedInvokeTransactionV0 {
-                        version: TransactionVersion::ZERO,
-                        max_fee: fee!("0x4f388496839"),
-                        signature: vec![
-                            transaction_signature_elem!(
-                                "0x07dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5"
-                            ),
-                            transaction_signature_elem!(
-                                "0x071456dded17015d1234779889d78f3e7c763ddcfd2662b19e7843c7542614f8"
-                            ),
-                        ],
-                        contract_address: contract_address!(
-                            "0x023371b227eaecd8e8920cd429357edddd2cd0f3fee6abaacca08d3ab82a7cdd"
-                        ),
-                        entry_point_selector: entry_point!(
-                            "0x015d40a3d6ca2ac30f4031e42be28da9b056fef9bb7357ac5e85627ee876e5ad"
-                        ),
-                        calldata: vec![call_param!("0x1"), call_param!("0x2b")],
-                    },
-                ))
-            }
-
-            fn test_txn_json() -> serde_json::Value {
-                json!({
-                    "type": "INVOKE",
-                    "version": "0x0",
-                    "max_fee": "0x4f388496839",
-                    "signature": [
-                        "0x07dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5",
-                        "0x071456dded17015d1234779889d78f3e7c763ddcfd2662b19e7843c7542614f8"
-                    ],
-                    "contract_address": "0x023371b227eaecd8e8920cd429357edddd2cd0f3fee6abaacca08d3ab82a7cdd",
-                    "entry_point_selector": "0x015d40a3d6ca2ac30f4031e42be28da9b056fef9bb7357ac5e85627ee876e5ad",
-                    "calldata": ["0x1", "0x2b"]
-                })
-            }
-
-            #[test]
-            fn positional_args() {
-                let positional = json!([test_txn_json()]);
-                let input =
-                    Input::deserialize(crate::dto::Value::new(positional, crate::RpcVersion::V09))
-                        .unwrap();
-                let expected = Input {
-                    invoke_transaction: test_txn(),
-                };
-                pretty_assertions_sorted::assert_eq!(input, expected);
-            }
-
-            #[test]
-            fn named_args() {
-                let named = json!({ "invoke_transaction": test_txn_json() });
-                let input =
-                    Input::deserialize(crate::dto::Value::new(named, crate::RpcVersion::V09))
-                        .unwrap();
-                let expected = Input {
-                    invoke_transaction: test_txn(),
-                };
-                pretty_assertions_sorted::assert_eq!(input, expected);
-            }
-        }
-
-        mod v1 {
-            use serde_json::json;
-
-            use super::super::*;
-            use crate::dto::{DeserializeForVersion, SerializeForVersion, Serializer};
-
-            fn test_txn() -> Transaction {
-                Transaction::Invoke(BroadcastedInvokeTransaction::V1(
-                    BroadcastedInvokeTransactionV1 {
-                        version: TransactionVersion::ONE,
-                        max_fee: fee!("0x4F388496839"),
-                        signature: vec![
-                            transaction_signature_elem!(
-                                "0x07dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5"
-                            ),
-                            transaction_signature_elem!(
-                                "0x071456dded17015d1234779889d78f3e7c763ddcfd2662b19e7843c7542614f8"
-                            ),
-                        ],
-                        nonce: transaction_nonce!("0x1"),
-                        sender_address: contract_address!(
-                            "0x023371b227eaecd8e8920cd429357edddd2cd0f3fee6abaacca08d3ab82a7cdd"
-                        ),
-                        calldata: vec![
-                            call_param!("0x1"),
-                            call_param!(
-                                "0x0677bb1cdc050e8d63855e8743ab6e09179138def390676cc03c484daf112ba1"
-                            ),
-                            call_param!(
-                                "0x0362398bec32bc0ebb411203221a35a0301193a96f317ebe5e40be9f60d15320"
-                            ),
-                            call_param!("0x0"),
-                            call_param!("0x1"),
-                            call_param!("0x1"),
-                            call_param!("0x2b"),
-                            call_param!("0x0"),
-                        ],
-                    },
-                ))
-            }
-
-            fn test_txn_json() -> serde_json::Value {
-                json!({
-                    "type": "INVOKE",
-                    "version": "0x1",
-                    "max_fee": "0x4f388496839",
-                    "signature": [
-                        "0x07dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5",
-                        "0x071456dded17015d1234779889d78f3e7c763ddcfd2662b19e7843c7542614f8"
-                    ],
-                    "nonce": "0x1",
-                    "sender_address": "0x023371b227eaecd8e8920cd429357edddd2cd0f3fee6abaacca08d3ab82a7cdd",
-                    "calldata": [
-                        "0x1",
-                        "0x0677bb1cdc050e8d63855e8743ab6e09179138def390676cc03c484daf112ba1",
-                        "0x0362398bec32bc0ebb411203221a35a0301193a96f317ebe5e40be9f60d15320",
-                        "0x0",
-                        "0x1",
-                        "0x1",
-                        "0x2b",
-                        "0x0"
-                    ]
-                })
-            }
-
-            #[test]
-            fn positional_args() {
-                let positional = json!([test_txn_json()]);
-                let input =
-                    Input::deserialize(crate::dto::Value::new(positional, crate::RpcVersion::V09))
-                        .unwrap();
-                let expected = Input {
-                    invoke_transaction: test_txn(),
-                };
-                pretty_assertions_sorted::assert_eq!(input, expected);
-            }
-
-            #[test]
-            fn named_args() {
-                let named = json!({ "invoke_transaction": test_txn_json() });
-                let input =
-                    Input::deserialize(crate::dto::Value::new(named, crate::RpcVersion::V09))
-                        .unwrap();
-                let expected = Input {
-                    invoke_transaction: test_txn(),
-                };
-                assert_eq!(input, expected);
-            }
-
-            #[test]
-            fn unexpected_error_message() {
-                use starknet_gateway_types::error::{
-                    KnownStarknetErrorCode,
-                    StarknetError,
-                    StarknetErrorCode,
-                };
-                let starknet_error = SequencerError::StarknetError(StarknetError {
-                    code: StarknetErrorCode::Known(
-                        KnownStarknetErrorCode::TransactionLimitExceeded,
-                    ),
-                    message: "StarkNet Alpha throughput limit reached, please wait a few minutes \
-                              and try again."
-                        .to_string(),
-                });
-
-                let error = AddInvokeTransactionError::from(starknet_error);
-                let error = crate::error::ApplicationError::from(error);
-                let error = crate::jsonrpc::RpcError::from(error);
-                let error = error
-                    .serialize(Serializer::new(crate::RpcVersion::V09))
-                    .unwrap();
-
-                let expected = json!({
-                    "code": 63,
-                    "message": "An unexpected error occurred",
-                    "data": "StarkNet Alpha throughput limit reached, please wait a few minutes and try again."
-                });
-
-                assert_eq!(error, expected);
-            }
-        }
-
         mod v3 {
             use serde_json::json;
 
@@ -693,23 +432,6 @@ mod tests {
                 pretty_assertions_sorted::assert_eq!(input, expected);
             }
         }
-    }
-
-    #[rstest::rstest]
-    #[case::v0_is_unsupported(Input::for_test_with_v0_transaction(), false)]
-    #[case::v1_is_unsupported(Input::for_test_with_v1_transaction(), false)]
-    #[case::v3_is_supported(Input::for_test_with_v3_transaction(), true)]
-    #[tokio::test]
-    async fn only_v3_transactions_are_accepted(#[case] input: Input, #[case] is_supported: bool) {
-        let context = RpcContext::for_tests();
-        let result = add_invoke_transaction(context, input).await;
-        assert_eq!(
-            !is_supported,
-            matches!(
-                result,
-                Err(AddInvokeTransactionError::UnsupportedTransactionVersion)
-            )
-        );
     }
 
     #[rstest::rstest]

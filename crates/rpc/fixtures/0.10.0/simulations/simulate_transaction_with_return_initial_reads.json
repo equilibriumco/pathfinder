@@ -41,12 +41,12 @@
       "fee_estimation": {
         "l1_data_gas_consumed": "0x160",
         "l1_data_gas_price": "0x2",
-        "l1_gas_consumed": "0x15",
-        "l1_gas_price": "0x1",
-        "l2_gas_consumed": "0x0",
+        "l1_gas_consumed": "0x0",
+        "l1_gas_price": "0x2",
+        "l2_gas_consumed": "0x70cb0",
         "l2_gas_price": "0x1",
-        "overall_fee": "0x2d5",
-        "unit": "WEI"
+        "overall_fee": "0x70f70",
+        "unit": "FRI"
       },
       "transaction_trace": {
         "constructor_invocation": {
@@ -71,8 +71,8 @@
             }
           ],
           "execution_resources": {
-            "l1_gas": 2,
-            "l2_gas": 0
+            "l1_gas": 0,
+            "l2_gas": 40000
           },
           "is_reverted": false,
           "messages": [],
@@ -80,8 +80,8 @@
         },
         "execution_resources": {
           "l1_data_gas": 352,
-          "l1_gas": 21,
-          "l2_gas": 0
+          "l1_gas": 0,
+          "l2_gas": 420000
         },
         "state_diff": {
           "declared_classes": [],
@@ -136,8 +136,8 @@
           "entry_point_type": "EXTERNAL",
           "events": [],
           "execution_resources": {
-            "l1_gas": 1,
-            "l2_gas": 0
+            "l1_gas": 0,
+            "l2_gas": 20000
           },
           "is_reverted": false,
           "messages": [],

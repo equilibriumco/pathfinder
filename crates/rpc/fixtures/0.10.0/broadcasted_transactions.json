@@ -1,64 +1,6 @@
 [
     {
         "type": "DECLARE",
-        "max_fee": "0x5",
-        "version": "0x1",
-        "signature": [
-            "0x7"
-        ],
-        "nonce": "0x8",
-        "contract_class": {
-            "program": "program",
-            "entry_points_by_type": {
-                "CONSTRUCTOR": [],
-                "EXTERNAL": [],
-                "L1_HANDLER": []
-            },
-            "abi": null
-        },
-        "sender_address": "0xa"
-    },
-    {
-        "type": "DECLARE",
-        "max_fee": "0x51",
-        "version": "0x2",
-        "signature": [
-            "0x71"
-        ],
-        "nonce": "0x81",
-        "compiled_class_hash": "0x91",
-        "contract_class": {
-            "sierra_program": [
-                "0x4",
-                "0x5"
-            ],
-            "contract_class_version": "0.1.0",
-            "entry_points_by_type": {
-                "CONSTRUCTOR": [
-                    {
-                        "function_idx": 1,
-                        "selector": "0x1"
-                    }
-                ],
-                "EXTERNAL": [
-                    {
-                        "function_idx": 2,
-                        "selector": "0x2"
-                    }
-                ],
-                "L1_HANDLER": [
-                    {
-                        "function_idx": 3,
-                        "selector": "0x3"
-                    }
-                ]
-            },
-            "abi": "[{\"type\":\"function\",\"name\":\"foo\"}]"
-        },
-        "sender_address": "0xa1"
-    },
-    {
-        "type": "DECLARE",
         "version": "0x3",
         "signature": [
             "0x71"
@@ -119,32 +61,6 @@
             "abi": "[{\"type\":\"function\",\"name\":\"foo\"}]"
         },
         "sender_address": "0xa1"
-    },
-    {
-        "type": "INVOKE",
-        "version": "0x1",
-        "max_fee": "0x6",
-        "signature": [
-            "0x7"
-        ],
-        "nonce": "0x8",
-        "sender_address": "0xaaa",
-        "calldata": [
-            "0xff"
-        ]
-    },
-    {
-        "type": "INVOKE",
-        "version": "0x100000000000000000000000000000001",
-        "max_fee": "0x6",
-        "signature": [
-            "0x7"
-        ],
-        "nonce": "0x8",
-        "sender_address": "0xaaa",
-        "calldata": [
-            "0xff"
-        ]
     },
     {
         "type": "INVOKE",

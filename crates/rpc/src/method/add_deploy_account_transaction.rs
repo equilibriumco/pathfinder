@@ -36,55 +36,6 @@ pub struct Input {
     deploy_account_transaction: Transaction,
 }
 
-impl Input {
-    pub fn is_v3_transaction(&self) -> bool {
-        matches!(
-            self.deploy_account_transaction,
-            Transaction::DeployAccount(BroadcastedDeployAccountTransaction::V3(_))
-        )
-    }
-}
-#[cfg(test)]
-impl Input {
-    pub(crate) fn for_test_with_v1_transaction() -> Self {
-        Self {
-            deploy_account_transaction: Transaction::DeployAccount(
-                BroadcastedDeployAccountTransaction::V1(BroadcastedDeployAccountTransactionV1 {
-                    version: pathfinder_common::TransactionVersion::ONE,
-                    max_fee: Default::default(),
-                    signature: Default::default(),
-                    nonce: Default::default(),
-                    class_hash: Default::default(),
-                    contract_address_salt: Default::default(),
-                    constructor_calldata: Default::default(),
-                }),
-            ),
-        }
-    }
-
-    pub(crate) fn for_test_with_v3_transaction() -> Self {
-        Self {
-            deploy_account_transaction: Transaction::DeployAccount(
-                BroadcastedDeployAccountTransaction::V3(
-                    crate::types::request::BroadcastedDeployAccountTransactionV3 {
-                        version: pathfinder_common::TransactionVersion::THREE,
-                        signature: Default::default(),
-                        nonce: Default::default(),
-                        resource_bounds: Default::default(),
-                        tip: Default::default(),
-                        paymaster_data: Default::default(),
-                        nonce_data_availability_mode: Default::default(),
-                        fee_data_availability_mode: Default::default(),
-                        contract_address_salt: Default::default(),
-                        constructor_calldata: Default::default(),
-                        class_hash: Default::default(),
-                    },
-                ),
-            ),
-        }
-    }
-}
-
 impl crate::dto::DeserializeForVersion for Input {
     fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
         value.deserialize_map(|value| {
@@ -213,10 +164,6 @@ pub async fn add_deploy_account_transaction(
     context: RpcContext,
     input: Input,
 ) -> Result<Output, AddDeployAccountTransactionError> {
-    if !input.is_v3_transaction() {
-        return Err(AddDeployAccountTransactionError::UnsupportedTransactionVersion);
-    }
-
     let contract_address = match &input.deploy_account_transaction {
         Transaction::DeployAccount(tx) => tx.deployed_contract_address(),
     };
@@ -372,44 +319,6 @@ mod tests {
     use crate::dto::{SerializeForVersion, Serializer};
     use crate::types::request::BroadcastedDeployAccountTransactionV3;
 
-    const INPUT_JSON: &str = r#"{
-        "max_fee": "0xbf391377813",
-        "version": "0x1",
-        "constructor_calldata": [
-            "0677bb1cdc050e8d63855e8743ab6e09179138def390676cc03c484daf112ba1"
-        ],
-        "signature": [
-            "07dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5",
-            "071456dded17015d1234779889d78f3e7c763ddcfd2662b19e7843c7542614f8"
-        ],
-        "nonce": "0x0",
-        "class_hash": "01fac3074c9d5282f0acc5c69a4781a1c711efea5e73c550c5d9fb253cf7fd3d",
-        "contract_address_salt": "06d44a6aecb4339e23a9619355f101cf3cb9baec289fcd9fd51486655c1bb8a8",
-        "type": "DEPLOY_ACCOUNT"
-    }"#;
-
-    #[tokio::test]
-    async fn test_parse_input_named() {
-        let json: serde_json::Value =
-            serde_json::from_str(&format!("{{\"deploy_account_transaction\":{INPUT_JSON}}}"))
-                .unwrap();
-        let input: Input = crate::dto::Value::new(json, crate::RpcVersion::V09)
-            .deserialize()
-            .unwrap();
-
-        assert_eq!(input, get_input());
-    }
-
-    #[tokio::test]
-    async fn test_parse_input_positional() {
-        let json: serde_json::Value = serde_json::from_str(&format!("[{INPUT_JSON}]")).unwrap();
-        let input: Input = crate::dto::Value::new(json, crate::RpcVersion::V09)
-            .deserialize()
-            .unwrap();
-
-        assert_eq!(input, get_input());
-    }
-
     const INPUT_JSON_V3: &str = r#"{
         "type": "DEPLOY_ACCOUNT",
         "version": "0x3",
@@ -502,22 +411,6 @@ mod tests {
         }
     }
 
-    #[rstest::rstest]
-    #[case::v1_is_unsupported(Input::for_test_with_v1_transaction(), false)]
-    #[case::v3_is_supported(Input::for_test_with_v3_transaction(), true)]
-    #[tokio::test]
-    async fn only_v3_transactions_are_accepted(#[case] input: Input, #[case] is_supported: bool) {
-        let context = RpcContext::for_tests();
-        let result = add_deploy_account_transaction(context, input).await;
-        assert_eq!(
-            !is_supported,
-            matches!(
-                result,
-                Err(AddDeployAccountTransactionError::UnsupportedTransactionVersion)
-            )
-        );
-    }
-
     #[test]
     fn unexpected_error_message() {
         use starknet_gateway_types::error::{StarknetError, StarknetErrorCode};
@@ -542,36 +435,6 @@ mod tests {
         });
 
         assert_eq!(error, expected);
-    }
-
-    fn get_input() -> Input {
-        Input {
-            deploy_account_transaction: Transaction::DeployAccount(
-                BroadcastedDeployAccountTransaction::V1(BroadcastedDeployAccountTransactionV1 {
-                    version: TransactionVersion::ONE,
-                    max_fee: fee!("0xbf391377813"),
-                    signature: vec![
-                        transaction_signature_elem!(
-                            "0x07dd3a55d94a0de6f3d6c104d7e6c88ec719a82f4e2bbc12587c8c187584d3d5"
-                        ),
-                        transaction_signature_elem!(
-                            "0x071456dded17015d1234779889d78f3e7c763ddcfd2662b19e7843c7542614f8"
-                        ),
-                    ],
-                    nonce: TransactionNonce::ZERO,
-
-                    contract_address_salt: contract_address_salt!(
-                        "0x06d44a6aecb4339e23a9619355f101cf3cb9baec289fcd9fd51486655c1bb8a8"
-                    ),
-                    constructor_calldata: vec![call_param!(
-                        "0x0677bb1cdc050e8d63855e8743ab6e09179138def390676cc03c484daf112ba1"
-                    )],
-                    class_hash: class_hash!(
-                        "0x01fac3074c9d5282f0acc5c69a4781a1c711efea5e73c550c5d9fb253cf7fd3d"
-                    ),
-                }),
-            ),
-        }
     }
 
     fn v3_input() -> Input {
