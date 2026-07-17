@@ -1527,7 +1527,9 @@ pub struct WebsocketConfig {
     pub enabled: bool,
     #[arg(
         long = "rpc.websocket.max-history",
-        long_help = "The maximum number of historical messages to send for each topic when a new client subscribes. If set to `unlimited`, all historical messages are sent. If set to a number N, only the last N messages are sent. Defaults to 1024 if not specified.",
+        long_help = "The maximum depth of history to send when a new client subscribes. If set to `unlimited`, all historical messages are sent. If set to a number N, only the messages for the last N blocks are sent. Defaults to 1024 if not specified.
+
+Note that the 'unlimited' setting is meant primarily for testing and not recommended for publicly accessible deployments (due to its memory requirements).",
         default_value = "1024",
         value_name = "unlimited | N",
         value_parser = parse_websocket_history,
