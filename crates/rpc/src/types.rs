@@ -13,8 +13,6 @@ pub mod request {
     use pathfinder_common::transaction::{DataAvailabilityMode, ResourceBounds};
     use pathfinder_common::{Proof, ProofFactElem, TipHex};
     use serde::de::Error;
-    use serde::Deserialize;
-    use serde_with::serde_as;
 
     use crate::dto::U64Hex;
     use crate::RpcVersion;
@@ -365,35 +363,6 @@ pub mod request {
         }
     }
 
-    impl crate::dto::DeserializeForVersion for BroadcastedDeclareTransaction {
-        fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
-            #[serde_as]
-            #[derive(serde::Deserialize)]
-            struct Version {
-                pub version: TransactionVersion,
-            }
-
-            let json_value = value.json_value();
-            let version = Version::deserialize(&json_value)?;
-
-            match version.version.without_query_version() {
-                0 => Ok(Self::V0(BroadcastedDeclareTransactionV0::deserialize(
-                    value,
-                )?)),
-                1 => Ok(Self::V1(BroadcastedDeclareTransactionV1::deserialize(
-                    value,
-                )?)),
-                2 => Ok(Self::V2(BroadcastedDeclareTransactionV2::deserialize(
-                    value,
-                )?)),
-                3 => Ok(Self::V3(BroadcastedDeclareTransactionV3::deserialize(
-                    value,
-                )?)),
-                _v => Err(serde_json::Error::custom("version must be 0, 1, 2 or 3")),
-            }
-        }
-    }
-
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct BroadcastedDeclareTransactionV0 {
         // BROADCASTED_TXN_COMMON_PROPERTIES: ideally this should just be included
@@ -419,22 +388,6 @@ pub mod request {
             serializer.serialize_field("contract_class", &self.contract_class)?;
             serializer.serialize_field("sender_address", &self.sender_address)?;
             serializer.end()
-        }
-    }
-
-    impl crate::dto::DeserializeForVersion for BroadcastedDeclareTransactionV0 {
-        fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
-            value.deserialize_map(|value| {
-                Ok(Self {
-                    max_fee: value.deserialize("max_fee").map(Fee)?,
-                    version: value.deserialize("version").map(TransactionVersion)?,
-                    signature: value.deserialize_array("signature", |value| {
-                        value.deserialize().map(TransactionSignatureElem)
-                    })?,
-                    contract_class: value.deserialize("contract_class")?,
-                    sender_address: value.deserialize("sender_address").map(ContractAddress)?,
-                })
-            })
         }
     }
 
@@ -468,23 +421,6 @@ pub mod request {
         }
     }
 
-    impl crate::dto::DeserializeForVersion for BroadcastedDeclareTransactionV1 {
-        fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
-            value.deserialize_map(|value| {
-                Ok(Self {
-                    max_fee: value.deserialize("max_fee").map(Fee)?,
-                    version: value.deserialize("version").map(TransactionVersion)?,
-                    signature: value.deserialize_array("signature", |value| {
-                        value.deserialize().map(TransactionSignatureElem)
-                    })?,
-                    nonce: value.deserialize("nonce").map(TransactionNonce)?,
-                    contract_class: value.deserialize("contract_class")?,
-                    sender_address: value.deserialize("sender_address").map(ContractAddress)?,
-                })
-            })
-        }
-    }
-
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct BroadcastedDeclareTransactionV2 {
         // BROADCASTED_TXN_COMMON_PROPERTIES: ideally this should just be included
@@ -514,24 +450,6 @@ pub mod request {
             serializer.serialize_field("contract_class", &self.contract_class)?;
             serializer.serialize_field("sender_address", &self.sender_address)?;
             serializer.end()
-        }
-    }
-
-    impl crate::dto::DeserializeForVersion for BroadcastedDeclareTransactionV2 {
-        fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
-            value.deserialize_map(|value| {
-                Ok(Self {
-                    max_fee: value.deserialize("max_fee").map(Fee)?,
-                    version: value.deserialize("version").map(TransactionVersion)?,
-                    signature: value.deserialize_array("signature", |value| {
-                        value.deserialize().map(TransactionSignatureElem)
-                    })?,
-                    nonce: value.deserialize("nonce").map(TransactionNonce)?,
-                    compiled_class_hash: value.deserialize("compiled_class_hash").map(CasmHash)?,
-                    contract_class: value.deserialize("contract_class")?,
-                    sender_address: value.deserialize("sender_address").map(ContractAddress)?,
-                })
-            })
         }
     }
 
@@ -659,29 +577,6 @@ pub mod request {
         }
     }
 
-    impl crate::dto::DeserializeForVersion for BroadcastedDeployAccountTransaction {
-        fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
-            #[serde_as]
-            #[derive(serde::Deserialize)]
-            struct Version {
-                pub version: TransactionVersion,
-            }
-
-            let json_value = value.json_value();
-            let version = Version::deserialize(&json_value)?;
-
-            match version.version.without_query_version() {
-                1 => Ok(Self::V1(
-                    BroadcastedDeployAccountTransactionV1::deserialize(value)?,
-                )),
-                3 => Ok(Self::V3(
-                    BroadcastedDeployAccountTransactionV3::deserialize(value)?,
-                )),
-                v => Err(serde_json::Error::custom(format!("invalid version {v}"))),
-            }
-        }
-    }
-
     impl BroadcastedDeployAccountTransaction {
         pub fn deserialize(value: &mut crate::dto::Map) -> Result<Self, serde_json::Error> {
             let version = value.deserialize("version").map(TransactionVersion)?;
@@ -764,29 +659,6 @@ pub mod request {
             serializer.serialize_field("constructor_calldata", &self.constructor_calldata)?;
             serializer.serialize_field("class_hash", &self.class_hash)?;
             serializer.end()
-        }
-    }
-
-    impl crate::dto::DeserializeForVersion for BroadcastedDeployAccountTransactionV1 {
-        fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
-            value.deserialize_map(|value| {
-                Ok(Self {
-                    version: value.deserialize("version").map(TransactionVersion)?,
-                    max_fee: value.deserialize("max_fee").map(Fee)?,
-                    signature: value.deserialize_array("signature", |value| {
-                        value.deserialize().map(TransactionSignatureElem)
-                    })?,
-                    nonce: value.deserialize("nonce").map(TransactionNonce)?,
-                    contract_address_salt: value
-                        .deserialize("contract_address_salt")
-                        .map(ContractAddressSalt)?,
-                    constructor_calldata: value
-                        .deserialize_array("constructor_calldata", |value| {
-                            value.deserialize().map(CallParam)
-                        })?,
-                    class_hash: value.deserialize("class_hash").map(ClassHash)?,
-                })
-            })
         }
     }
 
@@ -930,32 +802,6 @@ pub mod request {
         }
     }
 
-    impl crate::dto::DeserializeForVersion for BroadcastedInvokeTransaction {
-        fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
-            #[serde_as]
-            #[derive(serde::Deserialize)]
-            struct Version {
-                pub version: TransactionVersion,
-            }
-
-            let json_value = value.json_value();
-            let version = Version::deserialize(&json_value)?;
-
-            match version.version.without_query_version() {
-                0 => Ok(Self::V0(BroadcastedInvokeTransactionV0::deserialize(
-                    value,
-                )?)),
-                1 => Ok(Self::V1(BroadcastedInvokeTransactionV1::deserialize(
-                    value,
-                )?)),
-                3 => Ok(Self::V3(BroadcastedInvokeTransactionV3::deserialize(
-                    value,
-                )?)),
-                _ => Err(serde_json::Error::custom("version must be 0, 1 or 3")),
-            }
-        }
-    }
-
     impl BroadcastedInvokeTransaction {
         pub fn deserialize(value: &mut crate::dto::Map) -> Result<Self, serde_json::Error> {
             let version = value.deserialize("version").map(TransactionVersion)?;
@@ -1042,27 +888,6 @@ pub mod request {
         }
     }
 
-    impl crate::dto::DeserializeForVersion for BroadcastedInvokeTransactionV0 {
-        fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
-            value.deserialize_map(|value| {
-                Ok(Self {
-                    version: value.deserialize("version").map(TransactionVersion)?,
-                    max_fee: value.deserialize("max_fee").map(Fee)?,
-                    signature: value.deserialize_array("signature", |value| {
-                        value.deserialize().map(TransactionSignatureElem)
-                    })?,
-                    contract_address: value.deserialize("contract_address").map(ContractAddress)?,
-                    entry_point_selector: value
-                        .deserialize("entry_point_selector")
-                        .map(EntryPoint)?,
-                    calldata: value.deserialize_array("calldata", |value| {
-                        value.deserialize().map(CallParam)
-                    })?,
-                })
-            })
-        }
-    }
-
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct BroadcastedInvokeTransactionV1 {
         pub version: TransactionVersion,
@@ -1091,25 +916,6 @@ pub mod request {
             serializer.serialize_field("sender_address", &self.sender_address)?;
             serializer.serialize_field("calldata", &self.calldata)?;
             serializer.end()
-        }
-    }
-
-    impl crate::dto::DeserializeForVersion for BroadcastedInvokeTransactionV1 {
-        fn deserialize(value: crate::dto::Value) -> Result<Self, serde_json::Error> {
-            value.deserialize_map(|value| {
-                Ok(Self {
-                    version: value.deserialize("version").map(TransactionVersion)?,
-                    max_fee: value.deserialize("max_fee").map(Fee)?,
-                    signature: value.deserialize_array("signature", |value| {
-                        value.deserialize().map(TransactionSignatureElem)
-                    })?,
-                    nonce: value.deserialize("nonce").map(TransactionNonce)?,
-                    sender_address: value.deserialize("sender_address").map(ContractAddress)?,
-                    calldata: value.deserialize_array("calldata", |value| {
-                        value.deserialize().map(CallParam)
-                    })?,
-                })
-            })
         }
     }
 
