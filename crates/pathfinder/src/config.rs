@@ -237,6 +237,15 @@ Examples:
     rpc_request_timeout: Duration,
 
     #[arg(
+        long = "rpc.header-read-timeout",
+        long_help = "Maximum time to send RPC request headers, in seconds.",
+        default_value = "30",
+        value_parser = parse_fractional_seconds,
+        env = "PATHFINDER_RPC_HEADER_READ_TIMEOUT"
+    )]
+    rpc_header_read_timeout: Duration,
+
+    #[arg(
         long = "sync.poll-interval",
         long_help = "New block poll interval in seconds (can use fractions)",
         default_value = "1",
@@ -1149,6 +1158,7 @@ pub struct Config {
     pub max_rpc_connections: std::num::NonZeroUsize,
     pub rpc_request_max_size: std::num::NonZeroUsize,
     pub rpc_request_timeout: Duration,
+    pub rpc_header_read_timeout: Duration,
     pub poll_interval: Duration,
     pub l1_poll_interval: Duration,
     pub poll_pre_confirmed_threshold: u64,
@@ -1459,6 +1469,7 @@ impl Config {
             max_rpc_connections: args.max_rpc_connections,
             rpc_request_max_size: args.rpc_request_max_size,
             rpc_request_timeout: args.rpc_request_timeout,
+            rpc_header_read_timeout: args.rpc_header_read_timeout,
             poll_interval: args.poll_interval,
             l1_poll_interval: Duration::from_secs(args.l1_poll_interval.get()),
             poll_pre_confirmed_threshold: args.poll_pre_confirmed_threshold,
