@@ -19,21 +19,27 @@ pub mod v10;
 
 use std::net::SocketAddr;
 use std::path::Path;
+use std::pin::pin;
 use std::result::Result;
 
 use anyhow::Context;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::DefaultBodyLimit;
 use axum::response::IntoResponse;
+use axum::serve::Listener;
 pub use compiler::PathfinderCompiler;
 use context::RpcContext;
 pub use executor::compose_executor_transaction;
+use futures::FutureExt;
 use http_body::Body;
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 pub use jsonrpc::{Notifications, Reorg};
 use pathfinder_common::{integration_testing, AllowedOrigins};
 pub use pending::{FinalizedTxData, PendingBlocks, PendingData};
-use tokio::sync::RwLock;
+use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
+use tokio::time::Duration;
+use tower::Service;
 use tower_http::cors::CorsLayer;
 use tower_http::ServiceBuilderExt;
 
@@ -98,7 +104,7 @@ impl RpcServer {
     ) -> Result<(JoinHandle<anyhow::Result<()>>, SocketAddr), anyhow::Error> {
         use axum::routing::{get, post};
 
-        let listener = match tokio::net::TcpListener::bind(self.addr).await {
+        let mut listener = match tokio::net::TcpListener::bind(self.addr).await {
             Ok(listener) => listener,
             Err(e) => {
                 return Err(e).context(format!(
@@ -206,10 +212,80 @@ impl RpcServer {
         let router = router.layer(middleware);
 
         let server_handle = util::task::spawn(async move {
-            axum::serve(listener, router.into_make_service())
-                .with_graceful_shutdown(util::task::cancellation_token().cancelled_owned())
-                .await
-                .map_err(Into::into)
+            // inlined `WithGracefulShutdown::run()` with the
+            // connection handler replaced by one from axum's
+            // serve-with-hyper example, extended to call
+            // `header_read_timeout`
+            let signal = util::task::cancellation_token().cancelled_owned();
+
+            let (signal_tx, signal_rx) = watch::channel(());
+            tokio::spawn(async move {
+                signal.await;
+                tracing::trace!("received graceful shutdown signal. Telling tasks to shutdown");
+                drop(signal_rx);
+            });
+
+            let (close_tx, close_rx) = watch::channel(());
+
+            loop {
+                let (socket, _remote_addr) = tokio::select! {
+                    conn = Listener::accept(&mut listener) => conn,
+                    _ = signal_tx.closed() => {
+                        tracing::trace!("signal received, not accepting new connections");
+                        break;
+                    }
+                };
+
+                let tower_service = router.clone();
+                let signal_tx = signal_tx.clone();
+                let close_rx = close_rx.clone();
+
+                tokio::spawn(async move {
+                    let socket = TokioIo::new(socket);
+                    let hyper_service = hyper::service::service_fn(
+                        move |request: axum::extract::Request<hyper::body::Incoming>| {
+                            tower_service.clone().call(request)
+                        },
+                    );
+
+                    let mut combo_builder =
+                        hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+                    combo_builder
+                        .http1()
+                        .timer(TokioTimer::new())
+                        .header_read_timeout(Duration::from_secs(30));
+
+                    let mut conn = pin!(combo_builder.serve_connection_with_upgrades(socket, hyper_service));
+                    let mut signal_closed = pin!(signal_tx.closed().fuse());
+
+                    loop {
+                        tokio::select! {
+                            result = conn.as_mut() => {
+                                if let Err(err) = result {
+                                    tracing::trace!("failed to serve connection: {err:#}");
+                                }
+                                break;
+                            }
+                            _ = &mut signal_closed => {
+                                tracing::trace!("signal received in task, starting graceful shutdown");
+                                conn.as_mut().graceful_shutdown();
+                            }
+                        }
+                    }
+
+                    drop(close_rx);
+                });
+            }
+
+            drop(close_rx);
+            drop(listener);
+
+            tracing::trace!(
+                "waiting for {} task(s) to finish",
+                close_tx.receiver_count()
+            );
+            close_tx.closed().await;
+            Ok(())
         });
 
         Ok((server_handle, addr))
