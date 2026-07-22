@@ -510,6 +510,7 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
     let rpc_handle = if config.is_rpc_enabled {
         match rpc_server
             .with_max_connections(config.max_rpc_connections.get())
+            .with_header_timeout(config.rpc_header_read_timeout)
             .spawn(&config.data_directory)
             .await
         {

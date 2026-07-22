@@ -48,6 +48,8 @@ use crate::types::syncing::Syncing;
 
 const DEFAULT_MAX_CONNECTIONS: usize = 1024;
 
+const DEFAULT_HEADER_TIMEOUT_SEC: u64 = 30;
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, PartialOrd)]
 pub enum RpcVersion {
     #[default]
@@ -70,6 +72,7 @@ pub struct RpcServer {
     addr: SocketAddr,
     context: RpcContext,
     max_connections: usize,
+    header_timeout: Duration,
     cors: Option<CorsLayer>,
     default_version: RpcVersion,
 }
@@ -80,6 +83,7 @@ impl RpcServer {
             addr,
             context,
             max_connections: DEFAULT_MAX_CONNECTIONS,
+            header_timeout: Duration::from_secs(DEFAULT_HEADER_TIMEOUT_SEC),
             cors: None,
             default_version,
         }
@@ -87,6 +91,11 @@ impl RpcServer {
 
     pub fn with_max_connections(mut self, max_connections: usize) -> Self {
         self.max_connections = max_connections;
+        self
+    }
+
+    pub fn with_header_timeout(mut self, header_timeout: Duration) -> Self {
+        self.header_timeout = header_timeout;
         self
     }
 
@@ -253,9 +262,10 @@ impl RpcServer {
                     combo_builder
                         .http1()
                         .timer(TokioTimer::new())
-                        .header_read_timeout(Duration::from_secs(30));
+                        .header_read_timeout(self.header_timeout);
 
-                    let mut conn = pin!(combo_builder.serve_connection_with_upgrades(socket, hyper_service));
+                    let mut conn =
+                        pin!(combo_builder.serve_connection_with_upgrades(socket, hyper_service));
                     let mut signal_closed = pin!(signal_tx.closed().fuse());
 
                     loop {
