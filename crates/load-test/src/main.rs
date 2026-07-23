@@ -2,9 +2,9 @@
 
 //! Load test for pathfinder JSON-RPC endpoints.
 //!
-//! This program expects a mainnet pathfinder node synced until block 600000,
-//! since it contains references to transactions and contract addresses on
-//! mainnet.
+//! This program expects a mainnet pathfinder node synced until block
+//! 1500000, since it contains references to transactions and contract
+//! addresses on mainnet.
 //!
 //! Running the load test:
 //! ```

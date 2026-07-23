@@ -253,7 +253,6 @@ pub async fn estimate_fee_for_invoke(
     sender_address: Felt,
     call_data: &[Felt],
     nonce: Felt,
-    max_fee: Felt,
 ) -> MethodResult<Vec<FeeEstimate>> {
     post_jsonrpc_request(
         user,
@@ -261,10 +260,28 @@ pub async fn estimate_fee_for_invoke(
         json!({
             "request": [{
                 "type": "INVOKE",
-                "version": "0x1",
-                "max_fee": max_fee,
+                "version": "0x3",
                 "signature": [],
                 "nonce": nonce,
+                "resource_bounds": {
+                    "l1_gas" : {
+                        "max_amount": "0x0",
+                        "max_price_per_unit": "0x0"
+                    },
+                    "l2_gas": {
+                        "max_amount": "0x0",
+                        "max_price_per_unit": "0x0"
+                    },
+                    "l1_data_gas": {
+                        "max_amount": "0x0",
+                        "max_price_per_unit": "0x0"
+                    }
+                },
+                "tip": "0x0",
+                "paymaster_data": [],
+                "account_deployment_data": [],
+                "nonce_data_availability_mode": "L1",
+                "fee_data_availability_mode": "L1",
                 "sender_address": sender_address,
                 "calldata": call_data,
             }],
@@ -274,7 +291,7 @@ pub async fn estimate_fee_for_invoke(
             // Estimate against the state just before the transaction was included in a block
             // (it was included in block 500000), so the transfer's balance check matches
             // the historical state instead of drifting with the tip of the chain.
-            "block_id": {"block_number": 499999}
+            "block_id": {"block_number": 1500000}
         }),
     )
     .await

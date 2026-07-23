@@ -197,16 +197,14 @@ pub async fn task_estimate_fee(user: &mut GooseUser) -> TransactionResult {
     //   call_array_len = 1
     //   call[0].to            = 0x49d36570...  (token contract)
     //   call[0].selector      = 0x83afd3f4...  ("transfer")
-    //   call[0].data_offset   = 0              (offset into the flat calldata)
-    //   call[0].data_len      = 3              (recipient + u256 amount)
     //   calldata_len = 3
     //   calldata[0]  = 0x2db7e01c...           (recipient address)
-    //   calldata[1]  = 0x13717a1765d1800       (amount, u256 low)
+    //   calldata[1]  = 0x1                     (amount, u256 low)
     //   calldata[2]  = 0x0                     (amount, u256 high)
     estimate_fee_for_invoke(
         user,
         // Sender (account) address
-        Felt::from_hex_str("0x3a20d4f7b4229e7c4863dab158b4d076d7f454b893d90a62011882dc4caca2a")
+        Felt::from_hex_str("0x72ba9f483d436efcf0836559c1f4fe23a50fe8001d9d249ce126c16e5f19c2f")
             .unwrap(),
         // Account __execute__ calldata: a single transfer call
         &[
@@ -218,24 +216,18 @@ pub async fn task_estimate_fee(user: &mut GooseUser) -> TransactionResult {
             // call[0].selector ("transfer")
             Felt::from_hex_str("0x83afd3f4caedc6eebf44246fe54e38c95e3179a5ec9ea81740eca5b482d12e")
                 .unwrap(),
-            // call[0].data_offset
-            Felt::from_hex_str("0x0").unwrap(),
-            // call[0].data_len
-            Felt::from_hex_str("0x3").unwrap(),
             // calldata_len
             Felt::from_hex_str("0x3").unwrap(),
             // calldata[0]: recipient address
             Felt::from_hex_str("0x2db7e01c69be7e741fcd08fb5096914029131334dbca1d63ab33c05e7a92153")
                 .unwrap(),
             // calldata[1]: amount, u256 low
-            Felt::from_hex_str("0x13717a1765d1800").unwrap(),
+            Felt::from_hex_str("0x1").unwrap(),
             // calldata[2]: amount, u256 high
             Felt::from_hex_str("0x0").unwrap(),
         ],
         // nonce (historical; not checked because of SKIP_VALIDATE)
-        Felt::from_hex_str("0x121419").unwrap(),
-        // max_fee
-        Felt::ZERO,
+        Felt::from_hex_str("0x3").unwrap(),
     )
     .await?;
     Ok(())
