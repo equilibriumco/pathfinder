@@ -244,7 +244,6 @@ mod tests {
     use crate::types::class::sierra::SierraContractClass;
     use crate::types::request::{
         BroadcastedDeclareTransaction,
-        BroadcastedDeclareTransactionV2,
         BroadcastedDeclareTransactionV3,
         BroadcastedDeployAccountTransactionV3,
         BroadcastedInvokeTransaction,

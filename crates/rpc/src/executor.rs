@@ -1,8 +1,5 @@
 use anyhow::Context;
-use pathfinder_common::class_definition::{
-    SerializedOpaqueClassDefinition,
-    SerializedSierraDefinition,
-};
+use pathfinder_common::class_definition::SerializedSierraDefinition;
 use pathfinder_common::transaction::TransactionVariant;
 use pathfinder_common::{BlockNumber, ChainId, StarknetVersion};
 use pathfinder_executor::types::to_starknet_api_transaction;
@@ -95,63 +92,6 @@ pub(crate) fn map_broadcasted_transaction(
     use crate::types::request::BroadcastedDeclareTransaction;
 
     let class_info = match &transaction {
-        BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V0(tx)) => {
-            let contract_class_json = tx
-                .contract_class
-                .serialize_to_json()
-                .context("Serializing Cairo class to JSON")?;
-
-            let contract_class = pathfinder_executor::parse_deprecated_class_definition(
-                SerializedOpaqueClassDefinition::from_vec(contract_class_json),
-            )?;
-
-            Some(ClassInfo::new(
-                &contract_class,
-                0,
-                0,
-                SierraVersion::DEPRECATED,
-            )?)
-        }
-        BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V1(tx)) => {
-            let contract_class_json = tx
-                .contract_class
-                .serialize_to_json()
-                .context("Serializing Cairo class to JSON")?;
-
-            let contract_class = pathfinder_executor::parse_deprecated_class_definition(
-                SerializedOpaqueClassDefinition::from_vec(contract_class_json),
-            )?;
-
-            Some(ClassInfo::new(
-                &contract_class,
-                0,
-                0,
-                SierraVersion::DEPRECATED,
-            )?)
-        }
-        BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V2(tx)) => {
-            let sierra_version =
-                SierraVersion::extract_from_program(&tx.contract_class.sierra_program)?;
-            let sierra_definition = SerializedSierraDefinition::from_vec(
-                serde_json::to_vec(&tx.contract_class)
-                    .context("Serializing Sierra class definition")?,
-            );
-            let casm_contract_definition = compiler
-                .compile_sierra_to_casm(&sierra_definition)
-                .context("Compiling Sierra class definition to CASM")?;
-
-            let casm_contract_definition = pathfinder_executor::parse_casm_definition(
-                casm_contract_definition,
-                sierra_version.clone(),
-            )
-            .context("Parsing CASM contract definition")?;
-            Some(ClassInfo::new(
-                &casm_contract_definition,
-                tx.contract_class.sierra_program.len(),
-                tx.contract_class.abi.len(),
-                sierra_version,
-            )?)
-        }
         BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V3(tx)) => {
             let sierra_version =
                 SierraVersion::extract_from_program(&tx.contract_class.sierra_program)?;
@@ -195,15 +135,6 @@ pub(crate) fn map_broadcasted_transaction(
     };
 
     let has_query_version = match &transaction {
-        BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V0(tx)) => {
-            tx.version.has_query_version()
-        }
-        BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V1(tx)) => {
-            tx.version.has_query_version()
-        }
-        BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V2(tx)) => {
-            tx.version.has_query_version()
-        }
         BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V3(tx)) => {
             tx.version.has_query_version()
         }

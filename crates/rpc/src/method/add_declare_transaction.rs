@@ -1,17 +1,8 @@
-use pathfinder_common::transaction::{
-    DeclareTransactionV0V1,
-    DeclareTransactionV2,
-    DeclareTransactionV3,
-    TransactionVariant,
-};
+use pathfinder_common::transaction::{DeclareTransactionV3, TransactionVariant};
 use pathfinder_common::{ClassHash, TransactionHash};
 use starknet_gateway_client::GatewayApi;
 use starknet_gateway_types::error::SequencerError;
-use starknet_gateway_types::request::add_transaction::{
-    CairoContractDefinition,
-    ContractDefinition,
-    SierraContractDefinition,
-};
+use starknet_gateway_types::request::add_transaction::SierraContractDefinition;
 
 use crate::context::RpcContext;
 use crate::types::request::BroadcastedDeclareTransaction;
@@ -222,86 +213,6 @@ pub async fn add_declare_transaction(
     use starknet_gateway_types::request::add_transaction;
 
     match input.declare_transaction {
-        Transaction::Declare(BroadcastedDeclareTransaction::V0(_)) => {
-            Err(AddDeclareTransactionError::UnsupportedTransactionVersion)
-        }
-        Transaction::Declare(BroadcastedDeclareTransaction::V1(tx)) => {
-            let contract_definition: CairoContractDefinition = tx
-                .contract_class
-                .try_into()
-                .map_err(|e| anyhow::anyhow!("Failed to convert contract definition: {e}"))?;
-
-            let response = context
-                .sequencer
-                .add_declare_transaction(
-                    add_transaction::Declare::V1(add_transaction::DeclareV0V1V2 {
-                        version: tx.version,
-                        max_fee: tx.max_fee,
-                        signature: &tx.signature,
-                        contract_class: ContractDefinition::Cairo(contract_definition),
-                        sender_address: tx.sender_address,
-                        nonce: tx.nonce,
-                        compiled_class_hash: None,
-                    }),
-                    input.token,
-                )
-                .await?;
-            let new_tx = DeclareTransactionV0V1 {
-                class_hash: response.class_hash,
-                max_fee: tx.max_fee,
-                nonce: tx.nonce,
-                signature: tx.signature,
-                sender_address: tx.sender_address,
-            };
-            context.submission_tracker.insert(
-                response.transaction_hash,
-                super::get_latest_block_or_genesis(&context.storage)?,
-                TransactionVariant::DeclareV1(new_tx),
-            );
-            Ok(Output {
-                transaction_hash: response.transaction_hash,
-                class_hash: response.class_hash,
-            })
-        }
-        Transaction::Declare(BroadcastedDeclareTransaction::V2(tx)) => {
-            let contract_definition: SierraContractDefinition = tx
-                .contract_class
-                .try_into()
-                .map_err(|e| anyhow::anyhow!("Failed to convert contract definition: {e}"))?;
-
-            let response = context
-                .sequencer
-                .add_declare_transaction(
-                    add_transaction::Declare::V2(add_transaction::DeclareV0V1V2 {
-                        version: tx.version,
-                        max_fee: tx.max_fee,
-                        signature: &tx.signature,
-                        contract_class: ContractDefinition::Sierra(contract_definition),
-                        sender_address: tx.sender_address,
-                        nonce: tx.nonce,
-                        compiled_class_hash: Some(tx.compiled_class_hash),
-                    }),
-                    input.token,
-                )
-                .await?;
-            let new_tx = DeclareTransactionV2 {
-                class_hash: response.class_hash,
-                max_fee: tx.max_fee,
-                nonce: tx.nonce,
-                signature: tx.signature,
-                sender_address: tx.sender_address,
-                compiled_class_hash: tx.compiled_class_hash,
-            };
-            context.submission_tracker.insert(
-                response.transaction_hash,
-                super::get_latest_block_or_genesis(&context.storage)?,
-                TransactionVariant::DeclareV2(new_tx),
-            );
-            Ok(Output {
-                transaction_hash: response.transaction_hash,
-                class_hash: response.class_hash,
-            })
-        }
         Transaction::Declare(BroadcastedDeclareTransaction::V3(tx)) => {
             let contract_class = tx.contract_class;
             let contract_definition: SierraContractDefinition =
