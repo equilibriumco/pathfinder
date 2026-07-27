@@ -41,8 +41,6 @@ pub(crate) fn calldata_limit_exceeded(tx: &BroadcastedTransaction) -> bool {
     match tx {
         BroadcastedTransaction::Declare(_) => false,
         BroadcastedTransaction::Invoke(broadcasted_invoke_tx) => match broadcasted_invoke_tx {
-            BroadcastedInvokeTransaction::V0(tx) => tx.calldata.len() > CALLDATA_LIMIT,
-            BroadcastedInvokeTransaction::V1(tx) => tx.calldata.len() > CALLDATA_LIMIT,
             BroadcastedInvokeTransaction::V3(tx) => tx.calldata.len() > CALLDATA_LIMIT,
         },
         BroadcastedTransaction::DeployAccount(broadcasted_deploy_tx) => match broadcasted_deploy_tx
@@ -58,8 +56,6 @@ pub(crate) fn signature_elem_limit_exceeded(tx: &BroadcastedTransaction) -> bool
     match tx {
         BroadcastedTransaction::Declare(_) => false,
         BroadcastedTransaction::Invoke(broadcasted_invoke_tx) => match broadcasted_invoke_tx {
-            BroadcastedInvokeTransaction::V0(tx) => tx.signature.len() > SIGNATURE_ELEMENT_LIMIT,
-            BroadcastedInvokeTransaction::V1(tx) => tx.signature.len() > SIGNATURE_ELEMENT_LIMIT,
             BroadcastedInvokeTransaction::V3(tx) => tx.signature.len() > SIGNATURE_ELEMENT_LIMIT,
         },
         BroadcastedTransaction::DeployAccount(broadcasted_deploy_tx) => match broadcasted_deploy_tx
@@ -124,12 +120,6 @@ pub(crate) fn map_broadcasted_transaction(
 
     let has_query_version = match &transaction {
         BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V3(tx)) => {
-            tx.version.has_query_version()
-        }
-        BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V0(tx)) => {
-            tx.version.has_query_version()
-        }
-        BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V1(tx)) => {
             tx.version.has_query_version()
         }
         BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V3(tx)) => {

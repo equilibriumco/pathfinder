@@ -1,9 +1,4 @@
-use pathfinder_common::transaction::{
-    InvokeTransactionV0,
-    InvokeTransactionV1,
-    InvokeTransactionV3,
-    TransactionVariant,
-};
+use pathfinder_common::transaction::{InvokeTransactionV3, TransactionVariant};
 use pathfinder_common::TransactionHash;
 use serde::de::Error;
 use starknet_gateway_client::GatewayApi;
@@ -186,59 +181,6 @@ pub(crate) async fn add_invoke_transaction_impl(
     use starknet_gateway_types::request::add_transaction;
 
     let success = match tx {
-        BroadcastedInvokeTransaction::V0(tx) => {
-            let response = context
-                .sequencer
-                .add_invoke_transaction(add_transaction::InvokeFunction::V0(
-                    add_transaction::InvokeFunctionV0V1 {
-                        max_fee: tx.max_fee,
-                        signature: &tx.signature,
-                        nonce: None,
-                        sender_address: tx.contract_address,
-                        entry_point_selector: Some(tx.entry_point_selector),
-                        calldata: &tx.calldata,
-                    },
-                ))
-                .await?;
-            let new_tx = InvokeTransactionV0 {
-                calldata: tx.calldata,
-                sender_address: tx.contract_address,
-                entry_point_selector: tx.entry_point_selector,
-                entry_point_type: None,
-                max_fee: tx.max_fee,
-                signature: tx.signature,
-            };
-            (
-                response.transaction_hash,
-                TransactionVariant::InvokeV0(new_tx),
-            )
-        }
-        BroadcastedInvokeTransaction::V1(tx) => {
-            let response = context
-                .sequencer
-                .add_invoke_transaction(add_transaction::InvokeFunction::V1(
-                    add_transaction::InvokeFunctionV0V1 {
-                        max_fee: tx.max_fee,
-                        signature: &tx.signature,
-                        nonce: Some(tx.nonce),
-                        sender_address: tx.sender_address,
-                        entry_point_selector: None,
-                        calldata: &tx.calldata,
-                    },
-                ))
-                .await?;
-            let new_tx = InvokeTransactionV1 {
-                calldata: tx.calldata,
-                sender_address: tx.sender_address,
-                max_fee: tx.max_fee,
-                signature: tx.signature,
-                nonce: tx.nonce,
-            };
-            (
-                response.transaction_hash,
-                TransactionVariant::InvokeV1(new_tx),
-            )
-        }
         BroadcastedInvokeTransaction::V3(tx) => {
             let response = context
                 .sequencer

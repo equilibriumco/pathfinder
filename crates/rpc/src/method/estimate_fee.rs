@@ -247,8 +247,6 @@ mod tests {
         BroadcastedDeclareTransactionV3,
         BroadcastedDeployAccountTransactionV3,
         BroadcastedInvokeTransaction,
-        BroadcastedInvokeTransactionV0,
-        BroadcastedInvokeTransactionV1,
         BroadcastedInvokeTransactionV3,
         BroadcastedTransaction,
     };
