@@ -212,7 +212,6 @@ pub mod request {
                     BroadcastedInvokeTransaction::V3(tx) => tx.version,
                 },
                 BroadcastedTransaction::DeployAccount(deploy_account) => match deploy_account {
-                    BroadcastedDeployAccountTransaction::V1(tx) => tx.version,
                     BroadcastedDeployAccountTransaction::V3(tx) => tx.version,
                 },
             }
@@ -305,7 +304,6 @@ pub mod request {
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum BroadcastedDeployAccountTransaction {
-        V1(BroadcastedDeployAccountTransactionV1),
         V3(BroadcastedDeployAccountTransactionV3),
     }
 
@@ -347,33 +345,8 @@ pub mod request {
 
         pub fn deployed_contract_address(&self) -> ContractAddress {
             match self {
-                Self::V1(tx) => tx.deployed_contract_address(),
                 Self::V3(tx) => tx.deployed_contract_address(),
             }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct BroadcastedDeployAccountTransactionV1 {
-        // Fields from BROADCASTED_TXN_COMMON_PROPERTIES
-        pub version: TransactionVersion,
-        pub max_fee: Fee,
-        pub signature: Vec<TransactionSignatureElem>,
-        pub nonce: TransactionNonce,
-
-        // Fields from DEPLOY_ACCOUNT_TXN_PROPERTIES
-        pub contract_address_salt: ContractAddressSalt,
-        pub constructor_calldata: Vec<CallParam>,
-        pub class_hash: ClassHash,
-    }
-
-    impl BroadcastedDeployAccountTransactionV1 {
-        pub fn deployed_contract_address(&self) -> ContractAddress {
-            ContractAddress::deployed_contract_address(
-                self.constructor_calldata.iter().copied(),
-                &self.contract_address_salt,
-                &self.class_hash,
-            )
         }
     }
 
@@ -608,17 +581,6 @@ pub mod request {
                         account_deployment_data: declare.account_deployment_data,
                     })
                 }
-                BroadcastedTransaction::DeployAccount(BroadcastedDeployAccountTransaction::V1(
-                    deploy,
-                )) => TransactionVariant::DeployAccountV1(DeployAccountTransactionV1 {
-                    contract_address: deploy.deployed_contract_address(),
-                    max_fee: deploy.max_fee,
-                    signature: deploy.signature,
-                    nonce: deploy.nonce,
-                    contract_address_salt: deploy.contract_address_salt,
-                    constructor_calldata: deploy.constructor_calldata,
-                    class_hash: deploy.class_hash,
-                }),
                 BroadcastedTransaction::DeployAccount(BroadcastedDeployAccountTransaction::V3(
                     deploy,
                 )) => TransactionVariant::DeployAccountV3(DeployAccountTransactionV3 {

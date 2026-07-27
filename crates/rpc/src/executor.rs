@@ -47,9 +47,6 @@ pub(crate) fn calldata_limit_exceeded(tx: &BroadcastedTransaction) -> bool {
         },
         BroadcastedTransaction::DeployAccount(broadcasted_deploy_tx) => match broadcasted_deploy_tx
         {
-            BroadcastedDeployAccountTransaction::V1(tx) => {
-                tx.constructor_calldata.len() > CALLDATA_LIMIT
-            }
             BroadcastedDeployAccountTransaction::V3(tx) => {
                 tx.constructor_calldata.len() > CALLDATA_LIMIT
             }
@@ -67,9 +64,6 @@ pub(crate) fn signature_elem_limit_exceeded(tx: &BroadcastedTransaction) -> bool
         },
         BroadcastedTransaction::DeployAccount(broadcasted_deploy_tx) => match broadcasted_deploy_tx
         {
-            BroadcastedDeployAccountTransaction::V1(tx) => {
-                tx.signature.len() > SIGNATURE_ELEMENT_LIMIT
-            }
             BroadcastedDeployAccountTransaction::V3(tx) => {
                 tx.signature.len() > SIGNATURE_ELEMENT_LIMIT
             }
@@ -119,12 +113,6 @@ pub(crate) fn map_broadcasted_transaction(
     };
 
     let deployed_address = match &transaction {
-        BroadcastedTransaction::DeployAccount(BroadcastedDeployAccountTransaction::V1(tx)) => {
-            Some(starknet_api::core::ContractAddress(
-                PatriciaKey::try_from(tx.deployed_contract_address().0.into_starkfelt())
-                    .expect("No sender address overflow expected"),
-            ))
-        }
         BroadcastedTransaction::DeployAccount(BroadcastedDeployAccountTransaction::V3(tx)) => {
             Some(starknet_api::core::ContractAddress(
                 PatriciaKey::try_from(tx.deployed_contract_address().0.into_starkfelt())
@@ -145,9 +133,6 @@ pub(crate) fn map_broadcasted_transaction(
             tx.version.has_query_version()
         }
         BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V3(tx)) => {
-            tx.version.has_query_version()
-        }
-        BroadcastedTransaction::DeployAccount(BroadcastedDeployAccountTransaction::V1(tx)) => {
             tx.version.has_query_version()
         }
         BroadcastedTransaction::DeployAccount(BroadcastedDeployAccountTransaction::V3(tx)) => {

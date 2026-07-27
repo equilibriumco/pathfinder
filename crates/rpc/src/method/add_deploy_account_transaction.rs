@@ -1,18 +1,11 @@
-use pathfinder_common::transaction::{
-    DeployAccountTransactionV1,
-    DeployAccountTransactionV3,
-    TransactionVariant,
-};
+use pathfinder_common::transaction::{DeployAccountTransactionV3, TransactionVariant};
 use pathfinder_common::{ContractAddress, TransactionHash};
 use serde::de::Error;
 use starknet_gateway_client::GatewayApi;
-use starknet_gateway_types::error::{KnownStarknetErrorCode, SequencerError};
+use starknet_gateway_types::error::SequencerError;
 
 use crate::context::RpcContext;
-use crate::types::request::{
-    BroadcastedDeployAccountTransaction,
-    BroadcastedDeployAccountTransactionV1,
-};
+use crate::types::request::BroadcastedDeployAccountTransaction;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Transaction {
@@ -187,74 +180,6 @@ pub(crate) async fn add_deploy_account_transaction_impl(
     use starknet_gateway_types::request::add_transaction;
 
     let success = match tx {
-        BroadcastedDeployAccountTransaction::V1(
-            tx @ BroadcastedDeployAccountTransactionV1 { version, .. },
-        ) if version.without_query_version() == 0 => {
-            let response = context
-                .sequencer
-                .add_deploy_account(add_transaction::DeployAccount::V0(
-                    add_transaction::DeployAccountV0V1 {
-                        max_fee: tx.max_fee,
-                        signature: &tx.signature,
-                        nonce: tx.nonce,
-                        class_hash: tx.class_hash,
-                        contract_address_salt: tx.contract_address_salt,
-                        constructor_calldata: &tx.constructor_calldata,
-                    },
-                ))
-                .await?;
-            let new_tx = DeployAccountTransactionV1 {
-                contract_address: tx.deployed_contract_address(),
-                max_fee: tx.max_fee,
-                signature: tx.signature,
-                nonce: tx.nonce,
-                contract_address_salt: tx.contract_address_salt,
-                constructor_calldata: tx.constructor_calldata,
-                class_hash: tx.class_hash,
-            };
-            (
-                response.transaction_hash,
-                TransactionVariant::DeployAccountV1(new_tx),
-            )
-        }
-        BroadcastedDeployAccountTransaction::V1(
-            tx @ BroadcastedDeployAccountTransactionV1 { version, .. },
-        ) if version.without_query_version() == 1 => {
-            let response = context
-                .sequencer
-                .add_deploy_account(add_transaction::DeployAccount::V1(
-                    add_transaction::DeployAccountV0V1 {
-                        max_fee: tx.max_fee,
-                        signature: &tx.signature,
-                        nonce: tx.nonce,
-                        class_hash: tx.class_hash,
-                        contract_address_salt: tx.contract_address_salt,
-                        constructor_calldata: &tx.constructor_calldata,
-                    },
-                ))
-                .await?;
-            let new_tx = DeployAccountTransactionV1 {
-                contract_address: tx.deployed_contract_address(),
-                max_fee: tx.max_fee,
-                signature: tx.signature,
-                nonce: tx.nonce,
-                contract_address_salt: tx.contract_address_salt,
-                constructor_calldata: tx.constructor_calldata,
-                class_hash: tx.class_hash,
-            };
-            (
-                response.transaction_hash,
-                TransactionVariant::DeployAccountV1(new_tx),
-            )
-        }
-        BroadcastedDeployAccountTransaction::V1(_) => {
-            return Err(SequencerError::StarknetError(
-                starknet_gateway_types::error::StarknetError {
-                    code: KnownStarknetErrorCode::InvalidTransactionVersion.into(),
-                    message: "".to_string(),
-                },
-            ));
-        }
         BroadcastedDeployAccountTransaction::V3(tx) => {
             let response = context
                 .sequencer
