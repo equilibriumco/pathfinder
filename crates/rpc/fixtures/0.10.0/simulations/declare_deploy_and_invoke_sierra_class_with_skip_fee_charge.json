@@ -4,11 +4,11 @@
       "l1_data_gas_consumed": "0xc0",
       "l1_data_gas_price": "0x2",
       "l1_gas_consumed": "0x36e",
-      "l1_gas_price": "0x1",
+      "l1_gas_price": "0x2",
       "l2_gas_consumed": "0x0",
       "l2_gas_price": "0x1",
-      "overall_fee": "0x4ee",
-      "unit": "WEI"
+      "overall_fee": "0x85c",
+      "unit": "FRI"
     },
     "transaction_trace": {
       "execution_resources": {

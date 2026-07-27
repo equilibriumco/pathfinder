@@ -305,7 +305,7 @@ pub(crate) mod tests {
     use starknet_gateway_test_fixtures::class_definitions::ERC20_CONTRACT_DEFINITION_CLASS_HASH;
 
     use super::simulate_transactions;
-    use crate::context::{RpcContext, ETH_FEE_TOKEN_ADDRESS};
+    use crate::context::{RpcContext, ETH_FEE_TOKEN_ADDRESS, STRK_FEE_TOKEN_ADDRESS};
     use crate::dto::{DeserializeForVersion, SerializeForVersion, Serializer};
     use crate::executor::{CALLDATA_LIMIT, SIGNATURE_ELEMENT_LIMIT};
     use crate::method::simulate_transactions::{
@@ -596,12 +596,24 @@ pub(crate) mod tests {
 
                 assert_eq!(contract_class.class_hash().unwrap().hash(), SIERRA_HASH);
 
-                BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V2(
-                    BroadcastedDeclareTransactionV2 {
-                        version: TransactionVersion::TWO,
-                        max_fee: MAX_FEE,
+                BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V3(
+                    BroadcastedDeclareTransactionV3 {
+                        version: TransactionVersion::THREE,
                         signature: vec![],
                         nonce: transaction_nonce!("0x0"),
+                        resource_bounds: ResourceBounds {
+                            l1_gas: ResourceBound {
+                                max_amount: ResourceAmount(100000),
+                                max_price_per_unit: ResourcePricePerUnit(10),
+                            },
+                            l2_gas: Default::default(),
+                            l1_data_gas: Default::default(),
+                        },
+                        tip: Tip(0),
+                        paymaster_data: vec![],
+                        account_deployment_data: vec![],
+                        nonce_data_availability_mode: DataAvailabilityMode::L1,
+                        fee_data_availability_mode: DataAvailabilityMode::L1,
                         contract_class,
                         sender_address: account_contract_address,
                         compiled_class_hash: CASM_HASH,
@@ -810,7 +822,7 @@ pub(crate) mod tests {
 
             use super::*;
 
-            const DECLARE_OVERALL_FEE: u64 = 1262;
+            const DECLARE_OVERALL_FEE: u64 = 2140;
             const DECLARE_GAS_CONSUMED: u64 = 878;
             const DECLARE_DATA_GAS_CONSUMED: u64 = 192;
 
@@ -821,13 +833,13 @@ pub(crate) mod tests {
                 pathfinder_executor::types::TransactionSimulation {
                     fee_estimation: pathfinder_executor::types::FeeEstimate {
                         l1_gas_consumed: DECLARE_GAS_CONSUMED.into(),
-                        l1_gas_price: 1.into(),
+                        l1_gas_price: 2.into(),
                         l1_data_gas_consumed: DECLARE_DATA_GAS_CONSUMED.into(),
                         l1_data_gas_price: 2.into(),
                         l2_gas_consumed: 0.into(),
                         l2_gas_price: 1.into(),
                         overall_fee: DECLARE_OVERALL_FEE.into(),
-                        unit: pathfinder_executor::types::PriceUnit::Wei,
+                        unit: pathfinder_executor::types::PriceUnit::Fri,
                     },
                     trace: pathfinder_executor::types::TransactionTrace::Declare(
                         pathfinder_executor::types::DeclareTransactionTrace {
@@ -905,10 +917,10 @@ pub(crate) mod tests {
             }
 
             fn declare_fee_transfer_storage_diffs() -> Vec<StorageDiffs> {
-                vec![(ETH_FEE_TOKEN_ADDRESS, vec![
+                vec![(STRK_FEE_TOKEN_ADDRESS, vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: storage_value!("0x000000000000000000000000000000000000fffffffffffffffffffffffffb12")
+                            value: storage_value!("0x000000000000000000000000000000000000fffffffffffffffffffffffff7a4")
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
@@ -944,7 +956,7 @@ pub(crate) mod tests {
                         Felt::from_u64(DECLARE_OVERALL_FEE),
                         felt!("0x0"),
                     ],
-                    contract_address: ETH_FEE_TOKEN_ADDRESS,
+                    contract_address: STRK_FEE_TOKEN_ADDRESS,
                     selector: Some(EntryPoint::hashed(b"transfer").0),
                     internal_calls: vec![],
                     messages: vec![],
@@ -1102,11 +1114,11 @@ pub(crate) mod tests {
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: StorageValue((0xfffffffffffffffffffffffff93fu128 + u128::from(overall_fee_correction)).into()),
+                            value: StorageValue((0xfffffffffffffffffffffffffe2du128 + u128::from(overall_fee_correction)).into()),
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
-                            value: StorageValue((DECLARE_OVERALL_FEE + UNIVERSAL_DEPLOYER_OVERALL_FEE - overall_fee_correction).into()),
+                            value: StorageValue((UNIVERSAL_DEPLOYER_OVERALL_FEE - overall_fee_correction).into()),
                         },
                     ],
                     )]
@@ -1408,11 +1420,11 @@ pub(crate) mod tests {
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: StorageValue((0xfffffffffffffffffffffffff831u128 + u128::from(2 * overall_fee_correction)).into()),
+                            value: StorageValue((0xfffffffffffffffffffffffffd1fu128 + u128::from(2 * overall_fee_correction)).into()),
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
-                            value: StorageValue((DECLARE_OVERALL_FEE + UNIVERSAL_DEPLOYER_OVERALL_FEE + INVOKE_OVERALL_FEE - 2 * overall_fee_correction).into()),
+                            value: StorageValue((UNIVERSAL_DEPLOYER_OVERALL_FEE + INVOKE_OVERALL_FEE - 2 * overall_fee_correction).into()),
                         },
                     ],
                     )]
@@ -1552,7 +1564,7 @@ pub(crate) mod tests {
 
             use super::*;
 
-            const DECLARE_OVERALL_FEE: u64 = 1266;
+            const DECLARE_OVERALL_FEE: u64 = 2148;
             const DECLARE_GAS_CONSUMED: u64 = 882;
             const DECLARE_DATA_GAS_CONSUMED: u64 = 192;
             pub fn declare(
@@ -1562,13 +1574,13 @@ pub(crate) mod tests {
                 pathfinder_executor::types::TransactionSimulation {
                     fee_estimation: pathfinder_executor::types::FeeEstimate {
                         l1_gas_consumed: DECLARE_GAS_CONSUMED.into(),
-                        l1_gas_price: 1.into(),
+                        l1_gas_price: 2.into(),
                         l1_data_gas_consumed: DECLARE_DATA_GAS_CONSUMED.into(),
                         l1_data_gas_price: 2.into(),
                         l2_gas_consumed: 0.into(),
                         l2_gas_price: 1.into(),
                         overall_fee: DECLARE_OVERALL_FEE.into(),
-                        unit: pathfinder_executor::types::PriceUnit::Wei,
+                        unit: pathfinder_executor::types::PriceUnit::Fri,
                     },
                     trace: pathfinder_executor::types::TransactionTrace::Declare(
                         pathfinder_executor::types::DeclareTransactionTrace {
@@ -1647,11 +1659,11 @@ pub(crate) mod tests {
 
             fn declare_fee_transfer_storage_diffs() -> Vec<StorageDiffs> {
                 vec![(
-                    ETH_FEE_TOKEN_ADDRESS,
+                    STRK_FEE_TOKEN_ADDRESS,
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: storage_value!("0x000000000000000000000000000000000000fffffffffffffffffffffffffb12")
+                            value: storage_value!("0x000000000000000000000000000000000000fffffffffffffffffffffffff79c")
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
@@ -1687,7 +1699,7 @@ pub(crate) mod tests {
                         Felt::from_u64(DECLARE_OVERALL_FEE),
                         felt!("0x0"),
                     ],
-                    contract_address: ETH_FEE_TOKEN_ADDRESS,
+                    contract_address: STRK_FEE_TOKEN_ADDRESS,
                     selector: Some(EntryPoint::hashed(b"transfer").0),
                     internal_calls: vec![],
                     messages: vec![],
@@ -1844,11 +1856,11 @@ pub(crate) mod tests {
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: StorageValue((0xfffffffffffffffffffffffff93fu128 + u128::from(overall_fee_correction)).into()),
+                            value: StorageValue((0xfffffffffffffffffffffffffe2du128 + u128::from(overall_fee_correction)).into()),
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
-                            value: StorageValue((DECLARE_OVERALL_FEE + UNIVERSAL_DEPLOYER_OVERALL_FEE - overall_fee_correction).into()),
+                            value: StorageValue((UNIVERSAL_DEPLOYER_OVERALL_FEE - overall_fee_correction).into()),
                         },
                     ],
                     )]
@@ -2150,11 +2162,11 @@ pub(crate) mod tests {
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: StorageValue((0xfffffffffffffffffffffffff831u128 + u128::from(2 * overall_fee_correction)).into()),
+                            value: StorageValue((0xfffffffffffffffffffffffffd1fu128 + u128::from(2 * overall_fee_correction)).into()),
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
-                            value: StorageValue((DECLARE_OVERALL_FEE + UNIVERSAL_DEPLOYER_OVERALL_FEE + INVOKE_OVERALL_FEE - 2 * overall_fee_correction).into()),
+                            value: StorageValue((UNIVERSAL_DEPLOYER_OVERALL_FEE + INVOKE_OVERALL_FEE - 2 * overall_fee_correction).into()),
                         },
                     ],
                     )]

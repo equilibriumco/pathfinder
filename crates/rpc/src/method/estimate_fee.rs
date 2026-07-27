@@ -273,17 +273,20 @@ mod tests {
 
         assert_eq!(contract_class.class_hash().unwrap().hash(), sierra_hash);
 
-        let max_fee = Fee::default();
-
-        BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V2(
-            BroadcastedDeclareTransactionV2 {
-                version: TransactionVersion::TWO,
-                max_fee,
+        BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V3(
+            BroadcastedDeclareTransactionV3 {
+                version: TransactionVersion::THREE,
                 signature: vec![],
-                nonce: TransactionNonce(Default::default()),
+                nonce: transaction_nonce!("0x0"),
+                resource_bounds: ResourceBounds::default(),
+                tip: Tip(0),
+                paymaster_data: vec![],
+                account_deployment_data: vec![],
+                nonce_data_availability_mode: DataAvailabilityMode::L1,
+                fee_data_availability_mode: DataAvailabilityMode::L1,
+                compiled_class_hash: casm_hash,
                 contract_class,
                 sender_address: account_contract_address,
-                compiled_class_hash: casm_hash,
             },
         ))
     }
