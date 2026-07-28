@@ -216,6 +216,7 @@ pub mod request {
         }
     }
 
+    // Intentionally kept as an enum in anticipation of new future versions.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum BroadcastedDeclareTransaction {
         V3(BroadcastedDeclareTransactionV3),
@@ -300,6 +301,7 @@ pub mod request {
         }
     }
 
+    // Intentionally kept as an enum in anticipation of new future versions.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum BroadcastedDeployAccountTransaction {
         V3(BroadcastedDeployAccountTransactionV3),
@@ -404,6 +406,7 @@ pub mod request {
         }
     }
 
+    // Intentionally kept as an enum in anticipation of new future versions.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum BroadcastedInvokeTransaction {
         V3(BroadcastedInvokeTransactionV3),
