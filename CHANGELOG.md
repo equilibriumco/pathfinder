@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- RPC WS subscriptions are now limited by the `--rpc.websocket.subscription-request-max-size` option (instead of `--rpc.request-max-size`, which is now used only for HTTP requests).
+
 ### Added
 
 - RPC HTTP connections that don't start a request now time out. The timeout is configurable with `--rpc.header-read-timeout` CLI option.
