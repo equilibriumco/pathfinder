@@ -30,6 +30,7 @@ pub enum WebsocketHistory {
 pub struct WebsocketContext {
     pub max_history: WebsocketHistory,
     pub max_subscriptions: usize,
+    pub subscription_max_size: usize,
     pub send_timeout: Duration,
 }
 
@@ -37,11 +38,13 @@ impl WebsocketContext {
     pub fn new(
         max_history: WebsocketHistory,
         max_subscriptions: usize,
+        subscription_max_size: usize,
         send_timeout: Duration,
     ) -> Self {
         Self {
             max_history,
             max_subscriptions,
+            subscription_max_size,
             send_timeout,
         }
     }
@@ -51,6 +54,7 @@ impl WebsocketContext {
         Self {
             max_history,
             max_subscriptions: 1024,
+            subscription_max_size: 1024 * 1024,
             send_timeout: Duration::from_secs_f64(0.1),
         }
     }

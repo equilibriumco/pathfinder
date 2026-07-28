@@ -1555,6 +1555,13 @@ Note that the 'unlimited' setting is meant primarily for testing and not recomme
     )]
     pub max_subscriptions: NonZeroUsize,
     #[arg(
+        long = "rpc.websocket.subscription-request-max-size",
+        long_help = "Maximum accepted subscription size in bytes.",
+        default_value = "1048576", // 1024 * 1024
+        env = "PATHFINDER_WEBSOCKET_SUBSCRIPTION_REQUEST_MAX_SIZE"
+    )]
+    pub subscription_request_max_size: NonZeroUsize,
+    #[arg(
         long = "rpc.websocket.send-timeout",
         long_help = "Threshold for considering the websocket's output buffer full (and closing the connection).",
         default_value = "1",

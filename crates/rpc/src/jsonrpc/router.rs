@@ -211,14 +211,14 @@ pub async fn rpc_handler(
 ) -> impl axum::response::IntoResponse {
     match ws {
         Ok(ws) => {
-            let send_timeout = match state.context.websocket {
-                Some(ref ws_cfg) => ws_cfg.send_timeout,
+            let (send_timeout, subscription_max_size) = match state.context.websocket {
+                Some(ref ws_cfg) => (ws_cfg.send_timeout, ws_cfg.subscription_max_size),
                 None => {
                     return StatusCode::FORBIDDEN.into_response();
                 }
             };
 
-            ws.max_message_size(state.context.config.request_max_size.get())
+            ws.max_message_size(subscription_max_size)
                 .on_upgrade(async move |ws| {
                     let (ws_tx, ws_rx) = split_ws(ws, state.version, send_timeout);
                     handle_json_rpc_socket(state, ws_tx, ws_rx);
