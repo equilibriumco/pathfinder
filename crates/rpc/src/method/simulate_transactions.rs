@@ -305,7 +305,7 @@ pub(crate) mod tests {
     use starknet_gateway_test_fixtures::class_definitions::ERC20_CONTRACT_DEFINITION_CLASS_HASH;
 
     use super::simulate_transactions;
-    use crate::context::{RpcContext, ETH_FEE_TOKEN_ADDRESS, STRK_FEE_TOKEN_ADDRESS};
+    use crate::context::{RpcContext, STRK_FEE_TOKEN_ADDRESS};
     use crate::dto::{DeserializeForVersion, SerializeForVersion, Serializer};
     use crate::executor::{CALLDATA_LIMIT, SIGNATURE_ELEMENT_LIMIT};
     use crate::method::simulate_transactions::{
@@ -549,7 +549,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) mod fixtures {
-        use pathfinder_common::{CasmHash, ContractAddress, Fee};
+        use pathfinder_common::{CasmHash, ContractAddress};
         use pathfinder_executor::types::StorageDiff;
 
         use super::*;
@@ -562,7 +562,6 @@ pub(crate) mod tests {
             casm_hash!("0x069032ff71f77284e1a0864a573007108ca5cc08089416af50f03260f5d6d4d8");
         pub const CASM_DEFINITION: &[u8] =
             include_bytes!("../../fixtures/contracts/storage_access.casm");
-        const MAX_FEE: Fee = Fee(Felt::from_u64(10_000_000));
         pub const DEPLOYED_CONTRACT_ADDRESS: ContractAddress =
             contract_address!("0x012592426632af714f43ccb05536b6044fc3e897fa55288f658731f93590e7e7");
         pub const UNIVERSAL_DEPLOYER_CLASS_HASH: ClassHash =
@@ -581,7 +580,6 @@ pub(crate) mod tests {
             use crate::types::request::{
                 BroadcastedDeclareTransactionV3,
                 BroadcastedInvokeTransaction,
-                BroadcastedInvokeTransactionV1,
                 BroadcastedInvokeTransactionV3,
                 BroadcastedTransaction,
             };
@@ -675,12 +673,27 @@ pub(crate) mod tests {
                 universal_deployer_address: ContractAddress,
                 contract_hash: ClassHash,
             ) -> BroadcastedTransaction {
-                BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V1(
-                    BroadcastedInvokeTransactionV1 {
-                        nonce: transaction_nonce!("0x1"),
-                        version: TransactionVersion::ONE,
-                        max_fee: MAX_FEE,
+                BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V3(
+                    BroadcastedInvokeTransactionV3 {
+                        version: TransactionVersion::THREE,
                         signature: vec![],
+                        nonce: transaction_nonce!("0x1"),
+                        resource_bounds: ResourceBounds {
+                            l1_gas: ResourceBound {
+                                max_amount: ResourceAmount(10000),
+                                max_price_per_unit: ResourcePricePerUnit(100000000),
+                            },
+                            l2_gas: ResourceBound {
+                                max_amount: ResourceAmount(10000),
+                                max_price_per_unit: ResourcePricePerUnit(100000000),
+                            },
+                            l1_data_gas: None,
+                        },
+                        tip: Tip(0),
+                        paymaster_data: vec![],
+                        account_deployment_data: vec![],
+                        nonce_data_availability_mode: DataAvailabilityMode::L1,
+                        fee_data_availability_mode: DataAvailabilityMode::L1,
                         sender_address: account_contract_address,
                         calldata: vec![
                             // Number of calls
@@ -701,17 +714,34 @@ pub(crate) mod tests {
                             // calldata_len
                             call_param!("0x0"),
                         ],
+                        proof_facts: vec![],
+                        proof: Default::default(),
                     },
                 ))
             }
 
             pub fn invoke(account_contract_address: ContractAddress) -> BroadcastedTransaction {
-                BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V1(
-                    BroadcastedInvokeTransactionV1 {
-                        nonce: transaction_nonce!("0x2"),
-                        version: TransactionVersion::ONE,
-                        max_fee: MAX_FEE,
+                BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V3(
+                    BroadcastedInvokeTransactionV3 {
+                        version: TransactionVersion::THREE,
                         signature: vec![],
+                        nonce: transaction_nonce!("0x2"),
+                        resource_bounds: ResourceBounds {
+                            l1_gas: ResourceBound {
+                                max_amount: ResourceAmount(10000),
+                                max_price_per_unit: ResourcePricePerUnit(100000000),
+                            },
+                            l2_gas: ResourceBound {
+                                max_amount: ResourceAmount(10000),
+                                max_price_per_unit: ResourcePricePerUnit(100000000),
+                            },
+                            l1_data_gas: None,
+                        },
+                        tip: Tip(0),
+                        paymaster_data: vec![],
+                        account_deployment_data: vec![],
+                        nonce_data_availability_mode: DataAvailabilityMode::L1,
+                        fee_data_availability_mode: DataAvailabilityMode::L1,
                         sender_address: account_contract_address,
                         calldata: vec![
                             // Number of calls
@@ -724,6 +754,8 @@ pub(crate) mod tests {
                             // AccountCallArray::data_len
                             call_param!("0x0"),
                         ],
+                        proof_facts: vec![],
+                        proof: Default::default(),
                     },
                 ))
             }
@@ -994,7 +1026,7 @@ pub(crate) mod tests {
                 }
             }
 
-            const UNIVERSAL_DEPLOYER_OVERALL_FEE: u64 = 467;
+            const UNIVERSAL_DEPLOYER_OVERALL_FEE: u64 = 486;
             const UNIVERSAL_DEPLOYER_GAS_CONSUMED: u64 = 19;
             const UNIVERSAL_DEPLOYER_DATA_GAS_CONSUMED: u64 = 224;
             pub fn universal_deployer(
@@ -1110,15 +1142,15 @@ pub(crate) mod tests {
                 overall_fee_correction: u64,
             ) -> Vec<StorageDiffs> {
                 vec![(
-                    ETH_FEE_TOKEN_ADDRESS,
+                    STRK_FEE_TOKEN_ADDRESS,
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: StorageValue((0xfffffffffffffffffffffffffe2du128 + u128::from(overall_fee_correction)).into()),
+                            value: StorageValue((0xfffffffffffffffffffffffff5beu128 + u128::from(overall_fee_correction)).into()),
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
-                            value: StorageValue((UNIVERSAL_DEPLOYER_OVERALL_FEE - overall_fee_correction).into()),
+                            value: StorageValue((DECLARE_OVERALL_FEE + UNIVERSAL_DEPLOYER_OVERALL_FEE - overall_fee_correction).into()),
                         },
                     ],
                     )]
@@ -1300,7 +1332,7 @@ pub(crate) mod tests {
                         // calldata_len
                         call_param!("0x0").0,
                     ],
-                    contract_address: ETH_FEE_TOKEN_ADDRESS,
+                    contract_address: STRK_FEE_TOKEN_ADDRESS,
                     selector: Some(EntryPoint::hashed(b"transfer").0),
                     messages: vec![],
                     result: vec![felt!("0x1")],
@@ -1313,7 +1345,7 @@ pub(crate) mod tests {
                 }
             }
 
-            const INVOKE_OVERALL_FEE: u64 = 270;
+            const INVOKE_OVERALL_FEE: u64 = 284;
             const INVOKE_GAS_CONSUMED: u64 = 14;
             const INVOKE_DATA_GAS_CONSUMED: u64 = 128;
             pub fn invoke(
@@ -1416,15 +1448,15 @@ pub(crate) mod tests {
             }
 
             fn invoke_fee_transfer_storage_diffs(overall_fee_correction: u64) -> Vec<StorageDiffs> {
-                vec![(ETH_FEE_TOKEN_ADDRESS,
+                vec![(STRK_FEE_TOKEN_ADDRESS,
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: StorageValue((0xfffffffffffffffffffffffffd1fu128 + u128::from(2 * overall_fee_correction)).into()),
+                            value: StorageValue((0xfffffffffffffffffffffffff4a2u128 + u128::from(2 * overall_fee_correction)).into()),
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
-                            value: StorageValue((UNIVERSAL_DEPLOYER_OVERALL_FEE + INVOKE_OVERALL_FEE - 2 * overall_fee_correction).into()),
+                            value: StorageValue((DECLARE_OVERALL_FEE + UNIVERSAL_DEPLOYER_OVERALL_FEE + INVOKE_OVERALL_FEE - 2 * overall_fee_correction).into()),
                         },
                     ],
                     )]
@@ -1544,7 +1576,7 @@ pub(crate) mod tests {
                         Felt::from_u64(INVOKE_OVERALL_FEE - overall_fee_correction),
                         call_param!("0x0").0,
                     ],
-                    contract_address: ETH_FEE_TOKEN_ADDRESS,
+                    contract_address: STRK_FEE_TOKEN_ADDRESS,
                     selector: Some(EntryPoint::hashed(b"transfer").0),
                     messages: vec![],
                     result: vec![felt!("0x1")],
@@ -1737,7 +1769,7 @@ pub(crate) mod tests {
                 }
             }
 
-            const UNIVERSAL_DEPLOYER_OVERALL_FEE: u64 = 473;
+            const UNIVERSAL_DEPLOYER_OVERALL_FEE: u64 = 498;
             const UNIVERSAL_DEPLOYER_GAS_CONSUMED: u64 = 19;
             const UNIVERSAL_DEPLOYER_DATA_GAS_CONSUMED: u64 = 224;
             pub fn universal_deployer(
@@ -1852,15 +1884,15 @@ pub(crate) mod tests {
             fn universal_deployer_fee_transfer_storage_diffs(
                 overall_fee_correction: u64,
             ) -> Vec<StorageDiffs> {
-                vec![(ETH_FEE_TOKEN_ADDRESS,
+                vec![(STRK_FEE_TOKEN_ADDRESS,
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: StorageValue((0xfffffffffffffffffffffffffe2du128 + u128::from(overall_fee_correction)).into()),
+                            value: StorageValue((0xfffffffffffffffffffffffff5beu128 + u128::from(overall_fee_correction)).into()),
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
-                            value: StorageValue((UNIVERSAL_DEPLOYER_OVERALL_FEE - overall_fee_correction).into()),
+                            value: StorageValue((DECLARE_OVERALL_FEE + UNIVERSAL_DEPLOYER_OVERALL_FEE - overall_fee_correction).into()),
                         },
                     ],
                     )]
@@ -2042,7 +2074,7 @@ pub(crate) mod tests {
                         // calldata_len
                         call_param!("0x0").0,
                     ],
-                    contract_address: ETH_FEE_TOKEN_ADDRESS,
+                    contract_address: STRK_FEE_TOKEN_ADDRESS,
                     selector: Some(EntryPoint::hashed(b"transfer").0),
                     messages: vec![],
                     result: vec![felt!("0x1")],
@@ -2055,7 +2087,7 @@ pub(crate) mod tests {
                 }
             }
 
-            const INVOKE_OVERALL_FEE: u64 = 275;
+            const INVOKE_OVERALL_FEE: u64 = 294;
             const INVOKE_GAS_CONSUMED: u64 = 14;
             const INVOKE_DATA_GAS_CONSUMED: u64 = 128;
             pub fn invoke(
@@ -2158,15 +2190,15 @@ pub(crate) mod tests {
             }
 
             fn invoke_fee_transfer_storage_diffs(overall_fee_correction: u64) -> Vec<StorageDiffs> {
-                vec![(ETH_FEE_TOKEN_ADDRESS,
+                vec![(STRK_FEE_TOKEN_ADDRESS,
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: StorageValue((0xfffffffffffffffffffffffffd1fu128 + u128::from(2 * overall_fee_correction)).into()),
+                            value: StorageValue((0xfffffffffffffffffffffffff4a2u128 + u128::from(2 * overall_fee_correction)).into()),
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
-                            value: StorageValue((UNIVERSAL_DEPLOYER_OVERALL_FEE + INVOKE_OVERALL_FEE - 2 * overall_fee_correction).into()),
+                            value: StorageValue((DECLARE_OVERALL_FEE + UNIVERSAL_DEPLOYER_OVERALL_FEE + INVOKE_OVERALL_FEE - 2 * overall_fee_correction).into()),
                         },
                     ],
                     )]
@@ -2286,7 +2318,7 @@ pub(crate) mod tests {
                         Felt::from_u64(INVOKE_OVERALL_FEE - overall_fee_correction),
                         call_param!("0x0").0,
                     ],
-                    contract_address: ETH_FEE_TOKEN_ADDRESS,
+                    contract_address: STRK_FEE_TOKEN_ADDRESS,
                     selector: Some(EntryPoint::hashed(b"transfer").0),
                     messages: vec![],
                     result: vec![felt!("0x1")],
@@ -2645,7 +2677,7 @@ pub(crate) mod tests {
 
     #[test_log::test(tokio::test)]
     async fn calldata_limit_exceeded() {
-        use crate::types::request::{BroadcastedInvokeTransaction, BroadcastedInvokeTransactionV1};
+        use crate::types::request::{BroadcastedInvokeTransaction, BroadcastedInvokeTransactionV3};
 
         let (storage, last_block_header, account_contract_address, _, _) =
             setup_storage_with_starknet_version(StarknetVersion::new(0, 13, 4, 0)).await;
@@ -2653,15 +2685,22 @@ pub(crate) mod tests {
 
         let input = SimulateTransactionInput {
             transactions: vec![BroadcastedTransaction::Invoke(
-                BroadcastedInvokeTransaction::V1(BroadcastedInvokeTransactionV1 {
+                BroadcastedInvokeTransaction::V3(BroadcastedInvokeTransactionV3 {
                     // Calldata length over the limit, the rest of the fields should not matter.
                     calldata: vec![call_param!("0x123"); CALLDATA_LIMIT + 5],
 
                     nonce: transaction_nonce!("0x1"),
-                    version: TransactionVersion::ONE,
-                    max_fee: Fee::default(),
+                    version: TransactionVersion::THREE,
                     signature: vec![],
                     sender_address: account_contract_address,
+                    resource_bounds: ResourceBounds::default(),
+                    tip: Tip(0),
+                    paymaster_data: vec![],
+                    account_deployment_data: vec![],
+                    nonce_data_availability_mode: DataAvailabilityMode::L1,
+                    fee_data_availability_mode: DataAvailabilityMode::L1,
+                    proof_facts: vec![],
+                    proof: Default::default(),
                 }),
             )],
             block_id: BlockId::Number(last_block_header.number),
@@ -2678,7 +2717,7 @@ pub(crate) mod tests {
 
     #[test_log::test(tokio::test)]
     async fn signature_element_limit_exceeded() {
-        use crate::types::request::{BroadcastedInvokeTransaction, BroadcastedInvokeTransactionV1};
+        use crate::types::request::{BroadcastedInvokeTransaction, BroadcastedInvokeTransactionV3};
 
         let (storage, last_block_header, account_contract_address, _, _) =
             setup_storage_with_starknet_version(StarknetVersion::new(0, 13, 4, 0)).await;
@@ -2686,7 +2725,7 @@ pub(crate) mod tests {
 
         let input = SimulateTransactionInput {
             transactions: vec![BroadcastedTransaction::Invoke(
-                BroadcastedInvokeTransaction::V1(BroadcastedInvokeTransactionV1 {
+                BroadcastedInvokeTransaction::V3(BroadcastedInvokeTransactionV3 {
                     // Signature length over the limit, the rest of the fields should not matter.
                     signature: vec![
                         transaction_signature_elem!("0x123");
@@ -2694,10 +2733,17 @@ pub(crate) mod tests {
                     ],
 
                     nonce: transaction_nonce!("0x1"),
-                    version: TransactionVersion::ONE,
-                    max_fee: Fee::default(),
+                    version: TransactionVersion::THREE,
                     sender_address: account_contract_address,
                     calldata: vec![],
+                    resource_bounds: ResourceBounds::default(),
+                    tip: Tip(0),
+                    paymaster_data: vec![],
+                    account_deployment_data: vec![],
+                    nonce_data_availability_mode: DataAvailabilityMode::L1,
+                    fee_data_availability_mode: DataAvailabilityMode::L1,
+                    proof_facts: vec![],
+                    proof: Default::default(),
                 }),
             )],
             block_id: BlockId::Number(last_block_header.number),

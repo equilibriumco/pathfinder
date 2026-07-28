@@ -203,13 +203,13 @@
         "call_type": "CALL",
         "calldata": [
           "0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8",
-          "0x1d9",
+          "0x1f2",
           "0x0"
         ],
         "caller_address": "0xc01",
         "calls": [],
         "class_hash": "0x13dbe991273192b5573c526cddc27a27decb8525b44536cb0f57b5b2c089b51",
-        "contract_address": "0x49d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7",
+        "contract_address": "0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
         "entry_point_selector": "0x83afd3f4caedc6eebf44246fe54e38c95e3179a5ec9ea81740eca5b482d12e",
         "entry_point_type": "EXTERNAL",
         "events": [
@@ -217,7 +217,7 @@
             "data": [
               "0xc01",
               "0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8",
-              "0x1d9",
+              "0x1f2",
               "0x0"
             ],
             "keys": [
@@ -254,15 +254,15 @@
         "replaced_classes": [],
         "storage_diffs": [
           {
-            "address": "0x49d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7",
+            "address": "0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
             "storage_entries": [
               {
                 "key": "0x32a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e",
-                "value": "0xfffffffffffffffffffffffffe27"
+                "value": "0xfffffffffffffffffffffffff5aa"
               },
               {
                 "key": "0x5496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a",
-                "value": "0x1d9"
+                "value": "0xa56"
               }
             ]
           }
@@ -299,7 +299,7 @@
         ]
       }
     },
-    "transaction_hash": "0x1cdd84a12e3582bd60acf7546d6e1a54e9706414f28cd3b2ce8a3d2eb5e4f73"
+    "transaction_hash": "0x68c1725f44e113840f093e33ab235ed8174ebab7e37961db37460bf61a11008"
   },
   {
     "trace_root": {
@@ -360,13 +360,13 @@
         "call_type": "CALL",
         "calldata": [
           "0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8",
-          "0x113",
+          "0x126",
           "0x0"
         ],
         "caller_address": "0xc01",
         "calls": [],
         "class_hash": "0x13dbe991273192b5573c526cddc27a27decb8525b44536cb0f57b5b2c089b51",
-        "contract_address": "0x49d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7",
+        "contract_address": "0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
         "entry_point_selector": "0x83afd3f4caedc6eebf44246fe54e38c95e3179a5ec9ea81740eca5b482d12e",
         "entry_point_type": "EXTERNAL",
         "events": [
@@ -374,7 +374,7 @@
             "data": [
               "0xc01",
               "0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8",
-              "0x113",
+              "0x126",
               "0x0"
             ],
             "keys": [
@@ -406,15 +406,15 @@
         "replaced_classes": [],
         "storage_diffs": [
           {
-            "address": "0x49d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7",
+            "address": "0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
             "storage_entries": [
               {
                 "key": "0x32a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e",
-                "value": "0xfffffffffffffffffffffffffd14"
+                "value": "0xfffffffffffffffffffffffff484"
               },
               {
                 "key": "0x5496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a",
-                "value": "0x2ec"
+                "value": "0xb7c"
               }
             ]
           }
@@ -447,6 +447,6 @@
         ]
       }
     },
-    "transaction_hash": "0x2a973a52127349ccb6ecd72c31a7b1fc444a526643b4afe8a275a536075cb0e"
+    "transaction_hash": "0x54040306617fba235af9f853347320a6d1de47ab0e1a7257b32d9b0e61686d9"
   }
 ]

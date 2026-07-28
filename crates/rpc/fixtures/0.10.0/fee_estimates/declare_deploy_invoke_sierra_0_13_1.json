@@ -13,31 +13,11 @@
     "l1_data_gas_consumed": "0xe0",
     "l1_data_gas_price": "0x2",
     "l1_gas_consumed": "0x12",
-    "l1_gas_price": "0x1",
+    "l1_gas_price": "0x2",
     "l2_gas_consumed": "0x0",
     "l2_gas_price": "0x1",
-    "overall_fee": "0x1d2",
-    "unit": "WEI"
-  },
-  {
-    "l1_data_gas_consumed": "0x80",
-    "l1_data_gas_price": "0x2",
-    "l1_gas_consumed": "0xe",
-    "l1_gas_price": "0x1",
-    "l2_gas_consumed": "0x0",
-    "l2_gas_price": "0x1",
-    "overall_fee": "0x10e",
-    "unit": "WEI"
-  },
-  {
-    "l1_data_gas_consumed": "0x80",
-    "l1_data_gas_price": "0x2",
-    "l1_gas_consumed": "0xa",
-    "l1_gas_price": "0x1",
-    "l2_gas_consumed": "0x0",
-    "l2_gas_price": "0x1",
-    "overall_fee": "0x10a",
-    "unit": "WEI"
+    "overall_fee": "0x1e4",
+    "unit": "FRI"
   },
   {
     "l1_data_gas_consumed": "0x80",

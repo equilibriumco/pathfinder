@@ -115,11 +115,11 @@
       "l1_data_gas_consumed": "0xe0",
       "l1_data_gas_price": "0x2",
       "l1_gas_consumed": "0x13",
-      "l1_gas_price": "0x1",
+      "l1_gas_price": "0x2",
       "l2_gas_consumed": "0x0",
       "l2_gas_price": "0x1",
-      "overall_fee": "0x1d3",
-      "unit": "WEI"
+      "overall_fee": "0x1e6",
+      "unit": "FRI"
     },
     "transaction_trace": {
       "execute_invocation": {
@@ -222,13 +222,13 @@
         "call_type": "CALL",
         "calldata": [
           "0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8",
-          "0x1d3",
+          "0x1e6",
           "0x0"
         ],
         "caller_address": "0xc01",
         "calls": [],
         "class_hash": "0x13dbe991273192b5573c526cddc27a27decb8525b44536cb0f57b5b2c089b51",
-        "contract_address": "0x49d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7",
+        "contract_address": "0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
         "entry_point_selector": "0x83afd3f4caedc6eebf44246fe54e38c95e3179a5ec9ea81740eca5b482d12e",
         "entry_point_type": "EXTERNAL",
         "events": [
@@ -236,7 +236,7 @@
             "data": [
               "0xc01",
               "0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8",
-              "0x1d3",
+              "0x1e6",
               "0x0"
             ],
             "keys": [
@@ -273,15 +273,15 @@
         "replaced_classes": [],
         "storage_diffs": [
           {
-            "address": "0x49d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7",
+            "address": "0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
             "storage_entries": [
               {
                 "key": "0x32a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e",
-                "value": "0xfffffffffffffffffffffffffe2d"
+                "value": "0xfffffffffffffffffffffffff5be"
               },
               {
                 "key": "0x5496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a",
-                "value": "0x1d3"
+                "value": "0xa42"
               }
             ]
           }
@@ -324,11 +324,11 @@
       "l1_data_gas_consumed": "0x80",
       "l1_data_gas_price": "0x2",
       "l1_gas_consumed": "0xe",
-      "l1_gas_price": "0x1",
+      "l1_gas_price": "0x2",
       "l2_gas_consumed": "0x0",
       "l2_gas_price": "0x1",
-      "overall_fee": "0x10e",
-      "unit": "WEI"
+      "overall_fee": "0x11c",
+      "unit": "FRI"
     },
     "transaction_trace": {
       "execute_invocation": {
@@ -388,13 +388,13 @@
         "call_type": "CALL",
         "calldata": [
           "0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8",
-          "0x10e",
+          "0x11c",
           "0x0"
         ],
         "caller_address": "0xc01",
         "calls": [],
         "class_hash": "0x13dbe991273192b5573c526cddc27a27decb8525b44536cb0f57b5b2c089b51",
-        "contract_address": "0x49d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7",
+        "contract_address": "0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
         "entry_point_selector": "0x83afd3f4caedc6eebf44246fe54e38c95e3179a5ec9ea81740eca5b482d12e",
         "entry_point_type": "EXTERNAL",
         "events": [
@@ -402,7 +402,7 @@
             "data": [
               "0xc01",
               "0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8",
-              "0x10e",
+              "0x11c",
               "0x0"
             ],
             "keys": [
@@ -434,15 +434,15 @@
         "replaced_classes": [],
         "storage_diffs": [
           {
-            "address": "0x49d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7",
+            "address": "0x4718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
             "storage_entries": [
               {
                 "key": "0x32a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e",
-                "value": "0xfffffffffffffffffffffffffd1f"
+                "value": "0xfffffffffffffffffffffffff4a2"
               },
               {
                 "key": "0x5496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a",
-                "value": "0x2e1"
+                "value": "0xb5e"
               }
             ]
           }
@@ -595,11 +595,11 @@
             "storage_entries": [
               {
                 "key": "0x32a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e",
-                "value": "0xfffffffffffffffffffffffff688"
+                "value": "0xfffffffffffffffffffffffff386"
               },
               {
                 "key": "0x5496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a",
-                "value": "0x978"
+                "value": "0xc7a"
               }
             ]
           }
