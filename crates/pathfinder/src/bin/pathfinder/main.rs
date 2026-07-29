@@ -14,10 +14,13 @@ use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
 use pathfinder_common::class_definition::SerializedSierraDefinition;
 use pathfinder_common::{BlockNumber, Chain, ChainId, EthereumChain};
 use pathfinder_ethereum::EthereumClient;
+#[cfg(feature = "p2p")]
 use pathfinder_gas_price::{L1GasPriceConfig, L1GasPriceProvider};
 #[cfg(feature = "p2p")]
 use pathfinder_lib::consensus::ConsensusTaskHandles;
-use pathfinder_lib::state::{sync_gas_prices, L1GasPriceSyncConfig, SyncContext};
+use pathfinder_lib::state::SyncContext;
+#[cfg(feature = "p2p")]
+use pathfinder_lib::state::{sync_gas_prices, L1GasPriceSyncConfig};
 use pathfinder_lib::ConsensusChannels;
 #[cfg(feature = "p2p")]
 use pathfinder_lib::{config, consensus, monitoring, p2p_network, state};
@@ -352,26 +355,18 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
         )
     };
 
+    #[cfg(feature = "p2p")]
     let integration_testing_config = config.integration_testing;
 
     // Create L1 gas price provider and sync task if consensus is enabled
+    #[cfg(feature = "p2p")]
     let gas_price_provider = if integration_testing_config.is_gas_price_validation_disabled() {
         None
     } else if let Some(consensus_config) = &config.consensus {
-        let provider = L1GasPriceProvider::new({
-            #[cfg(feature = "p2p")]
-            {
-                L1GasPriceConfig {
-                    tolerance: consensus_config.l1_gas_price_tolerance,
-                    max_time_gap_seconds: consensus_config.l1_gas_price_max_time_gap,
-                    ..Default::default()
-                }
-            }
-            #[cfg(not(feature = "p2p"))]
-            {
-                let _ = consensus_config;
-                L1GasPriceConfig::default()
-            }
+        let provider = L1GasPriceProvider::new(L1GasPriceConfig {
+            tolerance: consensus_config.l1_gas_price_tolerance,
+            max_time_gap_seconds: consensus_config.l1_gas_price_max_time_gap,
+            ..Default::default()
         });
 
         // Spawn the L1 gas price sync task
@@ -442,11 +437,7 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
 
     #[cfg(not(feature = "p2p"))]
     let (consensus_p2p_event_processing_handle, consensus_engine_handle, consensus_channels) = {
-        let _ = (
-            consensus_storage,
-            consensus_p2p_client_and_event_rx,
-            gas_price_provider,
-        );
+        let _ = (consensus_storage, consensus_p2p_client_and_event_rx);
         (
             tokio::task::spawn(std::future::pending::<anyhow::Result<()>>()),
             tokio::task::spawn(std::future::pending::<anyhow::Result<()>>()),

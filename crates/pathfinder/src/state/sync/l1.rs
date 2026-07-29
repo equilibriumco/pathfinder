@@ -1,8 +1,14 @@
 use std::time::Duration;
 
+#[cfg(feature = "p2p")]
 use anyhow::Context;
-use pathfinder_common::{Chain, L1BlockNumber};
-use pathfinder_ethereum::{EthereumClient, L1GasPriceData};
+use pathfinder_common::Chain;
+#[cfg(feature = "p2p")]
+use pathfinder_common::L1BlockNumber;
+use pathfinder_ethereum::EthereumClient;
+#[cfg(feature = "p2p")]
+use pathfinder_ethereum::L1GasPriceData;
+#[cfg(feature = "p2p")]
 use pathfinder_gas_price::{AddSampleError, L1GasPriceProvider};
 use primitive_types::H160;
 use tokio::sync::mpsc;
@@ -51,6 +57,7 @@ pub async fn sync(
 }
 
 /// Configuration for L1 gas price synchronization.
+#[cfg(feature = "p2p")]
 #[derive(Debug, Clone)]
 pub struct L1GasPriceSyncConfig {
     /// Number of historical blocks to fetch on startup.
@@ -67,6 +74,7 @@ pub struct L1GasPriceSyncConfig {
     pub max_gap_blocks: u64,
 }
 
+#[cfg(feature = "p2p")]
 impl Default for L1GasPriceSyncConfig {
     fn default() -> Self {
         Self {
@@ -81,6 +89,7 @@ impl Default for L1GasPriceSyncConfig {
 ///
 /// Uses historical data at startup, and then subscribes to new block headers
 /// and adds gas prices as they arrive.
+#[cfg(feature = "p2p")]
 pub async fn sync_gas_prices(
     ethereum: EthereumClient,
     provider: L1GasPriceProvider,
@@ -108,6 +117,7 @@ pub async fn sync_gas_prices(
 ///
 /// Bootstraps with historical data, then subscribes and processes blocks until
 /// the subscription ends or an unrecoverable error occurs.
+#[cfg(feature = "p2p")]
 async fn sync_gas_prices_inner(
     ethereum: &EthereumClient,
     provider: &L1GasPriceProvider,
@@ -160,6 +170,7 @@ async fn sync_gas_prices_inner(
 
 /// Processes a single block from the subscription. Handles gaps via inline
 /// backfill and signals reorgs as errors for the outer loop to handle.
+#[cfg(feature = "p2p")]
 async fn process_block(
     ethereum: &EthereumClient,
     provider: &L1GasPriceProvider,
