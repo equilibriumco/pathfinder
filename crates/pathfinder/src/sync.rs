@@ -98,7 +98,7 @@ where
                 Ok(latest) => return latest,
                 Err(error) => {
                     tracing::warn!(%error, "Failed to get L1 checkpoint, retrying");
-                    tokio::time::sleep(RESET_DELAY_ON_FAILURE);
+                    tokio::time::sleep(RESET_DELAY_ON_FAILURE).await;
                 }
             }
         }
