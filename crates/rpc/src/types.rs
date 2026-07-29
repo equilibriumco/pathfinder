@@ -204,29 +204,21 @@ pub mod request {
         pub fn version(&self) -> TransactionVersion {
             match self {
                 BroadcastedTransaction::Declare(declare) => match declare {
-                    BroadcastedDeclareTransaction::V0(tx) => tx.version,
-                    BroadcastedDeclareTransaction::V1(tx) => tx.version,
-                    BroadcastedDeclareTransaction::V2(tx) => tx.version,
                     BroadcastedDeclareTransaction::V3(tx) => tx.version,
                 },
                 BroadcastedTransaction::Invoke(invoke) => match invoke {
-                    BroadcastedInvokeTransaction::V0(tx) => tx.version,
-                    BroadcastedInvokeTransaction::V1(tx) => tx.version,
                     BroadcastedInvokeTransaction::V3(tx) => tx.version,
                 },
                 BroadcastedTransaction::DeployAccount(deploy_account) => match deploy_account {
-                    BroadcastedDeployAccountTransaction::V1(tx) => tx.version,
                     BroadcastedDeployAccountTransaction::V3(tx) => tx.version,
                 },
             }
         }
     }
 
+    // Intentionally kept as an enum in anticipation of new future versions.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum BroadcastedDeclareTransaction {
-        V0(BroadcastedDeclareTransactionV0),
-        V1(BroadcastedDeclareTransactionV1),
-        V2(BroadcastedDeclareTransactionV2),
         V3(BroadcastedDeclareTransactionV3),
     }
 
@@ -261,48 +253,6 @@ pub mod request {
                 sender_address,
             }))
         }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct BroadcastedDeclareTransactionV0 {
-        // BROADCASTED_TXN_COMMON_PROPERTIES: ideally this should just be included
-        // here in a flattened struct, but `flatten` doesn't work with
-        // `deny_unknown_fields`: https://serde.rs/attr-flatten.html#struct-flattening
-        pub max_fee: Fee,
-        pub version: TransactionVersion,
-        pub signature: Vec<TransactionSignatureElem>,
-
-        pub contract_class: super::class::cairo::CairoContractClass,
-        pub sender_address: ContractAddress,
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct BroadcastedDeclareTransactionV1 {
-        // BROADCASTED_TXN_COMMON_PROPERTIES: ideally this should just be included
-        // here in a flattened struct, but `flatten` doesn't work with
-        // `deny_unknown_fields`: https://serde.rs/attr-flatten.html#struct-flattening
-        pub max_fee: Fee,
-        pub version: TransactionVersion,
-        pub signature: Vec<TransactionSignatureElem>,
-        pub nonce: TransactionNonce,
-
-        pub contract_class: super::class::cairo::CairoContractClass,
-        pub sender_address: ContractAddress,
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct BroadcastedDeclareTransactionV2 {
-        // BROADCASTED_TXN_COMMON_PROPERTIES: ideally this should just be included
-        // here in a flattened struct, but `flatten` doesn't work with
-        // `deny_unknown_fields`: https://serde.rs/attr-flatten.html#struct-flattening
-        pub max_fee: Fee,
-        pub version: TransactionVersion,
-        pub signature: Vec<TransactionSignatureElem>,
-        pub nonce: TransactionNonce,
-
-        pub compiled_class_hash: CasmHash,
-        pub contract_class: super::class::sierra::SierraContractClass,
-        pub sender_address: ContractAddress,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -351,9 +301,9 @@ pub mod request {
         }
     }
 
+    // Intentionally kept as an enum in anticipation of new future versions.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum BroadcastedDeployAccountTransaction {
-        V1(BroadcastedDeployAccountTransactionV1),
         V3(BroadcastedDeployAccountTransactionV3),
     }
 
@@ -395,33 +345,8 @@ pub mod request {
 
         pub fn deployed_contract_address(&self) -> ContractAddress {
             match self {
-                Self::V1(tx) => tx.deployed_contract_address(),
                 Self::V3(tx) => tx.deployed_contract_address(),
             }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct BroadcastedDeployAccountTransactionV1 {
-        // Fields from BROADCASTED_TXN_COMMON_PROPERTIES
-        pub version: TransactionVersion,
-        pub max_fee: Fee,
-        pub signature: Vec<TransactionSignatureElem>,
-        pub nonce: TransactionNonce,
-
-        // Fields from DEPLOY_ACCOUNT_TXN_PROPERTIES
-        pub contract_address_salt: ContractAddressSalt,
-        pub constructor_calldata: Vec<CallParam>,
-        pub class_hash: ClassHash,
-    }
-
-    impl BroadcastedDeployAccountTransactionV1 {
-        pub fn deployed_contract_address(&self) -> ContractAddress {
-            ContractAddress::deployed_contract_address(
-                self.constructor_calldata.iter().copied(),
-                &self.contract_address_salt,
-                &self.class_hash,
-            )
         }
     }
 
@@ -481,10 +406,9 @@ pub mod request {
         }
     }
 
+    // Intentionally kept as an enum in anticipation of new future versions.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum BroadcastedInvokeTransaction {
-        V0(BroadcastedInvokeTransactionV0),
-        V1(BroadcastedInvokeTransactionV1),
         V3(BroadcastedInvokeTransactionV3),
     }
 
@@ -527,50 +451,6 @@ pub mod request {
                     .unwrap_or_default(),
             }))
         }
-
-        pub fn into_v1(self) -> Option<BroadcastedInvokeTransactionV1> {
-            match self {
-                Self::V1(x) => Some(x),
-                _ => None,
-            }
-        }
-
-        pub fn into_v0(self) -> Option<BroadcastedInvokeTransactionV0> {
-            match self {
-                Self::V0(x) => Some(x),
-                _ => None,
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct BroadcastedInvokeTransactionV0 {
-        pub version: TransactionVersion,
-
-        // BROADCASTED_TXN_COMMON_PROPERTIES: ideally this should just be included
-        // here in a flattened struct, but `flatten` doesn't work with
-        // `deny_unknown_fields`: https://serde.rs/attr-flatten.html#struct-flattening
-        pub max_fee: Fee,
-        pub signature: Vec<TransactionSignatureElem>,
-
-        pub contract_address: ContractAddress,
-        pub entry_point_selector: EntryPoint,
-        pub calldata: Vec<CallParam>,
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct BroadcastedInvokeTransactionV1 {
-        pub version: TransactionVersion,
-
-        // BROADCASTED_TXN_COMMON_PROPERTIES: ideally this should just be included
-        // here in a flattened struct, but `flatten` doesn't work with
-        // `deny_unknown_fields`: https://serde.rs/attr-flatten.html#struct-flattening
-        pub max_fee: Fee,
-        pub signature: Vec<TransactionSignatureElem>,
-        pub nonce: TransactionNonce,
-
-        pub sender_address: ContractAddress,
-        pub calldata: Vec<CallParam>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -640,37 +520,6 @@ pub mod request {
             let query_only = self.version().has_query_version();
 
             let variant = match self {
-                BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V0(declare)) => {
-                    let class_hash = declare.contract_class.class_hash()?.hash();
-                    TransactionVariant::DeclareV0(DeclareTransactionV0V1 {
-                        class_hash,
-                        max_fee: declare.max_fee,
-                        nonce: Default::default(),
-                        signature: declare.signature,
-                        sender_address: declare.sender_address,
-                    })
-                }
-                BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V1(declare)) => {
-                    let class_hash = declare.contract_class.class_hash()?.hash();
-                    TransactionVariant::DeclareV1(DeclareTransactionV0V1 {
-                        class_hash,
-                        max_fee: declare.max_fee,
-                        nonce: declare.nonce,
-                        signature: declare.signature,
-                        sender_address: declare.sender_address,
-                    })
-                }
-                BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V2(declare)) => {
-                    let class_hash = declare.contract_class.class_hash()?.hash();
-                    TransactionVariant::DeclareV2(DeclareTransactionV2 {
-                        class_hash,
-                        max_fee: declare.max_fee,
-                        nonce: declare.nonce,
-                        sender_address: declare.sender_address,
-                        signature: declare.signature,
-                        compiled_class_hash: declare.compiled_class_hash,
-                    })
-                }
                 BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V3(declare)) => {
                     let class_hash = declare.contract_class.class_hash()?.hash();
                     TransactionVariant::DeclareV3(DeclareTransactionV3 {
@@ -687,17 +536,6 @@ pub mod request {
                         account_deployment_data: declare.account_deployment_data,
                     })
                 }
-                BroadcastedTransaction::DeployAccount(BroadcastedDeployAccountTransaction::V1(
-                    deploy,
-                )) => TransactionVariant::DeployAccountV1(DeployAccountTransactionV1 {
-                    contract_address: deploy.deployed_contract_address(),
-                    max_fee: deploy.max_fee,
-                    signature: deploy.signature,
-                    nonce: deploy.nonce,
-                    contract_address_salt: deploy.contract_address_salt,
-                    constructor_calldata: deploy.constructor_calldata,
-                    class_hash: deploy.class_hash,
-                }),
                 BroadcastedTransaction::DeployAccount(BroadcastedDeployAccountTransaction::V3(
                     deploy,
                 )) => TransactionVariant::DeployAccountV3(DeployAccountTransactionV3 {
@@ -713,25 +551,6 @@ pub mod request {
                     tip: deploy.tip,
                     paymaster_data: deploy.paymaster_data,
                 }),
-                BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V0(invoke)) => {
-                    TransactionVariant::InvokeV0(InvokeTransactionV0 {
-                        calldata: invoke.calldata,
-                        sender_address: invoke.contract_address,
-                        entry_point_type: Some(EntryPointType::External),
-                        entry_point_selector: invoke.entry_point_selector,
-                        max_fee: invoke.max_fee,
-                        signature: invoke.signature,
-                    })
-                }
-                BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V1(invoke)) => {
-                    TransactionVariant::InvokeV1(InvokeTransactionV1 {
-                        calldata: invoke.calldata,
-                        sender_address: invoke.sender_address,
-                        max_fee: invoke.max_fee,
-                        signature: invoke.signature,
-                        nonce: invoke.nonce,
-                    })
-                }
                 BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V3(invoke)) => {
                     TransactionVariant::InvokeV3(InvokeTransactionV3 {
                         nonce: invoke.nonce,

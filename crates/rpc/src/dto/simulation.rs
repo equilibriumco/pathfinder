@@ -648,11 +648,6 @@ mod tests {
     };
     use crate::method::call::FunctionCall;
     use crate::method::simulate_transactions::tests::fixtures;
-    use crate::types::request::{
-        BroadcastedDeclareTransaction,
-        BroadcastedDeclareTransactionV1,
-        BroadcastedTransaction,
-    };
     use crate::types::ContractClass;
     use crate::RpcVersion;
 

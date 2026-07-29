@@ -3,41 +3,21 @@
     "l1_data_gas_consumed": "0xc0",
     "l1_data_gas_price": "0x2",
     "l1_gas_consumed": "0x370",
-    "l1_gas_price": "0x1",
+    "l1_gas_price": "0x2",
     "l2_gas_consumed": "0x0",
     "l2_gas_price": "0x1",
-    "overall_fee": "0x4f0",
-    "unit": "WEI"
+    "overall_fee": "0x860",
+    "unit": "FRI"
   },
   {
     "l1_data_gas_consumed": "0xe0",
     "l1_data_gas_price": "0x2",
     "l1_gas_consumed": "0x16",
-    "l1_gas_price": "0x1",
+    "l1_gas_price": "0x2",
     "l2_gas_consumed": "0x0",
     "l2_gas_price": "0x1",
-    "overall_fee": "0x1d6",
-    "unit": "WEI"
-  },
-  {
-    "l1_data_gas_consumed": "0x80",
-    "l1_data_gas_price": "0x2",
-    "l1_gas_consumed": "0x10",
-    "l1_gas_price": "0x1",
-    "l2_gas_consumed": "0x0",
-    "l2_gas_price": "0x1",
-    "overall_fee": "0x110",
-    "unit": "WEI"
-  },
-  {
-    "l1_data_gas_consumed": "0x80",
-    "l1_data_gas_price": "0x2",
-    "l1_gas_consumed": "0xb",
-    "l1_gas_price": "0x1",
-    "l2_gas_consumed": "0x0",
-    "l2_gas_price": "0x1",
-    "overall_fee": "0x10b",
-    "unit": "WEI"
+    "overall_fee": "0x1ec",
+    "unit": "FRI"
   },
   {
     "l1_data_gas_consumed": "0x80",

@@ -305,7 +305,7 @@ pub(crate) mod tests {
     use starknet_gateway_test_fixtures::class_definitions::ERC20_CONTRACT_DEFINITION_CLASS_HASH;
 
     use super::simulate_transactions;
-    use crate::context::{RpcContext, ETH_FEE_TOKEN_ADDRESS};
+    use crate::context::{RpcContext, STRK_FEE_TOKEN_ADDRESS};
     use crate::dto::{DeserializeForVersion, SerializeForVersion, Serializer};
     use crate::executor::{CALLDATA_LIMIT, SIGNATURE_ELEMENT_LIMIT};
     use crate::method::simulate_transactions::{
@@ -314,7 +314,6 @@ pub(crate) mod tests {
     };
     use crate::types::request::{
         BroadcastedDeclareTransaction,
-        BroadcastedDeclareTransactionV1,
         BroadcastedDeployAccountTransaction,
         BroadcastedDeployAccountTransactionV3,
         BroadcastedTransaction,
@@ -549,189 +548,8 @@ pub(crate) mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn declare_cairo_v0_class() {
-        pub const CAIRO0_DEFINITION: &[u8] =
-            include_bytes!("../../fixtures/contracts/cairo0_test.json");
-
-        pub const CAIRO0_HASH: ClassHash =
-            class_hash!("0x02c52e7084728572ea940b4df708a2684677c19fa6296de2ea7ba5327e3a84ef");
-
-        let contract_class = crate::types::ContractClass::from_serialized_def(
-            &SerializedOpaqueClassDefinition::from_slice(CAIRO0_DEFINITION),
-        )
-        .unwrap()
-        .as_cairo()
-        .unwrap();
-
-        assert_eq!(contract_class.class_hash().unwrap().hash(), CAIRO0_HASH);
-
-        let (storage, last_block_header, account_contract_address, _, _) =
-            setup_storage_with_starknet_version(StarknetVersion::new(0, 13, 1, 0)).await;
-        let context = RpcContext::for_tests().with_storage(storage);
-
-        let declare = BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V1(
-            BroadcastedDeclareTransactionV1 {
-                version: TransactionVersion::ONE_WITH_QUERY_VERSION,
-                max_fee: fee!("0x10000"),
-                signature: vec![],
-                nonce: transaction_nonce!("0x0"),
-                contract_class,
-                sender_address: account_contract_address,
-            },
-        ));
-
-        let input = SimulateTransactionInput {
-            block_id: last_block_header.number.into(),
-            transactions: vec![declare],
-            simulation_flags: crate::dto::SimulationFlags(vec![]),
-        };
-
-        const OVERALL_FEE: u64 = 15720;
-
-        let expected = crate::method::simulate_transactions::Output {
-        simulations: vec![
-            pathfinder_executor::types::TransactionSimulation{
-                trace: pathfinder_executor::types::TransactionTrace::Declare(pathfinder_executor::types::DeclareTransactionTrace {
-                    execution_info: DeclareTransactionExecutionInfo {
-                    validate_invocation: Some(
-                        pathfinder_executor::types::FunctionInvocation {
-                            call_type: Some(pathfinder_executor::types::CallType::Call),
-                            caller_address: felt!("0x0"),
-                            class_hash: Some(crate::test_setup::OPENZEPPELIN_ACCOUNT_CLASS_HASH.0),
-                            entry_point_type: Some(pathfinder_executor::types::EntryPointType::External),
-                            events: vec![],
-                            contract_address: account_contract_address,
-                            selector: Some(EntryPoint::hashed(b"__validate_declare__").0),
-                            calldata: vec![CAIRO0_HASH.0],
-                            messages: vec![],
-                            result: vec![felt!("0x56414c4944")],
-                            execution_resources: pathfinder_executor::types::InnerCallExecutionResources { l1_gas: 1, l2_gas: 0 },
-                            internal_calls: vec![],
-                            computation_resources: pathfinder_executor::types::ComputationResources{
-                                memory_holes: 1,
-                                range_check_builtin_applications: 4,
-                                steps: 203,
-                                ..Default::default()
-                            },
-                            is_reverted: false,
-                        }
-                    ),
-                    fee_transfer_invocation: Some(
-                        pathfinder_executor::types::FunctionInvocation {
-                            call_type: Some(pathfinder_executor::types::CallType::Call),
-                            caller_address: *account_contract_address.get(),
-                            class_hash: Some(ERC20_CONTRACT_DEFINITION_CLASS_HASH.0),
-                            entry_point_type: Some(pathfinder_executor::types::EntryPointType::External),
-                            events: vec![pathfinder_executor::types::Event {
-                                order: 0,
-                                data: vec![
-                                    *account_contract_address.get(),
-                                    last_block_header.sequencer_address.0,
-                                    Felt::from_u64(OVERALL_FEE),
-                                    felt!("0x0"),
-                                ],
-                                keys: vec![felt!(
-                                    "0x0099CD8BDE557814842A3121E8DDFD433A539B8C9F14BF31EBF108D12E6196E9"
-                                )],
-                            }],
-                            calldata: vec![
-                                last_block_header.sequencer_address.0,
-                                Felt::from_u64(OVERALL_FEE),
-                                call_param!("0x0").0,
-                            ],
-                            contract_address: ETH_FEE_TOKEN_ADDRESS,
-                            selector: Some(EntryPoint::hashed(b"transfer").0),
-                            messages: vec![],
-                            result: vec![felt!("0x1")],
-                            execution_resources: pathfinder_executor::types::InnerCallExecutionResources { l1_gas: 4, l2_gas: 0 },
-                            internal_calls: vec![],
-                            computation_resources: pathfinder_executor::types::ComputationResources{
-                                steps: 1354,
-                                memory_holes: 59,
-                                range_check_builtin_applications: 31,
-                                pedersen_builtin_applications: 4,
-                                ..Default::default()
-                            },
-                            is_reverted: false,
-                        }
-                    ),
-                    execution_resources: pathfinder_executor::types::ExecutionResources{
-                        computation_resources: pathfinder_executor::types::ComputationResources{
-                            steps: 1557,
-                            memory_holes: 60,
-                            range_check_builtin_applications: 35,
-                            pedersen_builtin_applications: 4,
-                            ..Default::default()
-                        },
-                        data_availability: pathfinder_executor::types::DataAvailabilityResources{
-                            l1_gas: 0,
-                            l1_data_gas: 128,
-                        },
-                        l1_gas: 15464,
-                        l1_data_gas: 128,
-                        l2_gas: 0,
-                    },},
-
-                    state_diff: pathfinder_executor::types::StateDiff {
-                        storage_diffs: BTreeMap::from([
-                            (ETH_FEE_TOKEN_ADDRESS, vec![
-                                pathfinder_executor::types::StorageDiff {
-                                    key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                                    value: storage_value!("0x000000000000000000000000000000000000ffffffffffffffffffffffffc298"),
-                                },
-                                pathfinder_executor::types::StorageDiff {
-                                    key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
-                                    value: StorageValue(OVERALL_FEE.into()),
-                                },
-                            ]),
-                        ]),
-                        deprecated_declared_classes: HashSet::from([
-                            CAIRO0_HASH
-                        ]),
-                        declared_classes: vec![],
-                        deployed_contracts: vec![],
-                        replaced_classes: vec![],
-                        migrated_compiled_classes: vec![],
-                        nonces: BTreeMap::from([
-                            (account_contract_address, contract_nonce!("0x1")),
-                        ]),
-                    },
-
-                }),
-                fee_estimation: pathfinder_executor::types::FeeEstimate {
-                    l1_gas_consumed: 15464.into(),
-                    l1_gas_price: 1.into(),
-                    l1_data_gas_consumed: 128.into(),
-                    l1_data_gas_price: 2.into(),
-                    l2_gas_consumed: 0.into(),
-                    l2_gas_price: 1.into(),
-                    overall_fee: OVERALL_FEE.into(),
-                    unit: pathfinder_executor::types::PriceUnit::Wei,
-                },
-            }
-        ],
-                initial_reads: None,
-        }.serialize(Serializer {
-            version: RpcVersion::V09,
-        }).unwrap();
-
-        let result = simulate_transactions(context, input, RpcVersion::V09)
-            .await
-            .unwrap();
-
-        pretty_assertions_sorted::assert_eq!(
-            result
-                .serialize(Serializer {
-                    version: RpcVersion::V09,
-                })
-                .unwrap(),
-            expected
-        );
-    }
-
     pub(crate) mod fixtures {
-        use pathfinder_common::{CasmHash, ContractAddress, Fee};
+        use pathfinder_common::{CasmHash, ContractAddress};
         use pathfinder_executor::types::StorageDiff;
 
         use super::*;
@@ -744,7 +562,6 @@ pub(crate) mod tests {
             casm_hash!("0x069032ff71f77284e1a0864a573007108ca5cc08089416af50f03260f5d6d4d8");
         pub const CASM_DEFINITION: &[u8] =
             include_bytes!("../../fixtures/contracts/storage_access.casm");
-        const MAX_FEE: Fee = Fee(Felt::from_u64(10_000_000));
         pub const DEPLOYED_CONTRACT_ADDRESS: ContractAddress =
             contract_address!("0x012592426632af714f43ccb05536b6044fc3e897fa55288f658731f93590e7e7");
         pub const UNIVERSAL_DEPLOYER_CLASS_HASH: ClassHash =
@@ -761,10 +578,8 @@ pub(crate) mod tests {
 
             use super::*;
             use crate::types::request::{
-                BroadcastedDeclareTransactionV2,
                 BroadcastedDeclareTransactionV3,
                 BroadcastedInvokeTransaction,
-                BroadcastedInvokeTransactionV1,
                 BroadcastedInvokeTransactionV3,
                 BroadcastedTransaction,
             };
@@ -779,12 +594,24 @@ pub(crate) mod tests {
 
                 assert_eq!(contract_class.class_hash().unwrap().hash(), SIERRA_HASH);
 
-                BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V2(
-                    BroadcastedDeclareTransactionV2 {
-                        version: TransactionVersion::TWO,
-                        max_fee: MAX_FEE,
+                BroadcastedTransaction::Declare(BroadcastedDeclareTransaction::V3(
+                    BroadcastedDeclareTransactionV3 {
+                        version: TransactionVersion::THREE,
                         signature: vec![],
                         nonce: transaction_nonce!("0x0"),
+                        resource_bounds: ResourceBounds {
+                            l1_gas: ResourceBound {
+                                max_amount: ResourceAmount(100000),
+                                max_price_per_unit: ResourcePricePerUnit(10),
+                            },
+                            l2_gas: Default::default(),
+                            l1_data_gas: Default::default(),
+                        },
+                        tip: Tip(0),
+                        paymaster_data: vec![],
+                        account_deployment_data: vec![],
+                        nonce_data_availability_mode: DataAvailabilityMode::L1,
+                        fee_data_availability_mode: DataAvailabilityMode::L1,
                         contract_class,
                         sender_address: account_contract_address,
                         compiled_class_hash: CASM_HASH,
@@ -846,12 +673,27 @@ pub(crate) mod tests {
                 universal_deployer_address: ContractAddress,
                 contract_hash: ClassHash,
             ) -> BroadcastedTransaction {
-                BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V1(
-                    BroadcastedInvokeTransactionV1 {
-                        nonce: transaction_nonce!("0x1"),
-                        version: TransactionVersion::ONE,
-                        max_fee: MAX_FEE,
+                BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V3(
+                    BroadcastedInvokeTransactionV3 {
+                        version: TransactionVersion::THREE,
                         signature: vec![],
+                        nonce: transaction_nonce!("0x1"),
+                        resource_bounds: ResourceBounds {
+                            l1_gas: ResourceBound {
+                                max_amount: ResourceAmount(10000),
+                                max_price_per_unit: ResourcePricePerUnit(100000000),
+                            },
+                            l2_gas: ResourceBound {
+                                max_amount: ResourceAmount(10000),
+                                max_price_per_unit: ResourcePricePerUnit(100000000),
+                            },
+                            l1_data_gas: None,
+                        },
+                        tip: Tip(0),
+                        paymaster_data: vec![],
+                        account_deployment_data: vec![],
+                        nonce_data_availability_mode: DataAvailabilityMode::L1,
+                        fee_data_availability_mode: DataAvailabilityMode::L1,
                         sender_address: account_contract_address,
                         calldata: vec![
                             // Number of calls
@@ -872,17 +714,34 @@ pub(crate) mod tests {
                             // calldata_len
                             call_param!("0x0"),
                         ],
+                        proof_facts: vec![],
+                        proof: Default::default(),
                     },
                 ))
             }
 
             pub fn invoke(account_contract_address: ContractAddress) -> BroadcastedTransaction {
-                BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V1(
-                    BroadcastedInvokeTransactionV1 {
-                        nonce: transaction_nonce!("0x2"),
-                        version: TransactionVersion::ONE,
-                        max_fee: MAX_FEE,
+                BroadcastedTransaction::Invoke(BroadcastedInvokeTransaction::V3(
+                    BroadcastedInvokeTransactionV3 {
+                        version: TransactionVersion::THREE,
                         signature: vec![],
+                        nonce: transaction_nonce!("0x2"),
+                        resource_bounds: ResourceBounds {
+                            l1_gas: ResourceBound {
+                                max_amount: ResourceAmount(10000),
+                                max_price_per_unit: ResourcePricePerUnit(100000000),
+                            },
+                            l2_gas: ResourceBound {
+                                max_amount: ResourceAmount(10000),
+                                max_price_per_unit: ResourcePricePerUnit(100000000),
+                            },
+                            l1_data_gas: None,
+                        },
+                        tip: Tip(0),
+                        paymaster_data: vec![],
+                        account_deployment_data: vec![],
+                        nonce_data_availability_mode: DataAvailabilityMode::L1,
+                        fee_data_availability_mode: DataAvailabilityMode::L1,
                         sender_address: account_contract_address,
                         calldata: vec![
                             // Number of calls
@@ -895,6 +754,8 @@ pub(crate) mod tests {
                             // AccountCallArray::data_len
                             call_param!("0x0"),
                         ],
+                        proof_facts: vec![],
+                        proof: Default::default(),
                     },
                 ))
             }
@@ -993,7 +854,7 @@ pub(crate) mod tests {
 
             use super::*;
 
-            const DECLARE_OVERALL_FEE: u64 = 1262;
+            const DECLARE_OVERALL_FEE: u64 = 2140;
             const DECLARE_GAS_CONSUMED: u64 = 878;
             const DECLARE_DATA_GAS_CONSUMED: u64 = 192;
 
@@ -1004,13 +865,13 @@ pub(crate) mod tests {
                 pathfinder_executor::types::TransactionSimulation {
                     fee_estimation: pathfinder_executor::types::FeeEstimate {
                         l1_gas_consumed: DECLARE_GAS_CONSUMED.into(),
-                        l1_gas_price: 1.into(),
+                        l1_gas_price: 2.into(),
                         l1_data_gas_consumed: DECLARE_DATA_GAS_CONSUMED.into(),
                         l1_data_gas_price: 2.into(),
                         l2_gas_consumed: 0.into(),
                         l2_gas_price: 1.into(),
                         overall_fee: DECLARE_OVERALL_FEE.into(),
-                        unit: pathfinder_executor::types::PriceUnit::Wei,
+                        unit: pathfinder_executor::types::PriceUnit::Fri,
                     },
                     trace: pathfinder_executor::types::TransactionTrace::Declare(
                         pathfinder_executor::types::DeclareTransactionTrace {
@@ -1088,10 +949,10 @@ pub(crate) mod tests {
             }
 
             fn declare_fee_transfer_storage_diffs() -> Vec<StorageDiffs> {
-                vec![(ETH_FEE_TOKEN_ADDRESS, vec![
+                vec![(STRK_FEE_TOKEN_ADDRESS, vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: storage_value!("0x000000000000000000000000000000000000fffffffffffffffffffffffffb12")
+                            value: storage_value!("0x000000000000000000000000000000000000fffffffffffffffffffffffff7a4")
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
@@ -1127,7 +988,7 @@ pub(crate) mod tests {
                         Felt::from_u64(DECLARE_OVERALL_FEE),
                         felt!("0x0"),
                     ],
-                    contract_address: ETH_FEE_TOKEN_ADDRESS,
+                    contract_address: STRK_FEE_TOKEN_ADDRESS,
                     selector: Some(EntryPoint::hashed(b"transfer").0),
                     internal_calls: vec![],
                     messages: vec![],
@@ -1165,7 +1026,7 @@ pub(crate) mod tests {
                 }
             }
 
-            const UNIVERSAL_DEPLOYER_OVERALL_FEE: u64 = 467;
+            const UNIVERSAL_DEPLOYER_OVERALL_FEE: u64 = 486;
             const UNIVERSAL_DEPLOYER_GAS_CONSUMED: u64 = 19;
             const UNIVERSAL_DEPLOYER_DATA_GAS_CONSUMED: u64 = 224;
             pub fn universal_deployer(
@@ -1281,11 +1142,11 @@ pub(crate) mod tests {
                 overall_fee_correction: u64,
             ) -> Vec<StorageDiffs> {
                 vec![(
-                    ETH_FEE_TOKEN_ADDRESS,
+                    STRK_FEE_TOKEN_ADDRESS,
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: StorageValue((0xfffffffffffffffffffffffff93fu128 + u128::from(overall_fee_correction)).into()),
+                            value: StorageValue((0xfffffffffffffffffffffffff5beu128 + u128::from(overall_fee_correction)).into()),
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
@@ -1471,7 +1332,7 @@ pub(crate) mod tests {
                         // calldata_len
                         call_param!("0x0").0,
                     ],
-                    contract_address: ETH_FEE_TOKEN_ADDRESS,
+                    contract_address: STRK_FEE_TOKEN_ADDRESS,
                     selector: Some(EntryPoint::hashed(b"transfer").0),
                     messages: vec![],
                     result: vec![felt!("0x1")],
@@ -1484,7 +1345,7 @@ pub(crate) mod tests {
                 }
             }
 
-            const INVOKE_OVERALL_FEE: u64 = 270;
+            const INVOKE_OVERALL_FEE: u64 = 284;
             const INVOKE_GAS_CONSUMED: u64 = 14;
             const INVOKE_DATA_GAS_CONSUMED: u64 = 128;
             pub fn invoke(
@@ -1587,11 +1448,11 @@ pub(crate) mod tests {
             }
 
             fn invoke_fee_transfer_storage_diffs(overall_fee_correction: u64) -> Vec<StorageDiffs> {
-                vec![(ETH_FEE_TOKEN_ADDRESS,
+                vec![(STRK_FEE_TOKEN_ADDRESS,
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: StorageValue((0xfffffffffffffffffffffffff831u128 + u128::from(2 * overall_fee_correction)).into()),
+                            value: StorageValue((0xfffffffffffffffffffffffff4a2u128 + u128::from(2 * overall_fee_correction)).into()),
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
@@ -1715,7 +1576,7 @@ pub(crate) mod tests {
                         Felt::from_u64(INVOKE_OVERALL_FEE - overall_fee_correction),
                         call_param!("0x0").0,
                     ],
-                    contract_address: ETH_FEE_TOKEN_ADDRESS,
+                    contract_address: STRK_FEE_TOKEN_ADDRESS,
                     selector: Some(EntryPoint::hashed(b"transfer").0),
                     messages: vec![],
                     result: vec![felt!("0x1")],
@@ -1735,7 +1596,7 @@ pub(crate) mod tests {
 
             use super::*;
 
-            const DECLARE_OVERALL_FEE: u64 = 1266;
+            const DECLARE_OVERALL_FEE: u64 = 2148;
             const DECLARE_GAS_CONSUMED: u64 = 882;
             const DECLARE_DATA_GAS_CONSUMED: u64 = 192;
             pub fn declare(
@@ -1745,13 +1606,13 @@ pub(crate) mod tests {
                 pathfinder_executor::types::TransactionSimulation {
                     fee_estimation: pathfinder_executor::types::FeeEstimate {
                         l1_gas_consumed: DECLARE_GAS_CONSUMED.into(),
-                        l1_gas_price: 1.into(),
+                        l1_gas_price: 2.into(),
                         l1_data_gas_consumed: DECLARE_DATA_GAS_CONSUMED.into(),
                         l1_data_gas_price: 2.into(),
                         l2_gas_consumed: 0.into(),
                         l2_gas_price: 1.into(),
                         overall_fee: DECLARE_OVERALL_FEE.into(),
-                        unit: pathfinder_executor::types::PriceUnit::Wei,
+                        unit: pathfinder_executor::types::PriceUnit::Fri,
                     },
                     trace: pathfinder_executor::types::TransactionTrace::Declare(
                         pathfinder_executor::types::DeclareTransactionTrace {
@@ -1830,11 +1691,11 @@ pub(crate) mod tests {
 
             fn declare_fee_transfer_storage_diffs() -> Vec<StorageDiffs> {
                 vec![(
-                    ETH_FEE_TOKEN_ADDRESS,
+                    STRK_FEE_TOKEN_ADDRESS,
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: storage_value!("0x000000000000000000000000000000000000fffffffffffffffffffffffffb12")
+                            value: storage_value!("0x000000000000000000000000000000000000fffffffffffffffffffffffff79c")
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
@@ -1870,7 +1731,7 @@ pub(crate) mod tests {
                         Felt::from_u64(DECLARE_OVERALL_FEE),
                         felt!("0x0"),
                     ],
-                    contract_address: ETH_FEE_TOKEN_ADDRESS,
+                    contract_address: STRK_FEE_TOKEN_ADDRESS,
                     selector: Some(EntryPoint::hashed(b"transfer").0),
                     internal_calls: vec![],
                     messages: vec![],
@@ -1908,7 +1769,7 @@ pub(crate) mod tests {
                 }
             }
 
-            const UNIVERSAL_DEPLOYER_OVERALL_FEE: u64 = 473;
+            const UNIVERSAL_DEPLOYER_OVERALL_FEE: u64 = 498;
             const UNIVERSAL_DEPLOYER_GAS_CONSUMED: u64 = 19;
             const UNIVERSAL_DEPLOYER_DATA_GAS_CONSUMED: u64 = 224;
             pub fn universal_deployer(
@@ -2023,11 +1884,11 @@ pub(crate) mod tests {
             fn universal_deployer_fee_transfer_storage_diffs(
                 overall_fee_correction: u64,
             ) -> Vec<StorageDiffs> {
-                vec![(ETH_FEE_TOKEN_ADDRESS,
+                vec![(STRK_FEE_TOKEN_ADDRESS,
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: StorageValue((0xfffffffffffffffffffffffff93fu128 + u128::from(overall_fee_correction)).into()),
+                            value: StorageValue((0xfffffffffffffffffffffffff5beu128 + u128::from(overall_fee_correction)).into()),
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
@@ -2213,7 +2074,7 @@ pub(crate) mod tests {
                         // calldata_len
                         call_param!("0x0").0,
                     ],
-                    contract_address: ETH_FEE_TOKEN_ADDRESS,
+                    contract_address: STRK_FEE_TOKEN_ADDRESS,
                     selector: Some(EntryPoint::hashed(b"transfer").0),
                     messages: vec![],
                     result: vec![felt!("0x1")],
@@ -2226,7 +2087,7 @@ pub(crate) mod tests {
                 }
             }
 
-            const INVOKE_OVERALL_FEE: u64 = 275;
+            const INVOKE_OVERALL_FEE: u64 = 294;
             const INVOKE_GAS_CONSUMED: u64 = 14;
             const INVOKE_DATA_GAS_CONSUMED: u64 = 128;
             pub fn invoke(
@@ -2329,11 +2190,11 @@ pub(crate) mod tests {
             }
 
             fn invoke_fee_transfer_storage_diffs(overall_fee_correction: u64) -> Vec<StorageDiffs> {
-                vec![(ETH_FEE_TOKEN_ADDRESS,
+                vec![(STRK_FEE_TOKEN_ADDRESS,
                     vec![
                         StorageDiff {
                             key: storage_address!("0x032a4edd4e4cffa71ee6d0971c54ac9e62009526cd78af7404aa968c3dc3408e"),
-                            value: StorageValue((0xfffffffffffffffffffffffff831u128 + u128::from(2 * overall_fee_correction)).into()),
+                            value: StorageValue((0xfffffffffffffffffffffffff4a2u128 + u128::from(2 * overall_fee_correction)).into()),
                         },
                         StorageDiff {
                             key: storage_address!("0x05496768776e3db30053404f18067d81a6e06f5a2b0de326e21298fd9d569a9a"),
@@ -2457,7 +2318,7 @@ pub(crate) mod tests {
                         Felt::from_u64(INVOKE_OVERALL_FEE - overall_fee_correction),
                         call_param!("0x0").0,
                     ],
-                    contract_address: ETH_FEE_TOKEN_ADDRESS,
+                    contract_address: STRK_FEE_TOKEN_ADDRESS,
                     selector: Some(EntryPoint::hashed(b"transfer").0),
                     messages: vec![],
                     result: vec![felt!("0x1")],
@@ -2816,7 +2677,7 @@ pub(crate) mod tests {
 
     #[test_log::test(tokio::test)]
     async fn calldata_limit_exceeded() {
-        use crate::types::request::{BroadcastedInvokeTransaction, BroadcastedInvokeTransactionV1};
+        use crate::types::request::{BroadcastedInvokeTransaction, BroadcastedInvokeTransactionV3};
 
         let (storage, last_block_header, account_contract_address, _, _) =
             setup_storage_with_starknet_version(StarknetVersion::new(0, 13, 4, 0)).await;
@@ -2824,15 +2685,22 @@ pub(crate) mod tests {
 
         let input = SimulateTransactionInput {
             transactions: vec![BroadcastedTransaction::Invoke(
-                BroadcastedInvokeTransaction::V1(BroadcastedInvokeTransactionV1 {
+                BroadcastedInvokeTransaction::V3(BroadcastedInvokeTransactionV3 {
                     // Calldata length over the limit, the rest of the fields should not matter.
                     calldata: vec![call_param!("0x123"); CALLDATA_LIMIT + 5],
 
                     nonce: transaction_nonce!("0x1"),
-                    version: TransactionVersion::ONE,
-                    max_fee: Fee::default(),
+                    version: TransactionVersion::THREE,
                     signature: vec![],
                     sender_address: account_contract_address,
+                    resource_bounds: ResourceBounds::default(),
+                    tip: Tip(0),
+                    paymaster_data: vec![],
+                    account_deployment_data: vec![],
+                    nonce_data_availability_mode: DataAvailabilityMode::L1,
+                    fee_data_availability_mode: DataAvailabilityMode::L1,
+                    proof_facts: vec![],
+                    proof: Default::default(),
                 }),
             )],
             block_id: BlockId::Number(last_block_header.number),
@@ -2849,7 +2717,7 @@ pub(crate) mod tests {
 
     #[test_log::test(tokio::test)]
     async fn signature_element_limit_exceeded() {
-        use crate::types::request::{BroadcastedInvokeTransaction, BroadcastedInvokeTransactionV1};
+        use crate::types::request::{BroadcastedInvokeTransaction, BroadcastedInvokeTransactionV3};
 
         let (storage, last_block_header, account_contract_address, _, _) =
             setup_storage_with_starknet_version(StarknetVersion::new(0, 13, 4, 0)).await;
@@ -2857,7 +2725,7 @@ pub(crate) mod tests {
 
         let input = SimulateTransactionInput {
             transactions: vec![BroadcastedTransaction::Invoke(
-                BroadcastedInvokeTransaction::V1(BroadcastedInvokeTransactionV1 {
+                BroadcastedInvokeTransaction::V3(BroadcastedInvokeTransactionV3 {
                     // Signature length over the limit, the rest of the fields should not matter.
                     signature: vec![
                         transaction_signature_elem!("0x123");
@@ -2865,10 +2733,17 @@ pub(crate) mod tests {
                     ],
 
                     nonce: transaction_nonce!("0x1"),
-                    version: TransactionVersion::ONE,
-                    max_fee: Fee::default(),
+                    version: TransactionVersion::THREE,
                     sender_address: account_contract_address,
                     calldata: vec![],
+                    resource_bounds: ResourceBounds::default(),
+                    tip: Tip(0),
+                    paymaster_data: vec![],
+                    account_deployment_data: vec![],
+                    nonce_data_availability_mode: DataAvailabilityMode::L1,
+                    fee_data_availability_mode: DataAvailabilityMode::L1,
+                    proof_facts: vec![],
+                    proof: Default::default(),
                 }),
             )],
             block_id: BlockId::Number(last_block_header.number),
