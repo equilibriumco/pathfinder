@@ -108,7 +108,7 @@ pub async fn sync_gas_prices(
         }
 
         provider.clear();
-        std::thread::sleep(reconnect_delay);
+        tokio::time::sleep(reconnect_delay).await;
     }
 }
 
