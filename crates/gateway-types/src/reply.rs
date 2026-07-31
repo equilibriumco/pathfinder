@@ -2302,6 +2302,8 @@ pub mod state_update {
                 .extend(other.declared_classes.iter().cloned());
             self.nonces.extend(other.nonces);
             self.replaced_classes.extend(other.replaced_classes);
+            self.migrated_compiled_classes
+                .extend(other.migrated_compiled_classes);
         }
 
         /// Deduplicates storage diffs in this state diff.
