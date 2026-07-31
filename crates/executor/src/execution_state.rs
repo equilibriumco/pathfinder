@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -147,6 +148,59 @@ struct StateReaderStage<S: StorageAdapter + Clone> {
     old_block_number_and_hash: Option<BlockHashAndNumber>,
 }
 
+/// A [`BouncerConfig`] whose block capacity cannot be reached when re-executing
+/// historical blocks.
+///
+/// As of blockifier `v0.19.0-rc.2`, [`BouncerConfig::max()`] limits
+/// `proving_gas` to `5_000_000_000`, which is a problem for retroactive
+/// re-execution of blocks that were built before the `proving_gas` limit was
+/// introduced in Starknet 0.14.0.
+///
+/// Increasing `proving_gas` on its own doesn't help, because the per-builtin
+/// proving cost is derived from this budget as `cost = proving_gas /
+/// instance_limit`.
+///
+/// However scaling both the `proving_gas` and every builtin's `instance_limit`
+/// by the same factor `K` does work for those blocks, while the cost remains
+/// the same: `cost = (K * proving_gas) / (K * instance_limit)`. The limit rises
+/// by a factor ok `K`, while the accumulated cost remains the same.
+///
+/// The fact that for those blocks the limit is now higher is not problematic
+/// since they are already part of the blockchain and we only aim at maintaining
+/// the ability to re-execute them locally.
+fn pre_0_14_0_compatible_bouncer_config(starknet_version: &StarknetVersion) -> BouncerConfig {
+    if starknet_version >= &StarknetVersion::V_0_14_0
+        || starknet_version < &StarknetVersion::V_0_13_1_1
+    {
+        return BouncerConfig::max();
+    }
+
+    // An arbitrary scaling factor value that works with the affected blocks on
+    // sepolia and mainnet.
+    const K: u64 = 10;
+    let non_zero_mul_by_k = |n: NonZeroU64| {
+        NonZeroU64::new(n.get().checked_mul(K).expect("Does not overflow"))
+            .expect("Result is nonzero")
+    };
+    let mut base = BouncerConfig::max();
+    base.block_max_capacity.proving_gas =
+        starknet_api::execution_resources::GasAmount(base.block_max_capacity.proving_gas.0 * K);
+    base.builtin_instance_limits = blockifier::bouncer::BuiltinInstanceLimits {
+        pedersen: non_zero_mul_by_k(base.builtin_instance_limits.pedersen),
+        range_check: non_zero_mul_by_k(base.builtin_instance_limits.range_check),
+        range_check96: non_zero_mul_by_k(base.builtin_instance_limits.range_check96),
+        poseidon: non_zero_mul_by_k(base.builtin_instance_limits.poseidon),
+        ecdsa: non_zero_mul_by_k(base.builtin_instance_limits.ecdsa),
+        ecop: non_zero_mul_by_k(base.builtin_instance_limits.ecop),
+        bitwise: non_zero_mul_by_k(base.builtin_instance_limits.bitwise),
+        keccak: non_zero_mul_by_k(base.builtin_instance_limits.keccak),
+        add_mod: non_zero_mul_by_k(base.builtin_instance_limits.add_mod),
+        mul_mod: non_zero_mul_by_k(base.builtin_instance_limits.mul_mod),
+        blake: non_zero_mul_by_k(base.builtin_instance_limits.blake),
+    };
+    base
+}
+
 impl ExecutionState {
     pub(super) fn starknet_state<S: StorageAdapter + Clone>(
         self,
@@ -229,7 +283,7 @@ impl ExecutionState {
             block_info,
             chain_info,
             versioned_constants.clone(),
-            BouncerConfig::max(),
+            pre_0_14_0_compatible_bouncer_config(&self.block_info.starknet_version),
         );
 
         Ok(StateReaderStage {
@@ -447,7 +501,7 @@ mod tests {
     use starknet_api::transaction::fields::ProofVersion;
     use starknet_api::versioned_constants_logic::VersionedConstantsTrait;
 
-    use super::VersionedConstantsMap;
+    use super::{pre_0_14_0_compatible_bouncer_config, ExecutionState, VersionedConstantsMap};
 
     fn bundled(version: ApiVersion) -> &'static VersionedConstants {
         VersionedConstants::get(&version).unwrap()
@@ -509,5 +563,134 @@ mod tests {
             .os_constants
             .allowed_proof_versions
             .contains(&proof1));
+    }
+
+    mod pre_0_14_0_compatible_bouncer_config {
+        use blockifier::bouncer::{BouncerConfig, BouncerWeights};
+        use pathfinder_common::macro_prelude::*;
+        use pathfinder_common::{BlockHeader, BlockNumber, ChainId, StarknetVersion};
+        use starknet_api::execution_resources::GasAmount;
+
+        use super::{pre_0_14_0_compatible_bouncer_config, ExecutionState, VersionedConstantsMap};
+        use crate::state_reader::RcStorageAdapter;
+
+        fn unscaled_proving_gas_limit_plus_1() -> BouncerWeights {
+            let unscaled_proving_gas_ceiling =
+                BouncerConfig::max().block_max_capacity.proving_gas.0;
+            BouncerWeights {
+                proving_gas: GasAmount(unscaled_proving_gas_ceiling + 1),
+                ..BouncerWeights::empty()
+            }
+        }
+
+        fn affected_versions() -> [StarknetVersion; 7] {
+            [
+                StarknetVersion::V_0_13_1_1,
+                StarknetVersion::V_0_13_2,
+                StarknetVersion::new(0, 13, 2, 1),
+                StarknetVersion::new(0, 13, 3, 0),
+                StarknetVersion::V_0_13_4,
+                StarknetVersion::new(0, 13, 5, 0),
+                StarknetVersion::new(0, 13, 6, 0),
+            ]
+        }
+
+        #[test]
+        fn proving_gas_limit_is_increased_only_where_needed() {
+            let over = unscaled_proving_gas_limit_plus_1();
+
+            // The unscaled config
+            assert!(!BouncerConfig::max().has_room(over));
+
+            for version in affected_versions() {
+                assert!(
+                    pre_0_14_0_compatible_bouncer_config(&version).has_room(over),
+                    "version: {version}",
+                );
+            }
+
+            for version in [
+                // Below affected range
+                StarknetVersion::new(0, 13, 1, 0),
+                // Above affected range
+                StarknetVersion::V_0_14_0,
+                StarknetVersion::V_0_14_1,
+                StarknetVersion::new(0, 14, 2, 0),
+                StarknetVersion::V_0_14_3,
+            ] {
+                assert!(
+                    !pre_0_14_0_compatible_bouncer_config(&version).has_room(over),
+                    "version: {version}",
+                );
+            }
+        }
+
+        #[test]
+        fn scaling_preserves_previous_gas_costs() {
+            let unscaled = BouncerConfig::max();
+
+            for version in affected_versions() {
+                let scaled = pre_0_14_0_compatible_bouncer_config(&version);
+
+                assert_eq!(
+                    scaled.builtin_gas_costs(),
+                    unscaled.builtin_gas_costs(),
+                    "version: {version}",
+                );
+                assert!(
+                    scaled.block_max_capacity.proving_gas > unscaled.block_max_capacity.proving_gas,
+                    "version: {version}",
+                );
+            }
+        }
+
+        #[test]
+        fn trace_block_context_uses_scaled_bouncer_config() {
+            // Below 10 so no historical block hash lookup is needed, the in-memory DB can
+            // be empty.
+            let block_number = BlockNumber::new_or_panic(5);
+
+            for version in affected_versions() {
+                let header = BlockHeader::builder()
+                    .number(block_number)
+                    .starknet_version(version)
+                    .finalize_with_hash(block_hash!("0xabcd"));
+
+                let storage = pathfinder_storage::StorageBuilder::in_memory().unwrap();
+                let mut db_conn = storage.connection().unwrap();
+                let db_tx = db_conn.transaction().unwrap();
+
+                let state = ExecutionState::trace(
+                    ChainId::SEPOLIA_TESTNET,
+                    header,
+                    None,
+                    VersionedConstantsMap::default(),
+                    contract_address!("0x1"),
+                    contract_address!("0x2"),
+                    None,
+                    false,
+                );
+
+                let stage = state
+                    .create_state_reader(RcStorageAdapter::new(db_tx))
+                    .unwrap();
+                let installed = &stage.block_context.bouncer_config;
+
+                assert!(
+                    installed.has_room(unscaled_proving_gas_limit_plus_1()),
+                    "{version} should have room above the unscaled limit",
+                );
+                assert_eq!(
+                    installed.builtin_gas_costs(),
+                    BouncerConfig::max().builtin_gas_costs(),
+                    "{version} should have the same builtin gas costs as the unscaled config",
+                );
+                assert_eq!(
+                    installed,
+                    &pre_0_14_0_compatible_bouncer_config(&version),
+                    "{version} should use the scaled config",
+                );
+            }
+        }
     }
 }

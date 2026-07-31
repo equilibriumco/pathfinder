@@ -521,12 +521,18 @@ impl StarknetVersion {
         self.2
     }
 
+    // A version from which retrospective block tracing with blockifier v0.19.0-rc.2
+    // triggers proving_gas overrun errors for blocks that were previously valid
+    // (because proving_gas was not a thing back then).
+    pub const V_0_13_1_1: Self = Self::new(0, 13, 1, 1);
+
     pub const V_0_13_2: Self = Self::new(0, 13, 2, 0);
 
     // A version at which block hash definition changes.
     pub const V_0_13_4: Self = Self::new(0, 13, 4, 0);
     // A version at which the state commitment formula changed to always use the
-    // Poseidon hash, even when `class_commitment` is zero.
+    // Poseidon hash, even when `class_commitment` is zero. Also a version at
+    // which proving_gas was introduced.
     pub const V_0_14_0: Self = Self::new(0, 14, 0, 0);
     pub const V_0_14_1: Self = Self::new(0, 14, 1, 0);
     pub const V_0_14_3: Self = Self::new(0, 14, 3, 0);
