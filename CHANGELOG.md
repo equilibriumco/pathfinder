@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - RPC HTTP connections that don't start a request now time out. The timeout is configurable with `--rpc.header-read-timeout` CLI option.
 
+### Fixed
+
+- Retroactive `starknet_traceBlockTransactions` on some pre-Starknet 0.14.0 blocks failed with `Internal error` due to `Block max capacity reached on fields: proving_gas`.
+
 ## [0.23.0] - 2026-07-20
 
 ### Changed
