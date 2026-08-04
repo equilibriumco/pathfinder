@@ -5,6 +5,8 @@ use starknet_gateway_client::GatewayApi;
 use starknet_gateway_types::error::SequencerError;
 
 use crate::context::RpcContext;
+use crate::error::URLStrippedHTTPClientError;
+use crate::method::opaque_gateway_error;
 use crate::types::request::BroadcastedInvokeTransaction;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -55,7 +57,7 @@ pub enum AddInvokeTransactionError {
     UnsupportedTransactionVersion,
     InvalidProof,
     UnexpectedError(String),
-    ForwardedError(reqwest::Error),
+    ForwardedError(URLStrippedHTTPClientError),
 }
 
 impl PartialEq for AddInvokeTransactionError {
@@ -153,7 +155,10 @@ impl From<SequencerError> for AddInvokeTransactionError {
             SequencerError::ReqwestError(e)
                 if e.status() == Some(reqwest::StatusCode::PAYLOAD_TOO_LARGE) =>
             {
-                AddInvokeTransactionError::ForwardedError(e)
+                AddInvokeTransactionError::ForwardedError(e.into())
+            }
+            SequencerError::ReqwestError(e) => {
+                AddInvokeTransactionError::UnexpectedError(opaque_gateway_error(e))
             }
             _ => AddInvokeTransactionError::UnexpectedError(e.to_string()),
         }

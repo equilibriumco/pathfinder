@@ -5,6 +5,8 @@
 //! be used by each JSON-RPC method to trivially create its subset of
 //! [ApplicationError] along with the boilerplate involved.
 #![macro_use]
+use std::fmt::Display;
+
 use pathfinder_common::TransactionHash;
 use serde_json::json;
 
@@ -12,6 +14,27 @@ use serde_json::json;
 pub enum TraceError {
     Received,
     Rejected,
+}
+
+#[derive(Debug)]
+pub struct URLStrippedHTTPClientError(reqwest::Error);
+
+impl From<reqwest::Error> for URLStrippedHTTPClientError {
+    fn from(e: reqwest::Error) -> Self {
+        Self(e.without_url())
+    }
+}
+
+impl Display for URLStrippedHTTPClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl URLStrippedHTTPClientError {
+    pub fn status(&self) -> Option<reqwest::StatusCode> {
+        self.0.status()
+    }
 }
 
 /// The Starknet JSON-RPC error variants.
@@ -89,7 +112,7 @@ pub enum ApplicationError {
     GatewayError(starknet_gateway_types::error::StarknetError),
     /// Gateway HTTP errors whose status is forwarded.
     #[error("Internal error")]
-    ForwardedError(reqwest::Error),
+    ForwardedError(URLStrippedHTTPClientError),
     #[error("Transaction execution error")]
     TransactionExecutionError {
         transaction_index: usize,

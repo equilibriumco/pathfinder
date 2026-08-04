@@ -5,6 +5,8 @@ use starknet_gateway_types::error::SequencerError;
 use starknet_gateway_types::request::add_transaction::SierraContractDefinition;
 
 use crate::context::RpcContext;
+use crate::error::URLStrippedHTTPClientError;
+use crate::method::opaque_gateway_error;
 use crate::types::request::BroadcastedDeclareTransaction;
 
 #[derive(Debug)]
@@ -22,7 +24,7 @@ pub enum AddDeclareTransactionError {
     UnsupportedTransactionVersion,
     UnsupportedContractClassVersion,
     UnexpectedError(String),
-    ForwardedError(reqwest::Error),
+    ForwardedError(URLStrippedHTTPClientError),
 }
 
 impl PartialEq for AddDeclareTransactionError {
@@ -153,7 +155,10 @@ impl From<SequencerError> for AddDeclareTransactionError {
             SequencerError::ReqwestError(e)
                 if e.status() == Some(reqwest::StatusCode::PAYLOAD_TOO_LARGE) =>
             {
-                AddDeclareTransactionError::ForwardedError(e)
+                AddDeclareTransactionError::ForwardedError(e.into())
+            }
+            SequencerError::ReqwestError(e) => {
+                AddDeclareTransactionError::UnexpectedError(opaque_gateway_error(e))
             }
             _ => AddDeclareTransactionError::UnexpectedError(e.to_string()),
         }

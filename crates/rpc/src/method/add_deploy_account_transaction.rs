@@ -5,6 +5,8 @@ use starknet_gateway_client::GatewayApi;
 use starknet_gateway_types::error::SequencerError;
 
 use crate::context::RpcContext;
+use crate::error::URLStrippedHTTPClientError;
+use crate::method::opaque_gateway_error;
 use crate::types::request::BroadcastedDeployAccountTransaction;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -56,7 +58,7 @@ pub enum AddDeployAccountTransactionError {
     NonAccount,
     UnsupportedTransactionVersion,
     UnexpectedError(String),
-    ForwardedError(reqwest::Error),
+    ForwardedError(URLStrippedHTTPClientError),
 }
 
 impl PartialEq for AddDeployAccountTransactionError {
@@ -146,7 +148,10 @@ impl From<SequencerError> for AddDeployAccountTransactionError {
             SequencerError::ReqwestError(e)
                 if e.status() == Some(reqwest::StatusCode::PAYLOAD_TOO_LARGE) =>
             {
-                AddDeployAccountTransactionError::ForwardedError(e)
+                AddDeployAccountTransactionError::ForwardedError(e.into())
+            }
+            SequencerError::ReqwestError(e) => {
+                AddDeployAccountTransactionError::UnexpectedError(opaque_gateway_error(e))
             }
             _ => AddDeployAccountTransactionError::UnexpectedError(e.to_string()),
         }

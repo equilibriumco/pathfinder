@@ -76,6 +76,13 @@ pub use trace_transaction::trace_transaction;
 
 const REORG_SUBSCRIPTION_NAME: &str = "starknet_subscriptionReorg";
 
+/// Describes a failed gateway request without leaking operator details to the
+/// caller.
+pub(crate) fn opaque_gateway_error(error: reqwest::Error) -> String {
+    tracing::debug!(?error, "Gateway request failed");
+    "Gateway request failed".to_owned()
+}
+
 /// A helper function used in a few RPC methods.
 pub(crate) fn get_latest_block_or_genesis(
     storage: &pathfinder_storage::Storage,
@@ -91,4 +98,76 @@ pub(crate) fn get_latest_block_or_genesis(
     db.block_number(pathfinder_common::BlockId::Latest)
         .context("Failed to get latest block number")
         .map(|latest| latest.unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use reqwest::{ResponseBuilderExt, StatusCode};
+    use starknet_gateway_types::error::SequencerError;
+
+    use super::{add_declare_transaction, add_deploy_account_transaction, add_invoke_transaction};
+    use crate::error::ApplicationError;
+    use crate::RpcVersion;
+
+    const GATEWAY_HOST: &str = "gateway-host.local";
+    const GATEWAY_TOKEN: &str = "secret-gateway-token";
+
+    /// A gateway error carrying the request URL.
+    fn gateway_error(status: StatusCode) -> SequencerError {
+        let url =
+            format!("http://{GATEWAY_HOST}:9000/gateway/add_transaction?token={GATEWAY_TOKEN}");
+        let response = http::Response::builder()
+            .status(status)
+            .url(reqwest::Url::parse(&url).unwrap())
+            .body(String::new())
+            .unwrap();
+        let error = reqwest::Response::from(response)
+            .error_for_status()
+            .unwrap_err();
+        assert!(error.to_string().contains(GATEWAY_HOST));
+        SequencerError::ReqwestError(error)
+    }
+
+    fn rpc_error_data(
+        error: impl Fn() -> SequencerError,
+    ) -> Vec<(serde_json::Value, ApplicationError)> {
+        let errors: Vec<ApplicationError> = vec![
+            add_invoke_transaction::AddInvokeTransactionError::from(error()).into(),
+            add_declare_transaction::AddDeclareTransactionError::from(error()).into(),
+            add_deploy_account_transaction::AddDeployAccountTransactionError::from(error()).into(),
+        ];
+
+        errors
+            .into_iter()
+            .map(|error| (error.data(RpcVersion::V09).unwrap(), error))
+            .collect()
+    }
+
+    #[test]
+    fn forwarded_error_data_does_not_include_gateway_url() {
+        for (data, app_error) in rpc_error_data(|| gateway_error(StatusCode::PAYLOAD_TOO_LARGE)) {
+            let error = data["error"].as_str().unwrap();
+            assert!(!error.contains(GATEWAY_HOST), "{error}");
+            assert!(!error.contains(GATEWAY_TOKEN), "{error}");
+            assert!(error.contains("413"), "{error}");
+
+            let ApplicationError::ForwardedError(error) = app_error else {
+                unreachable!();
+            };
+            assert_eq!(error.status(), Some(StatusCode::PAYLOAD_TOO_LARGE));
+        }
+    }
+
+    #[test]
+    fn other_gateway_errors_are_opaque_to_the_caller() {
+        for status in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            for (data, _) in rpc_error_data(|| gateway_error(status)) {
+                assert_eq!(data, serde_json::json!("Gateway request failed"));
+            }
+        }
+    }
 }
