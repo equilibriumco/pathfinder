@@ -39,6 +39,7 @@ pub use pending::{FinalizedTxData, PendingBlocks, PendingData};
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
+use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::Service;
 use tower_http::cors::CorsLayer;
 use tower_http::ServiceBuilderExt;
@@ -157,7 +158,8 @@ impl RpcServer {
             .layer(HandleErrorLayer::new(handle_middleware_errors))
             // make sure to set request ids before the request reaches `TraceLayer`
             .set_x_request_id(middleware::request_id::RequestIdSource::default())
-            .concurrency_limit(self.max_connections)
+            // The limit is global and applied to all the routes combined.
+            .layer(GlobalConcurrencyLimitLayer::new(self.max_connections))
             .layer(DefaultBodyLimit::max(
                 self.context.config.request_max_size.get(),
             ))
@@ -1427,6 +1429,53 @@ mod tests {
             .unwrap()
             .status();
         assert!(!status.is_success());
+    }
+
+    #[tokio::test]
+    async fn concurrency_limit_is_shared_between_routes() {
+        use tokio::io::AsyncWriteExt;
+
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let context = RpcContext::for_tests();
+        let (_jh, addr) = RpcServer::new(addr, context, RpcVersion::V09)
+            .with_max_connections(1)
+            .spawn(&PathBuf::default())
+            .await
+            .unwrap();
+
+        // Do not send the body yet. Make sure the request is accepted so that the
+        // global limit is hit.
+        let mut slow_request = tokio::net::TcpStream::connect(addr).await.unwrap();
+        slow_request
+            .write_all(
+                b"POST /rpc/v0_9 HTTP/1.1\r\n\
+              Host: localhost\r\n\
+              Content-Type: application/json\r\n\
+              Content-Length: 2\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        slow_request.flush().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // This request to a different route should be blocked because of the global
+        // limit.
+        let url = format!("http://{addr}/");
+        let client = reqwest::Client::new();
+
+        timeout(Duration::from_secs(1), client.get(url.clone()).send())
+            .await
+            .unwrap_err();
+
+        // Finish the first request so that we're under the limit again.
+        slow_request.write_all(b"{}").await.unwrap();
+        slow_request.flush().await.unwrap();
+        let status = timeout(Duration::from_secs(1), client.get(url).send())
+            .await
+            .expect("Timeout")
+            .unwrap()
+            .status();
+        assert!(status.is_success());
     }
 
     enum Api {
