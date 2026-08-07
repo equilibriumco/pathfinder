@@ -75,6 +75,48 @@ impl Subscriptions {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         SubscriptionId(id)
     }
+
+    /// Aborts all of the subscriptions.
+    ///
+    /// Dropping a [`tokio::task::JoinHandle`] does not abort its task, and a
+    /// subscription task only notices that its connection is gone when its next
+    /// send fails - which never happens for a subscription that has nothing to
+    /// send. Without this the tasks (and the connection's slot in
+    /// [`WebsocketContext::connection_limit`], which they keep alive through
+    /// their sender handles) would outlive the connection.
+    pub fn abort_all(&self) {
+        // Take the handles out before aborting any of them. `abort` can drop the
+        // task's future inline, which runs the task's `SubscriptionsGuard` and
+        // reenters `remove` - deadlocking if a shard lock is held here.
+        let ids: Vec<_> = self
+            .subscriptions
+            .iter()
+            .map(|entry| *entry.key())
+            .collect();
+        for id in ids {
+            if let Some((_, handle)) = self.subscriptions.remove(&id) {
+                handle.abort();
+            }
+        }
+    }
+}
+
+/// Aborts a connection's subscriptions once its read loop is done.
+struct AbortSubscriptionsGuard(Arc<Subscriptions>);
+
+impl Drop for AbortSubscriptionsGuard {
+    fn drop(&mut self) {
+        self.0.abort_all();
+    }
+}
+
+/// Ties a task's lifetime to the scope holding this guard.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// This trait is the main entry point for subscription endpoint
@@ -326,7 +368,10 @@ where
 
             // Subscribe to new blocks. Receive the first subscription message.
             let (tx1, mut rx1) = mpsc::channel::<SubscriptionMessage<T::Notification>>(1024);
-            util::task::spawn({
+            // Tied to this task's lifetime: `T::subscribe` holds a websocket sender
+            // and would otherwise keep running (and keep the connection's resources
+            // alive) until its next send fails.
+            let _subscribe_task = AbortOnDrop(util::task::spawn({
                 let params = params.clone();
                 let context = router.context.clone();
                 let rpc_version = router.version;
@@ -337,7 +382,7 @@ where
                     }
                     tracing::trace!("Subscription task exited");
                 }
-            }.instrument(tracing::debug_span!("subscribe_task")));
+            }.instrument(tracing::debug_span!("subscribe_task"))));
             let first_msg = match rx1.recv().await {
                 Some(msg) => msg,
                 None => {
@@ -509,6 +554,10 @@ pub fn handle_json_rpc_socket(
     let subscriptions = Arc::new(Subscriptions::default());
     // Read and handle messages from the websocket.
     util::task::spawn(async move {
+        // The read loop returning means the connection is gone, so its
+        // subscriptions have to go with it. This is a guard rather than a call
+        // after the loop because the loop has several early returns.
+        let _abort_subscriptions = AbortSubscriptionsGuard(Arc::clone(&subscriptions));
         loop {
             let request = match ws_rx.recv().await {
                 Some(Ok(Message::Text(msg))) => msg.as_str().to_string(),
@@ -988,6 +1037,56 @@ mod tests {
     };
     use crate::types::request::SubscriptionBlockId;
     use crate::{Notifications, RpcVersion};
+
+    /// A quiet subscription has nothing to send, so it never notices that the
+    /// connection is gone. Closing the connection has to abort it explicitly.
+    #[tokio::test]
+    async fn closing_the_connection_aborts_its_subscriptions() {
+        struct NeverSends;
+
+        impl RpcSubscriptionFlow for NeverSends {
+            type Params = Params;
+            type Notification = serde_json::Value;
+
+            async fn subscribe(
+                _state: RpcContext,
+                _version: RpcVersion,
+                _params: Self::Params,
+                _tx: mpsc::Sender<SubscriptionMessage<Self::Notification>>,
+            ) -> Result<(), crate::jsonrpc::RpcError> {
+                std::future::pending().await
+            }
+        }
+
+        let router = setup(0, WebsocketHistory::Unlimited, NeverSends).await;
+        let (sender_tx, mut sender_rx) = mpsc::channel(1024);
+        let (receiver_tx, receiver_rx) = mpsc::channel(1024);
+        handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
+        receiver_tx
+            .send(Ok(Message::Text(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "test",
+                    "params": {}
+                })
+                .to_string()
+                .into(),
+            )))
+            .await
+            .unwrap();
+        // Wait for the subscription to be established.
+        sender_rx.recv().await.unwrap().unwrap();
+
+        // Close the connection. The subscription task must be aborted, dropping
+        // the sender handle it holds, which in turn closes the channel.
+        drop(receiver_tx);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while sender_rx.recv().await.is_some() {}
+        })
+        .await
+        .expect("the subscription outlived the connection");
+    }
 
     #[tokio::test]
     async fn test_error_returned_from_catch_up() {

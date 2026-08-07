@@ -189,7 +189,9 @@ mod tests {
 
     #[tokio::test]
     async fn reorg() {
-        let (_, mut rx, subscription_id, router) = happy_path_test(1).await;
+        // The sender has to stay alive: dropping it closes the connection, which
+        // tears down its subscriptions.
+        let (_receiver_tx, mut rx, subscription_id, router) = happy_path_test(1).await;
         router
             .context
             .notifications
