@@ -1569,6 +1569,41 @@ Note that the 'unlimited' setting is meant primarily for testing and not recomme
         env = "PATHFINDER_WEBSOCKET_SEND_TIMEOUT"
     )]
     pub send_timeout: Duration,
+    #[arg(
+        long = "rpc.websocket.max-connections",
+        long_help = "Sets the limit for the number of concurrent websocket connections. Upgrade \
+                     requests over the limit are rejected with HTTP 503.",
+        default_value = "1024",
+        env = "PATHFINDER_WEBSOCKET_MAX_CONNECTIONS"
+    )]
+    pub max_connections: NonZeroUsize,
+    #[arg(
+        long = "rpc.websocket.initial-frame-timeout",
+        long_help = "Websocket connections that don't send any frame within this many seconds of \
+                     being established are closed. Set to 0 to disable.",
+        default_value = "30",
+        value_parser = parse_fractional_seconds,
+        env = "PATHFINDER_WEBSOCKET_INITIAL_FRAME_TIMEOUT"
+    )]
+    pub initial_frame_timeout: Duration,
+    #[arg(
+        long = "rpc.websocket.ping-interval",
+        long_help = "How many seconds to wait for a frame from the peer before sending a \
+                     websocket ping to check that it is still alive. Set to 0 to disable the \
+                     keepalive.",
+        default_value = "30",
+        value_parser = parse_fractional_seconds,
+        env = "PATHFINDER_WEBSOCKET_PING_INTERVAL"
+    )]
+    pub ping_interval: Duration,
+    #[arg(
+        long = "rpc.websocket.max-missed-pings",
+        long_help = "Number of consecutive unanswered pings after which a websocket connection is \
+                     closed.",
+        default_value = "2",
+        env = "PATHFINDER_WEBSOCKET_MAX_MISSED_PINGS"
+    )]
+    pub max_missed_pings: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
