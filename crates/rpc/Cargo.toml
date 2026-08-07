@@ -46,6 +46,7 @@ starknet-types-core = { workspace = true }
 starknet_api = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "process"] }
+tokio-util = { workspace = true }
 tower = { workspace = true, features = ["filter", "util", "limit", "timeout"] }
 tower-http = { workspace = true, features = ["cors", "limit", "request-id", "trace", "util"] }
 tracing = { workspace = true }

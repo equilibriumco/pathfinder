@@ -1528,6 +1528,136 @@ mod tests {
         );
     }
 
+    /// Spawns a server whose websocket keepalive settings are taken from
+    /// `configure`, and connects to it.
+    async fn ws_keepalive_server(
+        configure: impl FnOnce(&mut context::WebsocketContext),
+    ) -> (JoinHandle<anyhow::Result<()>>, String) {
+        use crate::jsonrpc::websocket::WebsocketHistory;
+
+        let mut ws_ctx = context::WebsocketContext::for_test(WebsocketHistory::Unlimited);
+        configure(&mut ws_ctx);
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let context = RpcContext::for_tests().with_websockets(ws_ctx);
+        let (jh, addr) = RpcServer::new(addr, context, RpcVersion::V09)
+            .spawn(&PathBuf::default())
+            .await
+            .unwrap();
+        (jh, format!("ws://{addr}/ws/rpc/v0_9"))
+    }
+
+    #[tokio::test]
+    async fn websocket_that_never_sends_a_frame_is_closed() {
+        use futures::StreamExt;
+
+        let (_jh, url) = ws_keepalive_server(|ws_ctx| {
+            ws_ctx.initial_frame_timeout = Duration::from_millis(200);
+            // Isolate the initial deadline from the keepalive.
+            ws_ctx.ping_interval = Duration::ZERO;
+        })
+        .await;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        // Send nothing at all. The server must hang up on its own.
+        timeout(Duration::from_secs(5), async {
+            while ws.next().await.transpose().unwrap_or(None).is_some() {}
+        })
+        .await
+        .expect("the server did not close an unused connection");
+    }
+
+    /// A subscribed client only ever receives, so it must not be mistaken for
+    /// an idle one. `tokio_tungstenite` answers the server's pings
+    /// automatically.
+    #[tokio::test]
+    async fn subscribed_websocket_that_sends_nothing_is_kept_open() {
+        use futures::{SinkExt, StreamExt};
+
+        let (_jh, url) = ws_keepalive_server(|ws_ctx| {
+            ws_ctx.initial_frame_timeout = Duration::from_millis(200);
+            ws_ctx.ping_interval = Duration::from_millis(100);
+        })
+        .await;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "starknet_subscribeNewHeads",
+                "params": {}
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        // The subscription confirmation.
+        ws.next().await.unwrap().unwrap();
+
+        // Well past `max_missed_pings` ping intervals with nothing sent by the
+        // client. Only pings should arrive, and the connection must stay open.
+        let closed = timeout(Duration::from_secs(2), async {
+            while let Some(msg) = ws.next().await {
+                if let tokio_tungstenite::tungstenite::Message::Close(_) = msg.unwrap() {
+                    break;
+                }
+            }
+        })
+        .await;
+        assert!(
+            closed.is_err(),
+            "a subscribed connection was closed while it was answering pings"
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_that_does_not_answer_pings_is_closed() {
+        use futures::{SinkExt, StreamExt};
+
+        let (_jh, url) = ws_keepalive_server(|ws_ctx| {
+            // Long enough that it cannot be what closes the connection.
+            ws_ctx.initial_frame_timeout = Duration::from_secs(30);
+            ws_ctx.ping_interval = Duration::from_millis(100);
+            ws_ctx.max_missed_pings = 2;
+        })
+        .await;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "starknet_subscribeNewHeads",
+                "params": {}
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+
+        // Leave the stream unpolled: `tokio_tungstenite` only answers pings while
+        // it is being polled, so the peer looks unresponsive. Wait for more than
+        // `max_missed_pings` intervals before looking at what arrived.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let closed = timeout(Duration::from_secs(5), async {
+            while let Some(msg) = ws.next().await {
+                match msg {
+                    Ok(tokio_tungstenite::tungstenite::Message::Close(_)) | Err(_) => break,
+                    Ok(_) => continue,
+                }
+            }
+        })
+        .await;
+        assert!(
+            closed.is_ok(),
+            "an unresponsive connection was not closed after {} missed pings",
+            2
+        );
+    }
+
     enum Api {
         HttpOnly,
         WebsocketOnly,

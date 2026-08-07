@@ -12,10 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Concurrently open RPC websocket connections are now limited to 1024 by default, configurable with the `--rpc.websocket.max-connections` CLI option. Upgrade requests over the limit are rejected with HTTP 503.
+- RPC websocket connections that don't send anything after being established now time out, configurable with the `--rpc.websocket.initial-frame-timeout` CLI option.
+- The RPC server now pings websocket peers that have been quiet for `--rpc.websocket.ping-interval` and closes connections that leave `--rpc.websocket.max-missed-pings` pings unanswered.
+- New metrics: `rpc_websocket_connections` (gauge), `rpc_websocket_connections_rejected_total` and `rpc_websocket_connections_closed_total` (labelled with `reason`).
 
 ### Fixed
 
 - `--max-rpc-connections` is now shared across all routes.
+- Subscriptions are now torn down when their websocket connection closes, instead of when they next try to send.
 
 ## [0.23.1] - 2026-08-03
 
