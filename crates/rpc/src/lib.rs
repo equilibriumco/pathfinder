@@ -1478,6 +1478,56 @@ mod tests {
         assert!(status.is_success());
     }
 
+    #[tokio::test]
+    async fn websocket_connections_are_limited() {
+        use std::sync::Arc;
+
+        use tokio::sync::Semaphore;
+
+        use crate::jsonrpc::websocket::WebsocketHistory;
+
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let context = RpcContext::for_tests().with_websockets(context::WebsocketContext {
+            connection_limit: Arc::new(Semaphore::new(1)),
+            ..context::WebsocketContext::for_test(WebsocketHistory::Unlimited)
+        });
+        let (_jh, addr) = RpcServer::new(addr, context, RpcVersion::V09)
+            .spawn(&PathBuf::default())
+            .await
+            .unwrap();
+
+        let url = format!("ws://{addr}/ws/rpc/v0_9");
+        let first = tokio_tungstenite::connect_async(url.clone()).await;
+        assert!(first.is_ok(), "the first connection should be accepted");
+
+        // The limit is reached, so the upgrade is refused outright rather than
+        // completed and then closed.
+        let err = tokio_tungstenite::connect_async(url.clone())
+            .await
+            .expect_err("the second connection should be rejected");
+        match err {
+            tokio_tungstenite::tungstenite::Error::Http(response) => {
+                assert_eq!(response.status(), http::StatusCode::SERVICE_UNAVAILABLE);
+            }
+            other => panic!("Expected an HTTP 503, got {other:?}"),
+        }
+
+        // Closing the first connection frees its slot up again.
+        drop(first);
+        let mut connected = false;
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if tokio_tungstenite::connect_async(url.clone()).await.is_ok() {
+                connected = true;
+                break;
+            }
+        }
+        assert!(
+            connected,
+            "the slot was not released after the socket closed"
+        );
+    }
+
     enum Api {
         HttpOnly,
         WebsocketOnly,

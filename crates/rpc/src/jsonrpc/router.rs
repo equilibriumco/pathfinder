@@ -211,16 +211,22 @@ pub async fn rpc_handler(
 ) -> impl axum::response::IntoResponse {
     match ws {
         Ok(ws) => {
-            let (send_timeout, subscription_max_size) = match state.context.websocket {
-                Some(ref ws_cfg) => (ws_cfg.send_timeout, ws_cfg.subscription_max_size),
-                None => {
-                    return StatusCode::FORBIDDEN.into_response();
-                }
+            let Some(ws_cfg) = state.context.websocket.clone() else {
+                return StatusCode::FORBIDDEN.into_response();
             };
 
-            ws.max_message_size(subscription_max_size)
+            // Reserve the connection's slot before upgrading, so that a client over
+            // the limit gets a rejection instead of a socket that is closed right
+            // after it is established.
+            let Some(connection_guard) = ws_cfg.try_acquire_connection() else {
+                metrics::counter!("rpc_websocket_connections_rejected_total").increment(1);
+                tracing::debug!("Rejecting websocket upgrade: connection limit reached");
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            };
+
+            ws.max_message_size(ws_cfg.subscription_max_size)
                 .on_upgrade(async move |ws| {
-                    let (ws_tx, ws_rx) = split_ws(ws, state.version, send_timeout);
+                    let (ws_tx, ws_rx) = split_ws(ws, state.version, &ws_cfg, connection_guard);
                     handle_json_rpc_socket(state, ws_tx, ws_rx);
                 })
         }

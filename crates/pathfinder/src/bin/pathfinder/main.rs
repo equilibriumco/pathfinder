@@ -302,6 +302,9 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
             initial_frame_timeout: config.websocket.initial_frame_timeout,
             ping_interval: config.websocket.ping_interval,
             max_missed_pings: config.websocket.max_missed_pings,
+            connection_limit: Arc::new(tokio::sync::Semaphore::new(
+                config.websocket.max_connections.get(),
+            )),
         })
     } else {
         context

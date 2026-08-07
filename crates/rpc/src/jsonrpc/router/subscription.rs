@@ -11,14 +11,14 @@ use pathfinder_serde::AsBoundedVec;
 use serde::de::DeserializeSeed as _;
 use serde_json::value::RawValue;
 use tokio::sync::{mpsc, RwLock};
-use tokio::time::{timeout, Duration};
+use tokio::time::timeout;
 use tracing::Instrument;
 
 use super::{run_concurrently, RpcRouter};
 use crate::context::RpcContext;
 use crate::dto::{DeserializeForVersion, SerializeForVersion};
 use crate::error::ApplicationError;
-use crate::jsonrpc::websocket::WebsocketHistory;
+use crate::jsonrpc::websocket::{ConnectionGuard, WebsocketContext, WebsocketHistory};
 use crate::jsonrpc::{RpcError, RpcRequest, RpcResponse};
 use crate::types::request::SubscriptionBlockId;
 use crate::{RpcVersion, SubscriptionId};
@@ -432,42 +432,53 @@ type WsReceiver = mpsc::Receiver<Result<Message, axum::Error>>;
 pub fn split_ws(
     ws: WebSocket,
     version: RpcVersion,
-    egress_timeout: Duration,
+    ws_cfg: &WebsocketContext,
+    connection_guard: ConnectionGuard,
 ) -> (WsSender, WsReceiver) {
+    // `WebSocket::split` hands both halves a `BiLock` on the socket, so the socket
+    // is only closed once both of the tasks below are gone. Sharing the guard
+    // between them therefore releases the connection's slot exactly when the
+    // socket is closed, rather than when whichever task finishes first ends.
+    let connection_guard = Arc::new(connection_guard);
+    let egress_timeout = ws_cfg.send_timeout;
     let (mut ws_sender, mut ws_receiver) = ws.split();
     let mut send_with_timeout = async move |msg| timeout(egress_timeout, ws_sender.send(msg)).await;
     // Send messages to the websocket using an MPSC channel.
     let (sender_tx, mut sender_rx) = mpsc::channel::<Result<Message, RpcResponse>>(1024);
-    util::task::spawn_with_cancel(move |cancellation_token| {
-        async move {
-            loop {
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => {
-                        // Ignore the error since we're shutting down anyway.
-                        let _ = send_with_timeout(Message::Close(Some(CloseFrame {
-                            code: close_code::NORMAL,
-                            reason: Utf8Bytes::from_static("Server shutdown"),
-                        }))).await.ok();
-                        break;
-                    }
-                    msg = sender_rx.recv() => {
-                        let Some(msg) = msg else {
+    util::task::spawn_with_cancel({
+        let connection_guard = connection_guard.clone();
+        move |cancellation_token| {
+            async move {
+                let _connection_guard = connection_guard;
+                loop {
+                    tokio::select! {
+                        _ = cancellation_token.cancelled() => {
+                            // Ignore the error since we're shutting down anyway.
+                            let _ = send_with_timeout(Message::Close(Some(CloseFrame {
+                                code: close_code::NORMAL,
+                                reason: Utf8Bytes::from_static("Server shutdown"),
+                            }))).await.ok();
                             break;
-                        };
-                        match msg {
-                            Ok(msg) => {
-                                if let Err(e) = send_with_timeout(msg).await {
-                                    tracing::debug!(error=?e, "Error sending websocket message");
-                                    break;
+                        }
+                        msg = sender_rx.recv() => {
+                            let Some(msg) = msg else {
+                                break;
+                            };
+                            match msg {
+                                Ok(msg) => {
+                                    if let Err(e) = send_with_timeout(msg).await {
+                                        tracing::debug!(error=?e, "Error sending websocket message");
+                                        break;
+                                    }
                                 }
-                            }
-                            Err(e) => {
-                                let data = serde_json::to_string(&e.serialize(crate::dto::Serializer::new(version)).unwrap()).unwrap();
-                                if let Err(e) = send_with_timeout(Message::Text(data.into()))
-                                    .await
-                                {
-                                    tracing::debug!(error=?e, "Error sending websocket error message");
-                                    break;
+                                Err(e) => {
+                                    let data = serde_json::to_string(&e.serialize(crate::dto::Serializer::new(version)).unwrap()).unwrap();
+                                    if let Err(e) = send_with_timeout(Message::Text(data.into()))
+                                        .await
+                                    {
+                                        tracing::debug!(error=?e, "Error sending websocket error message");
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -479,6 +490,7 @@ pub fn split_ws(
     // Receive messages from the websocket using an MPSC channel.
     let (receiver_tx, receiver_rx) = mpsc::channel::<Result<Message, axum::Error>>(1024);
     util::task::spawn(async move {
+        let _connection_guard = connection_guard;
         while let Some(msg) = ws_receiver.next().await {
             if let Err(e) = receiver_tx.send(msg).await {
                 tracing::debug!(error=?e, "Error sending incoming websocket over channel");

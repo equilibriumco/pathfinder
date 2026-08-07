@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Concurrently open RPC websocket connections are now limited to 1024 by default, configurable with the `--rpc.websocket.max-connections` CLI option. Upgrade requests over the limit are rejected with HTTP 503.
+
 ### Fixed
 
 - `--max-rpc-connections` is now shared across all routes.
