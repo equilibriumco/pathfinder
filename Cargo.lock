@@ -9084,6 +9084,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.29.0",
+ "tokio-util",
  "tower",
  "tower-http",
  "tracing",
