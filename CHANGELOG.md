@@ -13,12 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `--rpc.gateway-trace-timeout` CLI option (default 30s) bounding how long `starknet_traceTransaction` and `starknet_traceBlockTransactions` may spend on the feeder gateway fallback path.
 - Concurrently open RPC websocket connections are now limited to 1024 by default, configurable with the `--rpc.websocket.max-connections` CLI option. Upgrade requests over the limit are rejected with HTTP 503.
+- RPC websocket connections that don't send anything after being established now time out, configurable with the `--rpc.websocket.initial-frame-timeout` CLI option.
+- The RPC server now pings websocket peers that have been quiet for `--rpc.websocket.ping-interval` and closes connections that leave `--rpc.websocket.max-missed-pings` pings unanswered.
+- New metrics: `rpc_websocket_connections` (gauge), `rpc_websocket_connections_rejected_total` and `rpc_websocket_connections_closed_total` (labelled with `reason`).
 
 ### Fixed
 
 - `--max-rpc-connections` is now shared across all routes.
 - A batch request could open more subscriptions than `--rpc.websocket.max-subscriptions` allows, because the requests within a batch are handled concurrently and each of them checked the limit before any of them counted towards it.
 - `starknet_traceTransaction` and `starknet_traceBlockTransactions` requests that fall back to the feeder gateway could hang indefinitely on a slow or unresponsive sequencer (the gateway client retries transport errors with an unbounded exponential backoff), holding RPC tasks and letting a public-network client exhaust the RPC concurrency budget. These requests are now bounded by `--rpc.gateway-trace-timeout` and bail out early on graceful shutdown.
+- Subscriptions are now torn down when their websocket connection closes, instead of when they next try to send.
 
 ## [0.23.1] - 2026-08-03
 

@@ -12,6 +12,7 @@ use serde::de::DeserializeSeed as _;
 use serde_json::value::RawValue;
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use super::{run_concurrently, RpcRouter};
@@ -522,11 +523,19 @@ pub fn split_ws(
     ws_cfg: &WebsocketContext,
 ) -> (WsSender, WsReceiver, SocketTasks) {
     let egress_timeout = ws_cfg.send_timeout;
+    // The reader cancels this to bring the sender task down with it. Neither task
+    // can close the socket alone.
+    let connection_token = CancellationToken::new();
+    // `Duration::ZERO` disables these, so both are `Option`s.
+    let initial_frame_timeout = Some(ws_cfg.initial_frame_timeout).filter(|d| !d.is_zero());
+    let ping_interval = Some(ws_cfg.ping_interval).filter(|d| !d.is_zero());
+    let max_missed_pings = ws_cfg.max_missed_pings;
     let (mut ws_sender, mut ws_receiver) = ws.split();
     let mut send_with_timeout = async move |msg| timeout(egress_timeout, ws_sender.send(msg)).await;
     // Send messages to the websocket using an MPSC channel.
     let (sender_tx, mut sender_rx) = mpsc::channel::<Result<Message, RpcResponse>>(1024);
     let sender_task = util::task::spawn_with_cancel({
+        let connection_token = connection_token.clone();
         move |cancellation_token| {
             async move {
                 loop {
@@ -536,6 +545,15 @@ pub fn split_ws(
                             let _ = send_with_timeout(Message::Close(Some(CloseFrame {
                                 code: close_code::NORMAL,
                                 reason: Utf8Bytes::from_static("Server shutdown"),
+                            }))).await.ok();
+                            break;
+                        }
+                        _ = connection_token.cancelled() => {
+                            // A `CancellationToken` carries no payload, so the precise reason
+                            // stays in the reader's log.
+                            let _ = send_with_timeout(Message::Close(Some(CloseFrame {
+                                code: close_code::NORMAL,
+                                reason: Utf8Bytes::from_static("Connection idle"),
                             }))).await.ok();
                             break;
                         }
@@ -568,12 +586,57 @@ pub fn split_ws(
     });
     // Receive messages from the websocket using an MPSC channel.
     let (receiver_tx, receiver_rx) = mpsc::channel::<Result<Message, axum::Error>>(1024);
-    let reader_task = util::task::spawn(async move {
-        while let Some(msg) = ws_receiver.next().await {
-            if let Err(e) = receiver_tx.send(msg).await {
-                tracing::debug!(error=?e, "Error sending incoming websocket over channel");
-                break;
-            }
+    let reader_task = util::task::spawn({
+        let ping_tx = sender_tx.clone();
+        async move {
+            // A subscribed client only receives, so silence does not mean the
+            // peer is gone. An unused connection gets the shorter deadline until
+            // its first frame. After that the server pings to check on the peer.
+            let mut deadline = initial_frame_timeout;
+            let mut awaiting_first_frame = true;
+            let mut missed_pings = 0;
+            let close_reason = loop {
+                let received = match deadline {
+                    Some(deadline) => match timeout(deadline, ws_receiver.next()).await {
+                        Ok(received) => received,
+                        Err(_) => {
+                            if awaiting_first_frame {
+                                break "no_initial_frame";
+                            }
+                            missed_pings += 1;
+                            if missed_pings > max_missed_pings {
+                                break "unresponsive";
+                            }
+                            if ping_tx
+                                .send(Ok(Message::Ping(Default::default())))
+                                .await
+                                .is_err()
+                            {
+                                break "closing";
+                            }
+                            continue;
+                        }
+                    },
+                    None => ws_receiver.next().await,
+                };
+                let Some(msg) = received else {
+                    break "peer";
+                };
+                awaiting_first_frame = false;
+                deadline = ping_interval;
+                missed_pings = 0;
+                if let Err(e) = receiver_tx.send(msg).await {
+                    tracing::debug!(error=?e, "Error sending incoming websocket over channel");
+                    break "closing";
+                }
+            };
+            tracing::debug!(reason = close_reason, "Websocket connection closed");
+            metrics::counter!(
+                "rpc_websocket_connections_closed_total",
+                "reason" => close_reason,
+            )
+            .increment(1);
+            connection_token.cancel();
         }
     });
     let tasks = SocketTasks {
@@ -1253,7 +1316,7 @@ mod tests {
         // Close the connection. Aborting the subscription task drops the sender
         // it holds, which closes the channel.
         drop(receiver_tx);
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
             while sender_rx.recv().await.is_some() {}
         })
         .await
