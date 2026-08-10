@@ -295,12 +295,15 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
     );
 
     let context = if config.websocket.enabled {
-        context.with_websockets(WebsocketContext::new(
-            config.websocket.max_history.into(),
-            config.websocket.max_subscriptions.get(),
-            config.websocket.subscription_request_max_size.get(),
-            config.websocket.send_timeout,
-        ))
+        context.with_websockets(WebsocketContext {
+            max_history: config.websocket.max_history.into(),
+            max_subscriptions: config.websocket.max_subscriptions.get(),
+            subscription_max_size: config.websocket.subscription_request_max_size.get(),
+            send_timeout: config.websocket.send_timeout,
+            initial_frame_timeout: config.websocket.initial_frame_timeout,
+            ping_interval: config.websocket.ping_interval,
+            max_missed_pings: config.websocket.max_missed_pings,
+        })
     } else {
         context
     };
