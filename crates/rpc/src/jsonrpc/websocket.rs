@@ -29,33 +29,43 @@ pub enum WebsocketHistory {
 #[derive(Clone)]
 pub struct WebsocketContext {
     pub max_history: WebsocketHistory,
+    /// Maximum number of subscriptions per connection.
     pub max_subscriptions: usize,
     pub subscription_max_size: usize,
     pub send_timeout: Duration,
+    /// The client has to send the first frame to the server within this
+    /// interval or the connection will be closed. [`Duration::ZERO`] disables
+    /// the timeout.
+    pub initial_frame_timeout: Duration,
+    /// The server waits this long for a frame from the client before sending a
+    /// ping. [`Duration::ZERO`] disables the keepalive.
+    pub ping_interval: Duration,
+    /// How many pings can be unanswered before the server closes the
+    /// connection.
+    pub max_missed_pings: u32,
+}
+
+impl Default for WebsocketContext {
+    fn default() -> Self {
+        Self {
+            max_history: WebsocketHistory::Limited(1024),
+            max_subscriptions: 1024,
+            subscription_max_size: 1024 * 1024,
+            send_timeout: Duration::from_secs(1),
+            initial_frame_timeout: Duration::from_secs(30),
+            ping_interval: Duration::from_secs(30),
+            max_missed_pings: 2,
+        }
+    }
 }
 
 impl WebsocketContext {
-    pub fn new(
-        max_history: WebsocketHistory,
-        max_subscriptions: usize,
-        subscription_max_size: usize,
-        send_timeout: Duration,
-    ) -> Self {
-        Self {
-            max_history,
-            max_subscriptions,
-            subscription_max_size,
-            send_timeout,
-        }
-    }
-
     #[cfg(test)]
     pub fn for_test(max_history: WebsocketHistory) -> Self {
         Self {
             max_history,
-            max_subscriptions: 1024,
-            subscription_max_size: 1024 * 1024,
             send_timeout: Duration::from_secs_f64(0.1),
+            ..Default::default()
         }
     }
 }
