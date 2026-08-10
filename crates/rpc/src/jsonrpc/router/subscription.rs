@@ -18,7 +18,7 @@ use super::{run_concurrently, RpcRouter};
 use crate::context::RpcContext;
 use crate::dto::{DeserializeForVersion, SerializeForVersion};
 use crate::error::ApplicationError;
-use crate::jsonrpc::websocket::{ConnectionGuard, WebsocketContext, WebsocketHistory};
+use crate::jsonrpc::websocket::{WebsocketContext, WebsocketHistory};
 use crate::jsonrpc::{RpcError, RpcRequest, RpcResponse};
 use crate::types::request::SubscriptionBlockId;
 use crate::{RpcVersion, SubscriptionId};
@@ -93,6 +93,49 @@ impl Subscriptions {
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         SubscriptionId(id)
+    }
+
+    /// Aborts all of the subscriptions.
+    ///
+    /// Subscription tasks are only reachable through
+    /// [`tokio::task::JoinHandle`]s, which do not abort on drop. A task notices
+    /// that its connection is gone when its next send fails, and a quiet
+    /// subscription never sends again. Each task also holds a websocket sender,
+    /// which holds the connection's slot in
+    /// [`WebsocketContext::connection_limit`]. Each task needs to be aborted so
+    /// that the connection slot is freed.
+    pub fn abort_all(&self) {
+        // Remove the handles before aborting them. `abort` can drop the task's
+        // future inline, which runs its `SubscriptionEntryGuard` and reenters
+        // `remove`. That could deadlock the `subscriptions` `DashMap`.
+        let ids: Vec<_> = self
+            .subscriptions
+            .iter()
+            .map(|entry| *entry.key())
+            .collect();
+        for id in ids {
+            if let Some((_, handle)) = self.subscriptions.remove(&id) {
+                handle.abort();
+            }
+        }
+    }
+}
+
+/// Aborts a connection's subscriptions once its read loop is done.
+struct ConnectionSubscriptionsGuard(Arc<Subscriptions>);
+
+impl Drop for ConnectionSubscriptionsGuard {
+    fn drop(&mut self) {
+        self.0.abort_all();
+    }
+}
+
+/// Ties a task's lifetime to the scope holding this guard.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -293,7 +336,7 @@ where
         .map_err(|e| RpcError::InternalError(e.into()))??;
 
         Ok(util::task::spawn(async move {
-            let _subscription_guard = SubscriptionsGuard {
+            let _subscription_guard = SubscriptionEntryGuard {
                 subscription_id,
                 subscriptions,
                 _slot: slot,
@@ -347,7 +390,10 @@ where
 
             // Subscribe to new blocks. Receive the first subscription message.
             let (tx1, mut rx1) = mpsc::channel::<SubscriptionMessage<T::Notification>>(1024);
-            util::task::spawn({
+            // Only the outer task is tracked in `Subscriptions`, so we need to use a guard
+            // to make sure the inner task is aborted with it. This matters for subscriptions
+            // that have nothing to send via `tx1`.
+            let _subscribe_task = AbortOnDrop(util::task::spawn({
                 let params = params.clone();
                 let context = router.context.clone();
                 let rpc_version = router.version;
@@ -358,7 +404,7 @@ where
                     }
                     tracing::trace!("Subscription task exited");
                 }
-            }.instrument(tracing::debug_span!("subscribe_task")));
+            }.instrument(tracing::debug_span!("subscribe_task"))));
             let first_msg = match rx1.recv().await {
                 Some(msg) => msg,
                 None => {
@@ -431,7 +477,7 @@ where
 
 /// A guard to ensure that the subscription handle is removed when the
 /// subscription task corresponding to that handle returns.
-struct SubscriptionsGuard {
+struct SubscriptionEntryGuard {
     subscription_id: SubscriptionId,
     subscriptions: Arc<Subscriptions>,
     /// The slot reserved by [`Subscriptions::try_reserve`], held for as long as
@@ -439,7 +485,7 @@ struct SubscriptionsGuard {
     _slot: OwnedSemaphorePermit,
 }
 
-impl Drop for SubscriptionsGuard {
+impl Drop for SubscriptionEntryGuard {
     fn drop(&mut self) {
         self.subscriptions.remove(&self.subscription_id);
     }
@@ -447,6 +493,23 @@ impl Drop for SubscriptionsGuard {
 
 type WsSender = mpsc::Sender<Result<Message, RpcResponse>>;
 type WsReceiver = mpsc::Receiver<Result<Message, axum::Error>>;
+
+/// The two tasks that own the halves of a websocket, as returned by
+/// [`split_ws`].
+pub struct SocketTasks {
+    sender: tokio::task::JoinHandle<()>,
+    reader: tokio::task::JoinHandle<()>,
+}
+
+impl SocketTasks {
+    /// Waits until the socket is closed.
+    ///
+    /// [`WebSocket::split`] gives both halves a `BiLock` on the socket, so the
+    /// socket is closed once both of these tasks are gone, and not before.
+    pub async fn closed(self) {
+        let _ = tokio::join!(self.sender, self.reader);
+    }
+}
 
 /// Split a websocket into an MPSC sender and receiver.
 /// These two are later passed to [`handle_json_rpc_socket`]. This separation
@@ -457,22 +520,15 @@ pub fn split_ws(
     ws: WebSocket,
     version: RpcVersion,
     ws_cfg: &WebsocketContext,
-    connection_guard: ConnectionGuard,
-) -> (WsSender, WsReceiver) {
-    // `WebSocket::split` gives both halves a `BiLock` on the socket, so the socket
-    // closes only once both tasks below are gone. Both tasks hold a clone of the
-    // guard, so the connection's slot is freed by whichever one ends last.
-    let connection_guard = Arc::new(connection_guard);
+) -> (WsSender, WsReceiver, SocketTasks) {
     let egress_timeout = ws_cfg.send_timeout;
     let (mut ws_sender, mut ws_receiver) = ws.split();
     let mut send_with_timeout = async move |msg| timeout(egress_timeout, ws_sender.send(msg)).await;
     // Send messages to the websocket using an MPSC channel.
     let (sender_tx, mut sender_rx) = mpsc::channel::<Result<Message, RpcResponse>>(1024);
-    util::task::spawn_with_cancel({
-        let connection_guard = connection_guard.clone();
+    let sender_task = util::task::spawn_with_cancel({
         move |cancellation_token| {
             async move {
-                let _connection_guard = connection_guard;
                 loop {
                     tokio::select! {
                         _ = cancellation_token.cancelled() => {
@@ -512,8 +568,7 @@ pub fn split_ws(
     });
     // Receive messages from the websocket using an MPSC channel.
     let (receiver_tx, receiver_rx) = mpsc::channel::<Result<Message, axum::Error>>(1024);
-    util::task::spawn(async move {
-        let _connection_guard = connection_guard;
+    let reader_task = util::task::spawn(async move {
         while let Some(msg) = ws_receiver.next().await {
             if let Err(e) = receiver_tx.send(msg).await {
                 tracing::debug!(error=?e, "Error sending incoming websocket over channel");
@@ -521,7 +576,11 @@ pub fn split_ws(
             }
         }
     });
-    (sender_tx, receiver_rx)
+    let tasks = SocketTasks {
+        sender: sender_task,
+        reader: reader_task,
+    };
+    (sender_tx, receiver_rx, tasks)
 }
 
 pub fn handle_json_rpc_socket(
@@ -538,6 +597,9 @@ pub fn handle_json_rpc_socket(
     let subscriptions = Arc::new(Subscriptions::new(max_subscriptions));
     // Read and handle messages from the websocket.
     util::task::spawn(async move {
+        // The read loop returns when the connection is gone, and the guard is to make sure
+        // all subscriptions are properly cleaned up.
+        let _abort_subscriptions_for_this_connection = ConnectionSubscriptionsGuard(Arc::clone(&subscriptions));
         loop {
             let request = match ws_rx.recv().await {
                 Some(Ok(Message::Text(msg))) => msg.as_str().to_string(),
@@ -1162,6 +1224,40 @@ mod tests {
             response = request(4, "test", serde_json::json!({})).await;
         }
         assert!(response["result"].is_string());
+    }
+
+    /// A quiet subscription has nothing to send, so it never notices that its
+    /// connection is gone. Closing the connection aborts it explicitly.
+    #[tokio::test]
+    async fn closing_the_connection_aborts_its_subscriptions() {
+        let router = setup(0, WebsocketHistory::Unlimited, NeverEnds).await;
+        let (sender_tx, mut sender_rx) = mpsc::channel(1024);
+        let (receiver_tx, receiver_rx) = mpsc::channel(1024);
+        handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
+        receiver_tx
+            .send(Ok(Message::Text(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "test",
+                    "params": {}
+                })
+                .to_string()
+                .into(),
+            )))
+            .await
+            .unwrap();
+        // Wait for the subscription to start.
+        sender_rx.recv().await.unwrap().unwrap();
+
+        // Close the connection. Aborting the subscription task drops the sender
+        // it holds, which closes the channel.
+        drop(receiver_tx);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while sender_rx.recv().await.is_some() {}
+        })
+        .await
+        .expect("the subscription outlived the connection");
     }
 
     #[tokio::test]

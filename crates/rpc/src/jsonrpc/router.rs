@@ -225,8 +225,13 @@ pub async fn rpc_handler(
 
             ws.max_message_size(ws_cfg.subscription_max_size)
                 .on_upgrade(async move |ws| {
-                    let (ws_tx, ws_rx) = split_ws(ws, state.version, &ws_cfg, connection_guard);
+                    // Axum drives this closure for as long as the socket is open, so
+                    // holding the guard here frees the connection's slot exactly when
+                    // the socket is closed.
+                    let _connection_guard = connection_guard;
+                    let (ws_tx, ws_rx, socket) = split_ws(ws, state.version, &ws_cfg);
                     handle_json_rpc_socket(state, ws_tx, ws_rx);
+                    socket.closed().await;
                 })
         }
         Err(_) => {
