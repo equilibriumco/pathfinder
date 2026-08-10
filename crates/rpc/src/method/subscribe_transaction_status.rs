@@ -520,7 +520,7 @@ mod tests {
 
     #[tokio::test]
     async fn transaction_already_exists_in_db_accepted_on_l2_succeeded() {
-        let (router, mut rx, pending_data_cache, subscription_id) =
+        let (router, mut rx, pending_data_cache, subscription_id, _receiver_tx) =
             test_transaction_already_exists_in_db(
                 ExecutionStatus::Succeeded,
                 None,
@@ -1528,6 +1528,9 @@ mod tests {
         mpsc::Receiver<Result<Message, RpcResponse>>,
         std::sync::Arc<PendingDataCache>,
         SubscriptionId,
+        // Callers keep this to hold the connection open. Dropping it closes the
+        // connection and tears down its subscriptions.
+        mpsc::Sender<Result<Message, axum::Error>>,
     ) {
         let (router, pending_data_cache) = setup().await;
         let tx_hash = TARGET_TX_HASH;
@@ -1619,7 +1622,13 @@ mod tests {
         // No more messages expected.
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(sender_rx.try_recv().is_err());
-        (router, sender_rx, pending_data_cache, subscription_id)
+        (
+            router,
+            sender_rx,
+            pending_data_cache,
+            subscription_id,
+            receiver_tx,
+        )
     }
 
     #[derive(Debug)]
