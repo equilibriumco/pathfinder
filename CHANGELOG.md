@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `--rpc.gateway-trace-timeout` CLI option (default 30s) bounding how long `starknet_traceTransaction` and `starknet_traceBlockTransactions` may spend on the feeder gateway fallback path.
+- Concurrently open RPC websocket connections are now limited to 1024 by default, configurable with the `--rpc.websocket.max-connections` CLI option. Upgrade requests over the limit are rejected with HTTP 503.
 
 ### Fixed
 
