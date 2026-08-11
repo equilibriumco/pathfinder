@@ -505,7 +505,7 @@ pub struct SocketTasks {
 impl SocketTasks {
     /// Waits until the socket is closed.
     ///
-    /// [`WebSocket::split`] gives both halves a `BiLock` on the socket, so the
+    /// `WebSocket::split` gives both halves a `BiLock` on the socket, so the
     /// socket is closed once both of these tasks are gone, and not before.
     pub async fn closed(self) {
         let _ = tokio::join!(self.sender, self.reader);
