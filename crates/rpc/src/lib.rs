@@ -1547,18 +1547,18 @@ mod tests {
 
         let (_jh, url) = ws_keepalive_server(|ws_ctx| {
             ws_ctx.initial_frame_timeout = Duration::from_millis(200);
-            // Isolate the initial deadline from the keepalive.
-            ws_ctx.ping_interval = Duration::ZERO;
+            // Long enough that the initial deadline is what closes the connection.
+            ws_ctx.ping_interval = Duration::from_secs(30);
         })
         .await;
 
         let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
         // Send nothing at all. The server must hang up on its own.
-        timeout(Duration::from_secs(5), async {
+        timeout(Duration::from_secs(1), async {
             while ws.next().await.transpose().unwrap_or(None).is_some() {}
         })
         .await
-        .expect("the server did not close an unused connection");
+        .unwrap()
     }
 
     /// A subscribed client only ever receives, and still counts as alive.
@@ -1591,7 +1591,7 @@ mod tests {
 
         // Sit through more than `max_missed_pings` intervals without sending
         // anything. Only pings should arrive and the connection should stay open.
-        let closed = timeout(Duration::from_secs(2), async {
+        let closed = timeout(Duration::from_secs(1), async {
             while let Some(msg) = ws.next().await {
                 if let tokio_tungstenite::tungstenite::Message::Close(_) = msg.unwrap() {
                     break;
@@ -1599,10 +1599,9 @@ mod tests {
             }
         })
         .await;
-        assert!(
-            closed.is_err(),
-            "a subscribed connection was closed while it was answering pings"
-        );
+        // We expect a timeout: connection is not closed, because it is exchanging
+        // pings.
+        assert!(closed.is_err());
     }
 
     #[tokio::test]
@@ -1613,7 +1612,7 @@ mod tests {
             // Long enough that it cannot be what closes the connection.
             ws_ctx.initial_frame_timeout = Duration::from_secs(30);
             ws_ctx.ping_interval = Duration::from_millis(100);
-            ws_ctx.max_missed_pings = 2;
+            ws_ctx.max_missed_pings = std::num::NonZeroU32::new(2).unwrap();
         })
         .await;
 
@@ -1632,11 +1631,11 @@ mod tests {
         .unwrap();
 
         // Leave the stream unpolled. `tokio_tungstenite` answers pings only while
-        // something polls it, so the peer looks unresponsive. Wait out more than
+        // something polls it, so the client looks unresponsive. Wait out more than
         // `max_missed_pings` intervals before reading what arrived.
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        let closed = timeout(Duration::from_secs(5), async {
+        let closed = timeout(Duration::from_secs(1), async {
             while let Some(msg) = ws.next().await {
                 match msg {
                     Ok(tokio_tungstenite::tungstenite::Message::Close(_)) | Err(_) => break,
@@ -1645,11 +1644,8 @@ mod tests {
             }
         })
         .await;
-        assert!(
-            closed.is_ok(),
-            "an unresponsive connection was not closed after {} missed pings",
-            2
-        );
+        // Connection should be closed because the client did not answer pings.
+        assert!(closed.is_ok());
     }
 
     enum Api {

@@ -526,10 +526,9 @@ pub fn split_ws(
     // The reader cancels this to bring the sender task down with it. Neither task
     // can close the socket alone.
     let connection_token = CancellationToken::new();
-    // `Duration::ZERO` disables these, so both are `Option`s.
-    let initial_frame_timeout = Some(ws_cfg.initial_frame_timeout).filter(|d| !d.is_zero());
-    let ping_interval = Some(ws_cfg.ping_interval).filter(|d| !d.is_zero());
-    let max_missed_pings = ws_cfg.max_missed_pings;
+    let initial_frame_timeout = ws_cfg.initial_frame_timeout;
+    let ping_interval = ws_cfg.ping_interval;
+    let max_missed_pings = ws_cfg.max_missed_pings.get();
     let (mut ws_sender, mut ws_receiver) = ws.split();
     let mut send_with_timeout = async move |msg| timeout(egress_timeout, ws_sender.send(msg)).await;
     // Send messages to the websocket using an MPSC channel.
@@ -596,28 +595,25 @@ pub fn split_ws(
             let mut awaiting_first_frame = true;
             let mut missed_pings = 0;
             let close_reason = loop {
-                let received = match deadline {
-                    Some(deadline) => match timeout(deadline, ws_receiver.next()).await {
-                        Ok(received) => received,
-                        Err(_) => {
-                            if awaiting_first_frame {
-                                break "no_initial_frame";
-                            }
-                            missed_pings += 1;
-                            if missed_pings > max_missed_pings {
-                                break "unresponsive";
-                            }
-                            if ping_tx
-                                .send(Ok(Message::Ping(Default::default())))
-                                .await
-                                .is_err()
-                            {
-                                break "closing";
-                            }
-                            continue;
+                let received = match timeout(deadline, ws_receiver.next()).await {
+                    Ok(received) => received,
+                    Err(_) => {
+                        if awaiting_first_frame {
+                            break "no_initial_frame";
                         }
-                    },
-                    None => ws_receiver.next().await,
+                        missed_pings += 1;
+                        if missed_pings > max_missed_pings {
+                            break "unresponsive";
+                        }
+                        if ping_tx
+                            .send(Ok(Message::Ping(Default::default())))
+                            .await
+                            .is_err()
+                        {
+                            break "closing";
+                        }
+                        continue;
+                    }
                 };
                 let Some(msg) = received else {
                     break "peer";
