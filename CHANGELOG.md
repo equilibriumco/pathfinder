@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `--rpc.gateway-trace-timeout` CLI option (default 30s) bounding how long `starknet_traceTransaction` and `starknet_traceBlockTransactions` may spend on the feeder gateway fallback path.
+- **BREAKING**: The RPC server now pings websocket peers that have been quiet for `--rpc.websocket.ping-interval` and closes connections that leave `--rpc.websocket.max-missed-pings` pings unanswered. Clients are required to answer pings, which RFC 6455 mandates and which browsers and the mainstream websocket libraries handle for you, but only while the client is reading from the connection. A client that stops reading for longer than the ping interval times the missed ping limit is disconnected. The keepalive cannot be turned off, so `--rpc.websocket.ping-interval`, `--rpc.websocket.initial-frame-timeout` and `--rpc.websocket.max-missed-pings` all reject `0`. Raise the ping interval rather than trying to disable it.
 - Concurrently open RPC websocket connections are now limited to 1024 by default, configurable with the `--rpc.websocket.max-connections` CLI option. Upgrade requests over the limit are rejected with HTTP 503.
 - RPC websocket connections that don't send anything after being established now time out, configurable with the `--rpc.websocket.initial-frame-timeout` CLI option.
-- The RPC server now pings websocket peers that have been quiet for `--rpc.websocket.ping-interval` and closes connections that leave `--rpc.websocket.max-missed-pings` pings unanswered.
 - New metrics: `rpc_websocket_connections` (gauge), `rpc_websocket_connections_rejected_total` and `rpc_websocket_connections_closed_total` (labelled with `reason`).
 
 ### Fixed

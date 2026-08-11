@@ -815,6 +815,14 @@ fn parse_fractional_seconds(s: &str) -> Result<Duration, String> {
     Ok(duration)
 }
 
+fn parse_positive_fractional_seconds(s: &str) -> Result<Duration, String> {
+    let duration = parse_fractional_seconds(s)?;
+    if duration.is_zero() {
+        return Err("Expected a number greater than zero".to_string());
+    }
+    Ok(duration)
+}
+
 #[cfg(feature = "p2p")]
 fn parse_felt(s: &str) -> Result<Felt, String> {
     let felt = Felt::from_hex_str(s).map_err(|e| ToString::to_string(&e))?;
@@ -1595,19 +1603,19 @@ Note that the 'unlimited' setting is meant primarily for testing and not recomme
     #[arg(
         long = "rpc.websocket.initial-frame-timeout",
         long_help = "Websocket connections that don't send any frame within this many seconds of \
-                     being established are closed. Set to 0 to disable.",
+                     being established are closed. Must be greater than zero.",
         default_value = "30",
-        value_parser = parse_fractional_seconds,
+        value_parser = parse_positive_fractional_seconds,
         env = "PATHFINDER_WEBSOCKET_INITIAL_FRAME_TIMEOUT"
     )]
     pub initial_frame_timeout: Duration,
     #[arg(
         long = "rpc.websocket.ping-interval",
         long_help = "How many seconds to wait for a frame from the client before sending a \
-                     websocket ping to check that it is still alive. Set to 0 to disable the \
-                     keepalive.",
+                     websocket ping to check that it is still alive. Clients are required to \
+                     answer pings. Must be greater than zero.",
         default_value = "30",
-        value_parser = parse_fractional_seconds,
+        value_parser = parse_positive_fractional_seconds,
         env = "PATHFINDER_WEBSOCKET_PING_INTERVAL"
     )]
     pub ping_interval: Duration,
@@ -1618,7 +1626,7 @@ Note that the 'unlimited' setting is meant primarily for testing and not recomme
         default_value = "2",
         env = "PATHFINDER_WEBSOCKET_MAX_MISSED_PINGS"
     )]
-    pub max_missed_pings: u32,
+    pub max_missed_pings: NonZeroU32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1658,6 +1666,26 @@ mod tests {
 
     use super::{AllowedOrigins, RpcCorsDomainsParseError};
     use crate::config::{parse_cors, ParseVersionedConstantsError};
+
+    #[test]
+    fn websocket_keepalive_rejects_zero() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            websocket: super::WebsocketConfig,
+        }
+
+        for arg in [
+            "--rpc.websocket.ping-interval",
+            "--rpc.websocket.initial-frame-timeout",
+            "--rpc.websocket.max-missed-pings",
+        ] {
+            assert!(TestCli::try_parse_from(["pathfinder", arg, "0"]).is_err());
+            assert!(TestCli::try_parse_from(["pathfinder", arg, "1"]).is_ok());
+        }
+    }
 
     #[test]
     fn parse_cors_domains() {
