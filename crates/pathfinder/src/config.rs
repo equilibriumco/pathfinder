@@ -610,6 +610,19 @@ Setting this value too low may cause compilation of large classes to fail.",
     )]
     rpc_block_trace_cache_size: std::num::NonZeroUsize,
 
+    #[arg(
+        long = "rpc.gateway-trace-timeout",
+        value_name = "Seconds",
+        long_help = "Maximum duration a `trace_transaction` or `trace_block_transactions` request \
+                     may spend on the feeder gateway fallback path. The gateway client retries \
+                     transport errors with an unbounded exponential backoff, so this ceiling \
+                     prevents a slow or unresponsive sequencer from holding RPC tasks for the \
+                     full retry policy.",
+        default_value = "30",
+        env = "PATHFINDER_RPC_GATEWAY_TRACE_TIMEOUT"
+    )]
+    rpc_gateway_trace_timeout: std::num::NonZeroU64,
+
     #[cfg_attr(
         all(
             feature = "consensus-integration-tests",
@@ -1197,6 +1210,7 @@ pub struct Config {
     pub submission_tracker_time_limit: NonZeroU64,
     pub submission_tracker_size_limit: NonZeroUsize,
     pub rpc_block_trace_cache_size: NonZeroUsize,
+    pub rpc_gateway_trace_timeout: Duration,
     pub consensus: Option<ConsensusConfig>,
     /// Integration testing config, only available on debug builds with `p2p`
     /// and `consensus-integration-tests` features enabled.
@@ -1519,6 +1533,7 @@ impl Config {
             submission_tracker_time_limit: args.submission_tracker_time_limit,
             submission_tracker_size_limit: args.submission_tracker_size_limit,
             rpc_block_trace_cache_size: args.rpc_block_trace_cache_size,
+            rpc_gateway_trace_timeout: Duration::from_secs(args.rpc_gateway_trace_timeout.get()),
             consensus: ConsensusConfig::parse_or_exit(args.consensus),
             integration_testing: integration_testing::IntegrationTestingConfig::parse(
                 args.integration_testing,

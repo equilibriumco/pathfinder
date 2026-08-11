@@ -82,6 +82,12 @@ pub struct RpcConfig {
     pub submission_tracker_time_limit: NonZeroU64,
     pub submission_tracker_size_limit: NonZeroUsize,
     pub block_trace_cache_size: NonZeroUsize,
+    /// Upper bound on how long a single trace request may wait on the feeder
+    /// gateway fallback path. The gateway client retries transport errors with
+    /// an unbounded exponential backoff, so without this ceiling a slow or
+    /// unresponsive sequencer holds the RPC task (and its preflight resources)
+    /// for the full retry policy — a public-network slot-exhaustion primitive.
+    pub gateway_trace_timeout: Duration,
     pub compiler_concurrency_limit: NonZeroUsize,
     pub compiler_resource_limits: pathfinder_compiler::ResourceLimits,
     pub blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs,
@@ -266,6 +272,7 @@ impl RpcContext {
             submission_tracker_time_limit: NonZeroU64::new(300).unwrap(),
             submission_tracker_size_limit: NonZeroUsize::new(30000).unwrap(),
             block_trace_cache_size: NonZeroUsize::new(1).unwrap(),
+            gateway_trace_timeout: Duration::from_secs(30),
             compiler_concurrency_limit: NonZeroUsize::new(1).unwrap(),
             compiler_resource_limits: pathfinder_compiler::ResourceLimits::for_test(),
             blockifier_libfuncs: pathfinder_compiler::BlockifierLibfuncs::default(),
