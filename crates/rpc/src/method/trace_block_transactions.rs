@@ -240,34 +240,54 @@ pub async fn trace_block_transactions(
         LocalExecution::Unsupported((block_id, transactions)) => (block_id, transactions),
     };
 
-    context
-        .sequencer
-        .block_traces(block_id.into())
-        .await
-        .context("Forwarding to feeder gateway")
-        .map_err(TraceBlockTransactionsError::from)
-        .map(|trace| {
-            let traces = trace
-                .traces
-                .into_iter()
-                .zip(transactions)
-                .map(|(trace, tx)| Ok((tx.hash, map_gateway_trace(tx, trace)?)))
-                .collect::<Result<Vec<_>, TraceBlockTransactionsError>>()?;
-            let output_format = if return_initial_reads {
-                TraceOutputFormat::Object {
-                    traces,
-                    // Gateway traces do not include initial reads.
-                    initial_reads: None,
-                }
-            } else {
-                TraceOutputFormat::Array(traces)
-            };
-            Ok(TraceBlockTransactionsOutput {
-                output_format,
-                // State diffs are not available for traces fetched from the gateway.
-                include_state_diffs: false,
-            })
-        })?
+    // The gateway client retries transport errors with an unbounded exponential
+    // backoff, so a slow or unresponsive sequencer would otherwise hold this task
+    // (and the resources acquired during the preflight) for the full retry
+    // policy. Bound the fallback with an operator-tunable timeout and bail out
+    // early on graceful shutdown so the RPC slot is freed promptly.
+    let cancellation_token = util::task::cancellation_token();
+    let trace = tokio::select! {
+        biased;
+        _ = cancellation_token.cancelled() => {
+            return Err(TraceBlockTransactionsError::Internal(anyhow::anyhow!(
+                "Cancelled due to graceful shutdown"
+            )));
+        }
+        result = tokio::time::timeout(
+            context.config.gateway_trace_timeout,
+            context.sequencer.block_traces(block_id.into()),
+        ) => {
+            result
+                .map_err(|_| {
+                    TraceBlockTransactionsError::Custom(anyhow::anyhow!(
+                        "Timed out fetching block traces from the feeder gateway"
+                    ))
+                })?
+                .context("Forwarding to feeder gateway")
+                .map_err(TraceBlockTransactionsError::from)?
+        }
+    };
+
+    let traces = trace
+        .traces
+        .into_iter()
+        .zip(transactions)
+        .map(|(trace, tx)| Ok((tx.hash, map_gateway_trace(tx, trace)?)))
+        .collect::<Result<Vec<_>, TraceBlockTransactionsError>>()?;
+    let output_format = if return_initial_reads {
+        TraceOutputFormat::Object {
+            traces,
+            // Gateway traces do not include initial reads.
+            initial_reads: None,
+        }
+    } else {
+        TraceOutputFormat::Array(traces)
+    };
+    Ok(TraceBlockTransactionsOutput {
+        output_format,
+        // State diffs are not available for traces fetched from the gateway.
+        include_state_diffs: false,
+    })
 }
 
 pub(crate) fn map_gateway_trace(

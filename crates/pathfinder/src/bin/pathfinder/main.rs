@@ -274,6 +274,7 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
         submission_tracker_time_limit: config.submission_tracker_time_limit,
         submission_tracker_size_limit: config.submission_tracker_size_limit,
         block_trace_cache_size: config.rpc_block_trace_cache_size,
+        gateway_trace_timeout: config.rpc_gateway_trace_timeout,
         compiler_concurrency_limit,
         compiler_resource_limits: config.compiler_resource_limits,
         blockifier_libfuncs: config.blockifier_libfuncs,

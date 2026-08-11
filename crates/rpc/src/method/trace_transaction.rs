@@ -244,11 +244,32 @@ pub async fn trace_transaction(
         LocalExecution::Unsupported(tx) => tx,
     };
 
-    let trace = context
-        .sequencer
-        .transaction_trace(input.transaction_hash)
-        .await
-        .context("Proxying call to feeder gateway")?;
+    // The gateway client retries transport errors with an unbounded exponential
+    // backoff, so a slow or unresponsive sequencer would otherwise hold this task
+    // (and the resources acquired during the preflight) for the full retry
+    // policy. Bound the fallback with an operator-tunable timeout and bail out
+    // early on graceful shutdown so the RPC slot is freed promptly.
+    let cancellation_token = util::task::cancellation_token();
+    let trace = tokio::select! {
+        biased;
+        _ = cancellation_token.cancelled() => {
+            return Err(TraceTransactionError::Internal(anyhow::anyhow!(
+                "Cancelled due to graceful shutdown"
+            )));
+        }
+        result = tokio::time::timeout(
+            context.config.gateway_trace_timeout,
+            context.sequencer.transaction_trace(input.transaction_hash),
+        ) => {
+            result
+                .map_err(|_| {
+                    TraceTransactionError::Custom(anyhow::anyhow!(
+                        "Timed out fetching transaction trace from the feeder gateway"
+                    ))
+                })?
+                .context("Proxying call to feeder gateway")?
+        }
+    };
 
     let trace = map_gateway_trace(transaction, trace)?;
 
