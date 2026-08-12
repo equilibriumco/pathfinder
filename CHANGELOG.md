@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `--max-rpc-connections` is now shared across all routes.
+- A batch request could open more subscriptions than `--rpc.websocket.max-subscriptions` allows, because the requests within a batch are handled concurrently and each of them checked the limit before any of them counted towards it.
 - `starknet_traceTransaction` and `starknet_traceBlockTransactions` requests that fall back to the feeder gateway could hang indefinitely on a slow or unresponsive sequencer (the gateway client retries transport errors with an unbounded exponential backoff), holding RPC tasks and letting a public-network client exhaust the RPC concurrency budget. These requests are now bounded by `--rpc.gateway-trace-timeout` and bail out early on graceful shutdown.
 
 ## [0.23.1] - 2026-08-03
