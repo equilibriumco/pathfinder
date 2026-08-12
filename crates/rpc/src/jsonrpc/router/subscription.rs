@@ -10,7 +10,7 @@ use pathfinder_common::BlockNumber;
 use pathfinder_serde::AsBoundedVec;
 use serde::de::DeserializeSeed as _;
 use serde_json::value::RawValue;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::time::{timeout, Duration};
 use tracing::Instrument;
 
@@ -37,15 +37,38 @@ pub(super) struct InvokeParams {
     subscriptions: Arc<Subscriptions>,
     ws_tx: mpsc::Sender<Result<Message, RpcResponse>>,
     lock: Arc<RwLock<()>>,
+    slot: OwnedSemaphorePermit,
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Subscriptions {
     subscriptions: DashMap<SubscriptionId, tokio::task::JoinHandle<()>>,
     next_id: AtomicU32,
+    /// Limits how many subscriptions this connection can have at once.
+    slots: Arc<Semaphore>,
 }
 
 impl Subscriptions {
+    pub fn new(max_subscriptions: usize) -> Self {
+        Self {
+            subscriptions: Default::default(),
+            next_id: Default::default(),
+            slots: Arc::new(Semaphore::new(
+                max_subscriptions.min(Semaphore::MAX_PERMITS),
+            )),
+        }
+    }
+
+    /// Reserves a slot for a new subscription. Returns [`None`] at the limit.
+    /// Dropping the returned permit frees the slot.
+    ///
+    /// Requests within a batch are handled concurrently, so the slot has to be
+    /// taken before the subscription starts. A subscription is only counted
+    /// once its handle is stored.
+    pub fn try_reserve(&self) -> Option<OwnedSemaphorePermit> {
+        self.slots.clone().try_acquire_owned().ok()
+    }
+
     pub fn remove(
         &self,
         subscription_id: &SubscriptionId,
@@ -55,10 +78,6 @@ impl Subscriptions {
 
     pub fn contains_key(&self, subscription_id: &SubscriptionId) -> bool {
         self.subscriptions.contains_key(subscription_id)
-    }
-
-    pub fn len(&self) -> usize {
-        self.subscriptions.len()
     }
 
     pub fn insert(
@@ -191,6 +210,7 @@ where
             subscriptions,
             ws_tx,
             lock,
+            slot,
         }: InvokeParams,
     ) -> Result<tokio::task::JoinHandle<()>, RpcError> {
         let params = T::Params::deserialize(crate::dto::Value::new(input, router.version))
@@ -276,6 +296,7 @@ where
             let _subscription_guard = SubscriptionsGuard {
                 subscription_id,
                 subscriptions,
+                _slot: slot,
             };
             // This lock ensures that the streaming of subscriptions doesn't start before
             // the caller sends the success response for the subscription request.
@@ -413,6 +434,9 @@ where
 struct SubscriptionsGuard {
     subscription_id: SubscriptionId,
     subscriptions: Arc<Subscriptions>,
+    /// The slot reserved by [`Subscriptions::try_reserve`], held for as long as
+    /// the subscription task runs.
+    _slot: OwnedSemaphorePermit,
 }
 
 impl Drop for SubscriptionsGuard {
@@ -494,7 +518,13 @@ pub fn handle_json_rpc_socket(
     ws_tx: mpsc::Sender<Result<Message, RpcResponse>>,
     mut ws_rx: mpsc::Receiver<Result<Message, axum::Error>>,
 ) {
-    let subscriptions = Arc::new(Subscriptions::default());
+    let max_subscriptions = state
+        .context
+        .websocket
+        .as_ref()
+        .map(|ws_cfg| ws_cfg.max_subscriptions)
+        .unwrap_or_default();
+    let subscriptions = Arc::new(Subscriptions::new(max_subscriptions));
     // Read and handle messages from the websocket.
     util::task::spawn(async move {
         loop {
@@ -757,21 +787,20 @@ async fn handle_request(
     let params = serde_json::to_value(rpc_request.params)
         .map_err(|e| RpcResponse::invalid_params(req_id.clone(), e.to_string(), state.version))?;
 
-    let max_subscriptions = state
-        .context
-        .websocket
-        .as_ref()
-        .map(|ws_cfg| ws_cfg.max_subscriptions)
-        .ok_or_else(|| {
-            // handle_request should be called only when WS is enabled
-            RpcResponse::internal_error(req_id.clone(), "WS disabled".to_string(), state.version)
-        })?;
-    if subscriptions.len() >= max_subscriptions {
+    if state.context.websocket.is_none() {
+        // handle_request should be called only when WS is enabled
+        return Err(RpcResponse::internal_error(
+            req_id.clone(),
+            "WS disabled".to_string(),
+            state.version,
+        ));
+    }
+    let Some(slot) = subscriptions.try_reserve() else {
         return Err(RpcResponse::invalid_request(
             "Too many subscriptions".to_string(),
             state.version,
         ));
-    }
+    };
 
     // Start the subscription.
     let router = state.clone();
@@ -785,6 +814,7 @@ async fn handle_request(
             subscriptions: Arc::clone(&subscriptions),
             ws_tx: ws_tx.clone(),
             lock,
+            slot,
         })
         .await
     {
@@ -976,6 +1006,79 @@ mod tests {
     };
     use crate::types::request::SubscriptionBlockId;
     use crate::{Notifications, RpcVersion};
+
+    #[tokio::test]
+    async fn batch_cannot_exceed_the_subscription_limit() {
+        const MAX_SUBSCRIPTIONS: usize = 2;
+        const BATCH_SIZE: usize = 8;
+
+        struct NeverEnds;
+
+        impl RpcSubscriptionFlow for NeverEnds {
+            type Params = Params;
+            type Notification = serde_json::Value;
+
+            async fn subscribe(
+                _state: RpcContext,
+                _version: RpcVersion,
+                _params: Self::Params,
+                _tx: mpsc::Sender<SubscriptionMessage<Self::Notification>>,
+            ) -> Result<(), crate::jsonrpc::RpcError> {
+                std::future::pending().await
+            }
+        }
+
+        let router = setup_with_max_subscriptions(
+            0,
+            WebsocketHistory::Unlimited,
+            NeverEnds,
+            MAX_SUBSCRIPTIONS,
+        )
+        .await;
+        // Without concurrency there is nothing to race.
+        assert!(router.context.config.batch_concurrency_limit.get() > 1);
+
+        let (sender_tx, mut sender_rx) = mpsc::channel(1024);
+        let (receiver_tx, receiver_rx) = mpsc::channel(1024);
+        handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
+
+        let batch = (0..BATCH_SIZE)
+            .map(|id| {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "method": "test",
+                    "params": {}
+                })
+            })
+            .collect();
+        receiver_tx
+            .send(Ok(Message::Text(
+                serde_json::Value::Array(batch).to_string().into(),
+            )))
+            .await
+            .unwrap();
+
+        let responses = match sender_rx.recv().await.unwrap().unwrap() {
+            Message::Text(json) => match serde_json::from_str(&json).unwrap() {
+                serde_json::Value::Array(responses) => responses,
+                other => panic!("Expected an array, got {other}"),
+            },
+            other => panic!("Expected a text message, got {other:?}"),
+        };
+        assert_eq!(responses.len(), BATCH_SIZE);
+
+        let started = responses
+            .iter()
+            .filter(|response| response.get("result").is_some())
+            .count();
+        let rejected = responses
+            .iter()
+            .filter(|response| response["error"]["data"]["reason"] == "Too many subscriptions")
+            .count();
+        assert_eq!(started, MAX_SUBSCRIPTIONS);
+        assert_eq!(rejected, BATCH_SIZE - MAX_SUBSCRIPTIONS);
+    }
 
     #[tokio::test]
     async fn test_error_returned_from_catch_up() {
@@ -1479,6 +1582,15 @@ mod tests {
         websocket_history: WebsocketHistory,
         endpoint: impl RpcSubscriptionEndpoint + 'static,
     ) -> RpcRouter {
+        setup_with_max_subscriptions(num_blocks, websocket_history, endpoint, 1024).await
+    }
+
+    async fn setup_with_max_subscriptions(
+        num_blocks: u64,
+        websocket_history: WebsocketHistory,
+        endpoint: impl RpcSubscriptionEndpoint + 'static,
+        max_subscriptions: usize,
+    ) -> RpcRouter {
         let storage = StorageBuilder::in_memory().unwrap();
         tokio::task::spawn_blocking({
             let storage = storage.clone();
@@ -1515,11 +1627,13 @@ mod tests {
         let pending_data_cache =
             std::sync::Arc::new(pathfinder_pending_data::PendingDataCache::new());
         let notifications = Notifications::default();
+        let mut websocket = WebsocketContext::for_test(websocket_history);
+        websocket.max_subscriptions = max_subscriptions;
         let ctx = RpcContext::for_tests()
             .with_storage(storage)
             .with_notifications(notifications)
             .with_pending_data_cache(pending_data_cache.clone())
-            .with_websockets(WebsocketContext::for_test(websocket_history));
+            .with_websockets(websocket);
 
         RpcRouter::builder(crate::RpcVersion::V09)
             .register("test", endpoint)
