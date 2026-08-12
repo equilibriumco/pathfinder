@@ -11,7 +11,7 @@ use pathfinder_serde::AsBoundedVec;
 use serde::de::DeserializeSeed as _;
 use serde_json::value::RawValue;
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock, Semaphore};
-use tokio::time::timeout;
+use tokio::time::{timeout, timeout_at, Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
@@ -589,13 +589,20 @@ pub fn split_ws(
         let ping_tx = sender_tx.clone();
         async move {
             // A subscribed client only receives, so silence does not mean the
-            // peer is gone. An unused connection gets the shorter deadline until
-            // its first frame. After that the server pings to check on the peer.
-            let mut deadline = initial_frame_timeout;
+            // peer is gone. An unused connection has until `first_frame_deadline`
+            // to send a request. After that the server pings to check on the
+            // peer. The first deadline is absolute, so a client cannot hold the
+            // connection open by refreshing it with control frames.
+            let first_frame_deadline = Instant::now() + initial_frame_timeout;
             let mut awaiting_first_frame = true;
             let mut missed_pings = 0;
             let close_reason = loop {
-                let received = match timeout(deadline, ws_receiver.next()).await {
+                let deadline = if awaiting_first_frame {
+                    first_frame_deadline
+                } else {
+                    Instant::now() + ping_interval
+                };
+                let received = match timeout_at(deadline, ws_receiver.next()).await {
                     Ok(received) => received,
                     Err(_) => {
                         if awaiting_first_frame {
@@ -618,8 +625,12 @@ pub fn split_ws(
                 let Some(msg) = received else {
                     break "peer";
                 };
-                awaiting_first_frame = false;
-                deadline = ping_interval;
+                // A control frame shows the peer is alive but not that the
+                // connection is in use, so it does not satisfy the first frame
+                // deadline. It does still count as an answer to a ping.
+                if matches!(msg, Ok(Message::Text(_) | Message::Binary(_))) {
+                    awaiting_first_frame = false;
+                }
                 missed_pings = 0;
                 if let Err(e) = receiver_tx.send(msg).await {
                     tracing::debug!(error=?e, "Error sending incoming websocket over channel");

@@ -1561,6 +1561,48 @@ mod tests {
         .unwrap()
     }
 
+    #[tokio::test]
+    async fn websocket_that_only_sends_pongs_is_closed() {
+        use futures::{SinkExt, StreamExt};
+
+        let (_jh, url) = ws_keepalive_server(|ws_ctx| {
+            ws_ctx.initial_frame_timeout = Duration::from_millis(300);
+            // Long enough that the initial deadline is what closes the connection.
+            ws_ctx.ping_interval = Duration::from_secs(30);
+        })
+        .await;
+
+        let (ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        let (mut ws_tx, mut ws_rx) = ws.split();
+
+        let pongs = tokio::spawn(async move {
+            loop {
+                if ws_tx
+                    .send(tokio_tungstenite::tungstenite::Message::Pong(
+                        Default::default(),
+                    ))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        });
+
+        let closed = timeout(Duration::from_secs(2), async {
+            while let Some(msg) = ws_rx.next().await {
+                match msg {
+                    Ok(tokio_tungstenite::tungstenite::Message::Close(_)) | Err(_) => break,
+                    Ok(_) => continue,
+                }
+            }
+        })
+        .await;
+        pongs.abort();
+        assert!(closed.is_ok());
+    }
+
     /// A subscribed client only ever receives, and still counts as alive.
     /// `tokio_tungstenite` answers the server's pings automatically.
     #[tokio::test]
