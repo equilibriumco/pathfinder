@@ -82,8 +82,13 @@ impl WebsocketContext {
     pub fn for_test(max_history: WebsocketHistory) -> Self {
         Self {
             max_history,
+            max_subscriptions: 1024,
+            subscription_max_size: 1024 * 1024,
             send_timeout: Duration::from_secs_f64(0.1),
-            ..Default::default()
+            initial_frame_timeout: Duration::from_secs(30),
+            ping_interval: Duration::from_secs(30),
+            max_missed_pings: NonZeroU32::new(2).expect("2 > 0"),
+            connection_limit: Arc::new(Semaphore::new(1024)),
         }
     }
 }
