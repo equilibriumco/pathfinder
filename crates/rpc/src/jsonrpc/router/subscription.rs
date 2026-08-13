@@ -1007,26 +1007,26 @@ mod tests {
     use crate::types::request::SubscriptionBlockId;
     use crate::{Notifications, RpcVersion};
 
+    struct NeverEnds;
+
+    impl RpcSubscriptionFlow for NeverEnds {
+        type Params = Params;
+        type Notification = serde_json::Value;
+
+        async fn subscribe(
+            _state: RpcContext,
+            _version: RpcVersion,
+            _params: Self::Params,
+            _tx: mpsc::Sender<SubscriptionMessage<Self::Notification>>,
+        ) -> Result<(), crate::jsonrpc::RpcError> {
+            std::future::pending().await
+        }
+    }
+
     #[tokio::test]
     async fn batch_cannot_exceed_the_subscription_limit() {
         const MAX_SUBSCRIPTIONS: usize = 2;
         const BATCH_SIZE: usize = 8;
-
-        struct NeverEnds;
-
-        impl RpcSubscriptionFlow for NeverEnds {
-            type Params = Params;
-            type Notification = serde_json::Value;
-
-            async fn subscribe(
-                _state: RpcContext,
-                _version: RpcVersion,
-                _params: Self::Params,
-                _tx: mpsc::Sender<SubscriptionMessage<Self::Notification>>,
-            ) -> Result<(), crate::jsonrpc::RpcError> {
-                std::future::pending().await
-            }
-        }
 
         let router = setup_with_max_subscriptions(
             0,
@@ -1078,6 +1078,79 @@ mod tests {
             .count();
         assert_eq!(started, MAX_SUBSCRIPTIONS);
         assert_eq!(rejected, BATCH_SIZE - MAX_SUBSCRIPTIONS);
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_frees_a_subscription_slot() {
+        const MAX_SUBSCRIPTIONS: usize = 1;
+
+        let router = setup_with_max_subscriptions(
+            0,
+            WebsocketHistory::Unlimited,
+            NeverEnds,
+            MAX_SUBSCRIPTIONS,
+        )
+        .await;
+
+        let (sender_tx, mut sender_rx) = mpsc::channel(1024);
+        let (receiver_tx, receiver_rx) = mpsc::channel(1024);
+        handle_json_rpc_socket(router.clone(), sender_tx, receiver_rx);
+
+        let mut request = async |id: u64, method: &str, params: serde_json::Value| {
+            receiver_tx
+                .send(Ok(Message::Text(
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "method": method,
+                        "params": params,
+                    })
+                    .to_string()
+                    .into(),
+                )))
+                .await
+                .unwrap();
+            match sender_rx.recv().await.unwrap().unwrap() {
+                Message::Text(json) => serde_json::from_str::<serde_json::Value>(&json).unwrap(),
+                other => panic!("Expected a text message, got {other:?}"),
+            }
+        };
+
+        // Take the only slot.
+        let response = request(1, "test", serde_json::json!({})).await;
+        let subscription_id = response["result"].as_str().unwrap().to_owned();
+
+        // At the limit, further subscriptions are rejected.
+        let response = request(2, "test", serde_json::json!({})).await;
+        assert_eq!(
+            response["error"]["data"]["reason"],
+            "Too many subscriptions"
+        );
+
+        // Free the slot.
+        let response = request(
+            3,
+            "starknet_unsubscribe",
+            serde_json::json!({"subscription_id": subscription_id}),
+        )
+        .await;
+        assert_eq!(response["result"], true);
+
+        // Unsubscribing aborts the subscription task, which releases the slot
+        // once the runtime drops the task, so retry until that happens.
+        let mut response = request(4, "test", serde_json::json!({})).await;
+        for _ in 0..100 {
+            if response["result"].is_string() {
+                break;
+            }
+            assert_eq!(
+                response["error"]["data"]["reason"],
+                "Too many subscriptions"
+            );
+            tokio::task::yield_now().await;
+            response = request(4, "test", serde_json::json!({})).await;
+        }
+        assert!(response["result"].is_string());
     }
 
     #[tokio::test]
