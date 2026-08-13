@@ -231,7 +231,7 @@ Examples:
         long = "rpc.request-timeout",
         long_help = "Maximum RPC request duration in seconds.",
         default_value = "120",
-        value_parser = parse_fractional_seconds,
+        value_parser = parse_positive_fractional_seconds,
         env = "PATHFINDER_RPC_REQUEST_TIMEOUT"
     )]
     rpc_request_timeout: Duration,
@@ -240,7 +240,7 @@ Examples:
         long = "rpc.header-read-timeout",
         long_help = "Maximum time to send RPC request headers, in seconds.",
         default_value = "30",
-        value_parser = parse_fractional_seconds,
+        value_parser = parse_positive_fractional_seconds,
         env = "PATHFINDER_RPC_HEADER_READ_TIMEOUT"
     )]
     rpc_header_read_timeout: Duration,
@@ -249,7 +249,7 @@ Examples:
         long = "sync.poll-interval",
         long_help = "New block poll interval in seconds (can use fractions)",
         default_value = "1",
-        value_parser = parse_fractional_seconds,
+        value_parser = parse_positive_fractional_seconds,
         env = "PATHFINDER_HEAD_POLL_INTERVAL_SECONDS"
     )]
     poll_interval: Duration,
@@ -807,16 +807,11 @@ fn parse_fee_estimation_epsilon(s: &str) -> Result<Percentage, String> {
     Ok(Percentage::new(value))
 }
 
-fn parse_fractional_seconds(s: &str) -> Result<Duration, String> {
+fn parse_positive_fractional_seconds(s: &str) -> Result<Duration, String> {
     let seconds: f64 = s
         .parse()
         .map_err(|_| "Expected a number (f64)".to_string())?;
     let duration = Duration::try_from_secs_f64(seconds).map_err(|e| e.to_string())?;
-    Ok(duration)
-}
-
-fn parse_positive_fractional_seconds(s: &str) -> Result<Duration, String> {
-    let duration = parse_fractional_seconds(s)?;
     if duration.is_zero() {
         return Err("Expected a number greater than zero".to_string());
     }
@@ -1588,7 +1583,7 @@ Note that the 'unlimited' setting is meant primarily for testing and not recomme
         long = "rpc.websocket.send-timeout",
         long_help = "Threshold for considering the websocket's output buffer full (and closing the connection).",
         default_value = "1",
-        value_parser = parse_fractional_seconds,
+        value_parser = parse_positive_fractional_seconds,
         env = "PATHFINDER_WEBSOCKET_SEND_TIMEOUT"
     )]
     pub send_timeout: Duration,
