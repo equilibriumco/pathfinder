@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use async_trait::async_trait;
 use axum::extract::ws::{close_code, CloseFrame, Message, Utf8Bytes, WebSocket};
 use dashmap::DashMap;
@@ -530,7 +531,12 @@ pub fn split_ws(
     let ping_interval = ws_cfg.ping_interval;
     let max_missed_pings = ws_cfg.max_missed_pings.get();
     let (mut ws_sender, mut ws_receiver) = ws.split();
-    let mut send_with_timeout = async move |msg| timeout(egress_timeout, ws_sender.send(msg)).await;
+
+    let mut send_with_timeout =
+        async move |msg| match timeout(egress_timeout, ws_sender.send(msg)).await {
+            Ok(sent) => sent.context("Sending websocket message"),
+            Err(_) => anyhow::bail!("Sending websocket message timed out"),
+        };
     // Send messages to the websocket using an MPSC channel.
     let (sender_tx, mut sender_rx) = mpsc::channel::<Result<Message, RpcResponse>>(1024);
     let sender_task = util::task::spawn_with_cancel({
@@ -580,6 +586,7 @@ pub fn split_ws(
                         }
                     }
                 }
+                connection_token.cancel();
             }
         }
     });
@@ -595,31 +602,39 @@ pub fn split_ws(
             // connection open by refreshing it with control frames.
             let first_frame_deadline = Instant::now() + initial_frame_timeout;
             let mut awaiting_first_frame = true;
-            let mut missed_pings = 0;
+            let mut silent_intervals = 0;
             let close_reason = loop {
                 let deadline = if awaiting_first_frame {
                     first_frame_deadline
                 } else {
                     Instant::now() + ping_interval
                 };
-                let received = match timeout_at(deadline, ws_receiver.next()).await {
-                    Ok(received) => received,
-                    Err(_) => {
-                        if awaiting_first_frame {
-                            break "no_initial_frame";
+
+                let received = tokio::select! {
+                    _ = connection_token.cancelled() => {
+                        break "closing";
+                    }
+                    received = timeout_at(deadline, ws_receiver.next()) => {
+                        match received {
+                            Ok(received) => received,
+                            Err(_) => {
+                                if awaiting_first_frame {
+                                    break "no_initial_frame";
+                                }
+                                silent_intervals += 1;
+                                if silent_intervals > max_missed_pings {
+                                    break "unresponsive";
+                                }
+                                if ping_tx
+                                    .send(Ok(Message::Ping(Default::default())))
+                                    .await
+                                    .is_err()
+                                {
+                                    break "closing";
+                                }
+                                continue;
+                            }
                         }
-                        missed_pings += 1;
-                        if missed_pings > max_missed_pings {
-                            break "unresponsive";
-                        }
-                        if ping_tx
-                            .send(Ok(Message::Ping(Default::default())))
-                            .await
-                            .is_err()
-                        {
-                            break "closing";
-                        }
-                        continue;
                     }
                 };
                 let Some(msg) = received else {
@@ -631,7 +646,7 @@ pub fn split_ws(
                 if matches!(msg, Ok(Message::Text(_) | Message::Binary(_))) {
                     awaiting_first_frame = false;
                 }
-                missed_pings = 0;
+                silent_intervals = 0;
                 if let Err(e) = receiver_tx.send(msg).await {
                     tracing::debug!(error=?e, "Error sending incoming websocket over channel");
                     break "closing";

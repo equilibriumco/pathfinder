@@ -32,6 +32,7 @@ use pathfinder_rpc::{Notifications, SyncState};
 use pathfinder_storage::Storage;
 use starknet_gateway_client::GatewayApi;
 use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::Semaphore;
 use tokio::task::JoinError;
 use tracing::info;
 
@@ -303,8 +304,12 @@ Hint: This is usually caused by exceeding the file descriptor limit of your syst
             initial_frame_timeout: config.websocket.initial_frame_timeout,
             ping_interval: config.websocket.ping_interval,
             max_missed_pings: config.websocket.max_missed_pings,
-            connection_limit: Arc::new(tokio::sync::Semaphore::new(
-                config.websocket.max_connections.get(),
+            connection_limit: Arc::new(Semaphore::new(
+                config
+                    .websocket
+                    .max_connections
+                    .get()
+                    .min(Semaphore::MAX_PERMITS),
             )),
         })
     } else {
