@@ -1087,7 +1087,10 @@ impl<T: crate::dto::SerializeForVersion> SubscriptionSender<T> {
             tracing::warn!(?e, "Cannot serialize error notification");
             mpsc::error::SendError(())
         })?;
-        let data = serde_json::to_string(&notification).unwrap();
+        let data = serde_json::to_string(&notification).map_err(|e| {
+            tracing::warn!(?e, "Cannot serialize error notification");
+            mpsc::error::SendError(())
+        })?;
         self.tx
             .send(Ok(Message::Text(data.into())))
             .await
