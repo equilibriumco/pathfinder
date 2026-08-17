@@ -213,7 +213,12 @@ Examples:
 
     #[arg(
         long = "max-rpc-connections",
-        long_help = "Set the maximum number of connections allowed",
+        alias = "rpc.max-concurrent-requests",
+        long_help = "Set the limit for the number of RPC requests handled at once. Requests over \
+                     the limit wait for a slot rather than being rejected. A websocket upgrade \
+                     only occupies a slot until the connection is established. Use \
+                     --rpc.websocket.max-connections to limit the number of open websocket \
+                     connections.",
         env = "PATHFINDER_MAX_RPC_CONNECTIONS",
         default_value = "1024"
     )]
