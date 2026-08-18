@@ -16,6 +16,7 @@ use tokio::sync::watch::Receiver as WatchReceiver;
 
 /// A finalized transaction along with its receipt, events, status and the block
 /// number it was included in.
+#[derive(Debug)]
 pub struct FinalizedTxData {
     pub block_number: BlockNumber,
     pub transaction: pathfinder_common::transaction::Transaction,
@@ -122,11 +123,19 @@ impl PendingWatcher {
             // pre-confirmed's parent and carries the parent state commitment.
             // Deeper parents carry only data (txns, receipts, events); execution
             // uses the aggregated overlay, so they need no patch.
-            assert_eq!(
-                immediate_parent.block.number + 1,
-                pre_confirmed.number,
-                "Pre-confirmed block should be child of its immediate parent"
-            );
+            //
+            // The producer only stores contiguous windows, so a gap here means
+            // the cache was written by something that broke that invariant.
+            // Degrade to an empty block rather than panicking in a reader.
+            if immediate_parent.block.number + 1 != pre_confirmed.number {
+                tracing::warn!(
+                    immediate_parent = %immediate_parent.block.number,
+                    pre_confirmed = %pre_confirmed.number,
+                    "Pending cache invariant violated: pre-confirmed block is not the child of \
+                     its immediate parent"
+                );
+                return Ok(PendingData::empty(&latest));
+            }
             immediate_parent.state_update = immediate_parent
                 .state_update
                 .clone()
@@ -201,7 +210,13 @@ impl PendingWatcher {
 pub fn find_finalized_tx_data(
     pending: &PendingData,
     tx_hash: pathfinder_common::TransactionHash,
-) -> Option<FinalizedTxData> {
+) -> anyhow::Result<Option<FinalizedTxData>> {
+    fn missing_receipt(tx_hash: pathfinder_common::TransactionHash) -> anyhow::Error {
+        anyhow::anyhow!(
+            "Pending cache invariant violated: receipt missing for transaction {tx_hash}"
+        )
+    }
+
     if let Some(tx) = pending
         .pre_confirmed_transactions()
         .iter()
@@ -212,14 +227,14 @@ pub fn find_finalized_tx_data(
             .iter()
             .find(|(r, _)| r.transaction_hash == tx_hash)
             .cloned()
-            .expect("Receipt should exist if the transaction exists");
-        return Some(FinalizedTxData {
+            .ok_or_else(|| missing_receipt(tx_hash))?;
+        return Ok(Some(FinalizedTxData {
             block_number: pending.pre_confirmed_block_number(),
             transaction: tx.clone(),
             receipt,
             events,
             finality_status: crate::dto::TxnFinalityStatus::PreConfirmed,
-        });
+        }));
     }
 
     for parent in pending.parent_blocks().rev() {
@@ -230,18 +245,18 @@ pub fn find_finalized_tx_data(
                 .iter()
                 .find(|(r, _)| r.transaction_hash == tx_hash)
                 .cloned()
-                .expect("Receipt should exist if the transaction exists");
-            return Some(FinalizedTxData {
+                .ok_or_else(|| missing_receipt(tx_hash))?;
+            return Ok(Some(FinalizedTxData {
                 block_number: parent.block.number,
                 transaction: tx.clone(),
                 receipt,
                 events,
                 finality_status: crate::dto::TxnFinalityStatus::PreConfirmed,
-            });
+            }));
         }
     }
 
-    None
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -384,8 +399,8 @@ mod tests {
             // Should be latest.number + 2 to be valid.
             number: latest.number + 3,
             // Derived as if the pre-latest were the immediate parent, so the
-            // view is considered servable and the inconsistent pair trips the
-            // child-of-pre-latest assertion in `get` (see the should_panic test).
+            // view is considered servable and `get` reaches the
+            // child-of-immediate-parent check with an inconsistent pair.
             aggregated_lower_bound: latest.number,
         }
     }
@@ -677,8 +692,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn pre_confirmed_is_not_child_of_pre_latest_panics() {
+    fn pre_confirmed_is_not_child_of_pre_latest_defaults_to_latest_in_storage() {
         let cache = Arc::new(PendingDataCache::new());
         let uut = PendingWatcher::new(cache.clone());
 
@@ -708,7 +722,12 @@ mod tests {
 
         let pending = invalid_pre_confirmed_block_with_pre_latest(&latest);
         cache.store(pending.clone());
-        let _ = uut.get(&tx).unwrap();
+
+        let result = uut.get(&tx).unwrap();
+
+        let expected = empty_pre_confirmed_block(&latest);
+
+        pretty_assertions_sorted::assert_eq_sorted!(result, expected);
     }
 
     fn empty_pre_confirmed_block(latest: &BlockHeader) -> PendingData {
@@ -946,14 +965,75 @@ mod tests {
             BlockNumber::new_or_panic(10),
         );
 
-        let found =
-            find_finalized_tx_data(&pending, deep_hash).expect("deep-ancestor tx should be found");
+        let found = find_finalized_tx_data(&pending, deep_hash)
+            .unwrap()
+            .expect("deep-ancestor tx should be found");
         assert_eq!(found.block_number, BlockNumber::new_or_panic(7));
         assert_eq!(found.transaction.hash, deep_hash);
         assert_eq!(found.receipt.transaction_hash, deep_hash);
         assert_eq!(found.events, vec![deep_event]);
 
         // A hash present nowhere in the window is not found.
-        assert!(find_finalized_tx_data(&pending, transaction_hash_bytes!(b"absent")).is_none());
+        assert!(
+            find_finalized_tx_data(&pending, transaction_hash_bytes!(b"absent"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn find_finalized_tx_data_reports_a_missing_receipt() {
+        let orphan_hash = transaction_hash_bytes!(b"orphan tx");
+        let pending = PendingData::from_parts(
+            PendingBlocks {
+                pre_confirmed: PreConfirmedBlock {
+                    number: BlockNumber::new_or_panic(10),
+                    transactions: vec![Transaction {
+                        hash: orphan_hash,
+                        ..Default::default()
+                    }],
+                    transaction_receipts: vec![],
+                    ..Default::default()
+                },
+                parents: vec![],
+            },
+            StateUpdate::default(),
+            StateUpdate::default(),
+            BlockNumber::new_or_panic(10),
+        );
+
+        let err = find_finalized_tx_data(&pending, orphan_hash).unwrap_err();
+        assert!(err.to_string().contains("receipt missing for transaction"));
+    }
+
+    #[test]
+    fn find_finalized_tx_data_reports_a_missing_receipt_in_a_parent() {
+        let orphan_hash = transaction_hash_bytes!(b"orphan tx");
+        let pending = PendingData::from_parts(
+            PendingBlocks {
+                pre_confirmed: PreConfirmedBlock {
+                    number: BlockNumber::new_or_panic(10),
+                    ..Default::default()
+                },
+                parents: vec![PreLatestData {
+                    block: PreLatestBlock {
+                        number: BlockNumber::new_or_panic(9),
+                        transactions: vec![Transaction {
+                            hash: orphan_hash,
+                            ..Default::default()
+                        }],
+                        transaction_receipts: vec![],
+                        ..Default::default()
+                    },
+                    state_update: StateUpdate::default(),
+                }],
+            },
+            StateUpdate::default(),
+            StateUpdate::default(),
+            BlockNumber::new_or_panic(10),
+        );
+
+        let err = find_finalized_tx_data(&pending, orphan_hash).unwrap_err();
+        assert!(err.to_string().contains("receipt missing for transaction"));
     }
 }

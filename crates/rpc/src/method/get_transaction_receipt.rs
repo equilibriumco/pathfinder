@@ -100,10 +100,13 @@ pub async fn get_transaction_receipt(
         // Pending is an optional first look; a finalized tx lives in the DB regardless.
         let pending = context.pending_data.get_optional(&db_tx)?;
 
-        if let Some(finalized_tx_data) = pending
+        let finalized_tx_data = pending
             .as_ref()
-            .and_then(|p| crate::pending::find_finalized_tx_data(p, input.transaction_hash))
-        {
+            .map(|p| crate::pending::find_finalized_tx_data(p, input.transaction_hash))
+            .transpose()?
+            .flatten();
+
+        if let Some(finalized_tx_data) = finalized_tx_data {
             return Ok(Output::Pending {
                 receipt: finalized_tx_data.receipt,
                 block_number: finalized_tx_data.block_number,
