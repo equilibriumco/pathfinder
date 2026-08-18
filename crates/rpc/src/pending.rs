@@ -46,6 +46,10 @@ impl PendingWatcher {
     /// Returns an empty block with gas price and timestamp taken from the
     /// latest block if no valid pending data is available. The block number
     /// is also incremented.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if called from async context.
     pub fn get(&self, tx: &Transaction<'_>) -> Result<PendingData, ReadError> {
         let latest = tx
             .block_header(pathfinder_common::BlockId::Latest)
@@ -173,6 +177,10 @@ impl PendingWatcher {
 
     /// Returns the pending data, or `None` when the cache is unavailable.
     /// Unlike [`Self::get`], an `Unavailable` cache is not an error.
+    ///
+    /// #Panics
+    ///
+    /// This function will panic if called from async context.
     pub fn get_optional(&self, tx: &Transaction<'_>) -> Result<Option<PendingData>, ReadError> {
         match self.get(tx) {
             Ok(data) => Ok(Some(data)),
