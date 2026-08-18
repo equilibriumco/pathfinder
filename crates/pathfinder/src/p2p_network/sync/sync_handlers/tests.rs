@@ -504,6 +504,163 @@ mod prop {
         }
     }
 
+    #[test]
+    fn regression_get_state_diffs() {
+        use p2p_proto::sync::common::{Direction, Step};
+
+        let num_blocks = 6;
+        let seed = 3564119352975096413;
+        let start_block = 2;
+        let limit = 2;
+        let step = Step::from(Some(1));
+        let direction = Direction::Backward;
+
+        // Fake storage with a given number of blocks
+        let (storage, in_db) = fixtures::storage_with_seed(seed, num_blocks);
+        // Compute the overlapping set between the db and the request
+        // These are the items that we expect to be read from the db
+        // Grouped by block number
+        let expected = overlapping::get(in_db, start_block, limit, step, num_blocks, direction)
+            .into_iter()
+            .map(
+                |Block {
+                     header,
+                     state_update,
+                     ..
+                 }| {
+                    let state_update = state_update.unwrap();
+                    (
+                        header.header.number, // Block number
+                        state_update
+                            .contract_updates
+                            .into_iter()
+                            .map(|(k, v)| (k, v.into()))
+                            .collect::<HashMap<_, _>>(),
+                        state_update.system_contract_updates,
+                        state_update.declared_sierra_classes,
+                        state_update.declared_cairo_classes,
+                    )
+                },
+            )
+            .collect::<Vec<_>>();
+        // Run the handler
+        let request = StateDiffsRequest {
+            iteration: Iteration {
+                start: BlockNumberOrHash::Number(start_block),
+                limit,
+                step,
+                direction,
+            },
+        };
+        let mut responses = Runtime::new().unwrap().block_on(async {
+            let (tx, rx) = mpsc::channel(0);
+            let getter_fut = sync_handlers::get_state_diffs(storage, request, tx);
+            let (_, response) = tokio::join!(getter_fut, rx.collect::<Vec<_>>());
+            response
+        });
+
+        // Make sure the last reply is Fin
+        assert_eq!(responses.pop().unwrap(), StateDiffsResponse::Fin);
+
+        let mut actual_contract_updates = Vec::new();
+        let mut actual_system_contract_updates = Vec::new();
+        let mut actual_declared_cairo = HashSet::new();
+        let mut actual_declared_sierra = HashMap::new();
+
+        // Check the rest
+        responses.into_iter().for_each(|response| match response {
+            StateDiffsResponse::ContractDiff(ContractDiff {
+                address,
+                nonce,
+                class_hash,
+                values,
+                domain: _,
+            }) => {
+                let contract_address = ContractAddress(address.0);
+                if contract_address.is_system_contract() {
+                    actual_system_contract_updates.push((
+                        contract_address,
+                        SystemContractUpdate {
+                            storage: values
+                                .into_iter()
+                                .map(|ContractStoredValue { key, value }| {
+                                    (StorageAddress(key), StorageValue(value))
+                                })
+                                .collect(),
+                        },
+                    ));
+                } else {
+                    actual_contract_updates.push((
+                        contract_address,
+                        ContractUpdate {
+                            storage: values
+                                .into_iter()
+                                .map(|ContractStoredValue { key, value }| {
+                                    (StorageAddress(key), StorageValue(value))
+                                })
+                                .collect(),
+                            class: class_hash.map(|x| ClassHash(x.0)),
+                            nonce: nonce.map(ContractNonce),
+                        },
+                    ));
+                }
+            }
+            StateDiffsResponse::DeclaredClass(DeclaredClass {
+                class_hash,
+                compiled_class_hash: Some(compiled_class_hash),
+            }) => {
+                actual_declared_sierra
+                    .insert(SierraHash(class_hash.0), CasmHash(compiled_class_hash.0));
+            }
+            StateDiffsResponse::DeclaredClass(DeclaredClass {
+                class_hash,
+                compiled_class_hash: None,
+            }) => {
+                actual_declared_cairo.insert(ClassHash(class_hash.0));
+            }
+            _ => panic!("unexpected response"),
+        });
+
+        for expected_for_block in expected {
+            let block_number = expected_for_block.0;
+            let actual_contract_updates_for_block = actual_contract_updates
+                .drain(..expected_for_block.1.len())
+                .collect::<HashMap<_, _>>();
+            let actual_system_contract_updates_for_block = actual_system_contract_updates
+                .drain(..expected_for_block.2.len())
+                .collect::<HashMap<_, _>>();
+            pretty_assertions_sorted::assert_eq!(
+                expected_for_block.1,
+                actual_contract_updates_for_block,
+                "block number: {}",
+                block_number
+            );
+            pretty_assertions_sorted::assert_eq!(
+                expected_for_block.2,
+                actual_system_contract_updates_for_block,
+                "block number: {}",
+                block_number
+            );
+
+            for (sierra_hash, casm_hash) in expected_for_block.3 {
+                pretty_assertions_sorted::assert_eq!(
+                    actual_declared_sierra.remove(&sierra_hash).unwrap(),
+                    casm_hash,
+                    "block number: {}",
+                    block_number
+                );
+            }
+
+            for cairo_hash in expected_for_block.4 {
+                assert!(
+                    actual_declared_cairo.remove(&cairo_hash),
+                    "block number: {}",
+                    block_number
+                );
+            }
+        }
+    }
+
     /// Fixtures for prop tests
     mod fixtures {
         use pathfinder_block_commitments::calculate_receipt_commitment;
