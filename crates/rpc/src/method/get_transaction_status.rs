@@ -54,10 +54,13 @@ pub async fn get_transaction_status(
 
         let pending_data = context.pending_data.get_optional(&db_tx)?;
 
-        if let Some(finalized_tx_data) = pending_data
+        let finalized_tx_data = pending_data
             .as_ref()
-            .and_then(|p| crate::pending::find_finalized_tx_data(p, input.transaction_hash))
-        {
+            .map(|p| crate::pending::find_finalized_tx_data(p, input.transaction_hash))
+            .transpose()?
+            .flatten();
+
+        if let Some(finalized_tx_data) = finalized_tx_data {
             let execution_status = &finalized_tx_data.receipt.execution_status;
             let output = match finalized_tx_data.finality_status {
                 crate::dto::TxnFinalityStatus::PreConfirmed => {
