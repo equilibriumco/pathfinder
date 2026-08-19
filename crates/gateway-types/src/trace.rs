@@ -325,8 +325,14 @@ mod tests {
         fn accepts_nesting_up_to_the_depth_cap() {
             // `MAX_TRACE_CALL_DEPTH` counts `internal_calls` levels, so a tree
             // with that many nested children is exactly at the limit.
-            let value = nested_invocation(MAX_TRACE_CALL_DEPTH - 1);
-            serde_json::from_value::<FunctionInvocation>(value)
+            //
+            // Serialise and parse with `from_str` rather than `from_value`: only
+            // the string/slice deserialisers track recursion, so this is the
+            // only way to exercise the same path as the production `from_slice`
+            // deserialisation. The cap sits below serde_json's recursion limit,
+            // so a tree at the cap parses without tripping it.
+            let json = serde_json::to_string(&nested_invocation(MAX_TRACE_CALL_DEPTH - 1)).unwrap();
+            serde_json::from_str::<FunctionInvocation>(&json)
                 .expect("nesting at the cap should be accepted");
             // Deserialisation is a scoped operation: the thread-local depth
             // counter must return to zero afterwards.
@@ -335,8 +341,8 @@ mod tests {
 
         #[test]
         fn rejects_nesting_beyond_the_depth_cap() {
-            let value = nested_invocation(MAX_TRACE_CALL_DEPTH + 5);
-            let err = serde_json::from_value::<FunctionInvocation>(value)
+            let json = serde_json::to_string(&nested_invocation(MAX_TRACE_CALL_DEPTH + 5)).unwrap();
+            let err = serde_json::from_str::<FunctionInvocation>(&json)
                 .expect_err("nesting beyond the cap must be rejected");
             assert!(
                 err.to_string().contains("depth cap"),
