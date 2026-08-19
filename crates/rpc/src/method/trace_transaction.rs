@@ -244,6 +244,15 @@ pub async fn trace_transaction(
         LocalExecution::Unsupported(tx) => tx,
     };
 
+    // Mark the fallback path so operators can tell which trace responses were
+    // sourced from the (untrusted, authoritative) feeder gateway rather than
+    // produced by local re-execution.
+    tracing::debug!(
+        trace_source = "feeder_gateway",
+        transaction_hash = %input.transaction_hash,
+        "Serving transaction trace from the feeder gateway fallback path"
+    );
+
     // The gateway client retries transport errors with an unbounded exponential
     // backoff, so a slow or unresponsive sequencer would otherwise hold this task
     // (and the resources acquired during the preflight) for the full retry
