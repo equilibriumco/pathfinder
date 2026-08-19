@@ -240,6 +240,16 @@ pub async fn trace_block_transactions(
         LocalExecution::Unsupported((block_id, transactions)) => (block_id, transactions),
     };
 
+    // Mark the fallback path so operators can tell which trace responses were
+    // sourced from the (untrusted, authoritative) feeder gateway rather than
+    // produced by local re-execution. On the wire this is already observable to
+    // callers as an absence of state diffs / `initial_reads`.
+    tracing::debug!(
+        trace_source = "feeder_gateway",
+        ?block_id,
+        "Serving block traces from the feeder gateway fallback path"
+    );
+
     // The gateway client retries transport errors with an unbounded exponential
     // backoff, so a slow or unresponsive sequencer would otherwise hold this task
     // (and the resources acquired during the preflight) for the full retry
@@ -310,130 +320,95 @@ pub(crate) fn map_gateway_trace(
         .map(|i| (i.execution_resources, i.gas_consumed))
         .unwrap_or_default();
 
+    // The gateway trace is untrusted authoritative input on the mainnet
+    // fallback path, so these counters are attacker-controlled. Sum them with
+    // `checked_add` and convert with `try_from` rather than `+` / `.unwrap()`,
+    // turning an overflow into a typed error instead of a panic (or a silently
+    // wrapped value in release builds).
+    let sum =
+        |select: fn(&starknet_gateway_types::reply::transaction::ExecutionResources) -> u64,
+         field: &str|
+         -> anyhow::Result<usize> {
+            sum3_to_usize(
+                [
+                    select(&validate_invocation_resources),
+                    select(&function_invocation_resources),
+                    select(&fee_transfer_invocation_resources),
+                ],
+                field,
+            )
+        };
     let computation_resources = pathfinder_executor::types::ComputationResources {
-        steps: (validate_invocation_resources.n_steps
-            + function_invocation_resources.n_steps
-            + fee_transfer_invocation_resources.n_steps)
-            .try_into()
-            .unwrap(),
-        memory_holes: (validate_invocation_resources.n_memory_holes
-            + function_invocation_resources.n_memory_holes
-            + fee_transfer_invocation_resources.n_memory_holes)
-            .try_into()
-            .unwrap(),
-        range_check_builtin_applications: (validate_invocation_resources
-            .builtin_instance_counter
-            .range_check_builtin
-            + function_invocation_resources
-                .builtin_instance_counter
-                .range_check_builtin
-            + fee_transfer_invocation_resources
-                .builtin_instance_counter
-                .range_check_builtin)
-            .try_into()
-            .unwrap(),
-        pedersen_builtin_applications: (validate_invocation_resources
-            .builtin_instance_counter
-            .pedersen_builtin
-            + function_invocation_resources
-                .builtin_instance_counter
-                .pedersen_builtin
-            + fee_transfer_invocation_resources
-                .builtin_instance_counter
-                .pedersen_builtin)
-            .try_into()
-            .unwrap(),
-        poseidon_builtin_applications: (validate_invocation_resources
-            .builtin_instance_counter
-            .poseidon_builtin
-            + function_invocation_resources
-                .builtin_instance_counter
-                .poseidon_builtin
-            + fee_transfer_invocation_resources
-                .builtin_instance_counter
-                .poseidon_builtin)
-            .try_into()
-            .unwrap(),
-        ec_op_builtin_applications: (validate_invocation_resources
-            .builtin_instance_counter
-            .ec_op_builtin
-            + function_invocation_resources
-                .builtin_instance_counter
-                .ec_op_builtin
-            + fee_transfer_invocation_resources
-                .builtin_instance_counter
-                .ec_op_builtin)
-            .try_into()
-            .unwrap(),
-        ecdsa_builtin_applications: (validate_invocation_resources
-            .builtin_instance_counter
-            .ecdsa_builtin
-            + function_invocation_resources
-                .builtin_instance_counter
-                .ecdsa_builtin
-            + fee_transfer_invocation_resources
-                .builtin_instance_counter
-                .ecdsa_builtin)
-            .try_into()
-            .unwrap(),
-        bitwise_builtin_applications: (validate_invocation_resources
-            .builtin_instance_counter
-            .bitwise_builtin
-            + function_invocation_resources
-                .builtin_instance_counter
-                .bitwise_builtin
-            + fee_transfer_invocation_resources
-                .builtin_instance_counter
-                .bitwise_builtin)
-            .try_into()
-            .unwrap(),
-        keccak_builtin_applications: (validate_invocation_resources
-            .builtin_instance_counter
-            .keccak_builtin
-            + function_invocation_resources
-                .builtin_instance_counter
-                .keccak_builtin
-            + fee_transfer_invocation_resources
-                .builtin_instance_counter
-                .keccak_builtin)
-            .try_into()
-            .unwrap(),
-        segment_arena_builtin: (validate_invocation_resources
-            .builtin_instance_counter
-            .segment_arena_builtin
-            + function_invocation_resources
-                .builtin_instance_counter
-                .segment_arena_builtin
-            + fee_transfer_invocation_resources
-                .builtin_instance_counter
-                .segment_arena_builtin)
-            .try_into()
-            .unwrap(),
+        steps: sum(|r| r.n_steps, "steps")?,
+        memory_holes: sum(|r| r.n_memory_holes, "memory_holes")?,
+        range_check_builtin_applications: sum(
+            |r| r.builtin_instance_counter.range_check_builtin,
+            "range_check_builtin_applications",
+        )?,
+        pedersen_builtin_applications: sum(
+            |r| r.builtin_instance_counter.pedersen_builtin,
+            "pedersen_builtin_applications",
+        )?,
+        poseidon_builtin_applications: sum(
+            |r| r.builtin_instance_counter.poseidon_builtin,
+            "poseidon_builtin_applications",
+        )?,
+        ec_op_builtin_applications: sum(
+            |r| r.builtin_instance_counter.ec_op_builtin,
+            "ec_op_builtin_applications",
+        )?,
+        ecdsa_builtin_applications: sum(
+            |r| r.builtin_instance_counter.ecdsa_builtin,
+            "ecdsa_builtin_applications",
+        )?,
+        bitwise_builtin_applications: sum(
+            |r| r.builtin_instance_counter.bitwise_builtin,
+            "bitwise_builtin_applications",
+        )?,
+        keccak_builtin_applications: sum(
+            |r| r.builtin_instance_counter.keccak_builtin,
+            "keccak_builtin_applications",
+        )?,
+        segment_arena_builtin: sum(
+            |r| r.builtin_instance_counter.segment_arena_builtin,
+            "segment_arena_builtin",
+        )?,
     };
+    // `saturating_add` for the same reason the counters above use `checked_add`:
+    // these `u128` gas figures are attacker-controlled on the fallback path and
+    // must not panic (debug) or silently wrap (release) on overflow.
     let l1_gas = validate_invocation_resources
         .total_gas_consumed
         .unwrap_or_default()
         .l1_gas
-        + function_invocation_resources
-            .total_gas_consumed
-            .unwrap_or_default()
-            .l1_gas
-        + fee_transfer_invocation_resources
-            .total_gas_consumed
-            .unwrap_or_default()
-            .l1_gas;
+        .saturating_add(
+            function_invocation_resources
+                .total_gas_consumed
+                .unwrap_or_default()
+                .l1_gas,
+        )
+        .saturating_add(
+            fee_transfer_invocation_resources
+                .total_gas_consumed
+                .unwrap_or_default()
+                .l1_gas,
+        );
     let l1_data_gas = validate_invocation_resources
         .total_gas_consumed
         .unwrap_or_default()
         .l1_data_gas
-        + function_invocation_resources
-            .total_gas_consumed
-            .unwrap_or_default()
-            .l1_data_gas
-        + fee_transfer_invocation_resources
-            .total_gas_consumed
-            .unwrap_or_default()
-            .l1_data_gas;
+        .saturating_add(
+            function_invocation_resources
+                .total_gas_consumed
+                .unwrap_or_default()
+                .l1_data_gas,
+        )
+        .saturating_add(
+            fee_transfer_invocation_resources
+                .total_gas_consumed
+                .unwrap_or_default()
+                .l1_data_gas,
+        );
     let validate_invocation_l2_gas = validate_invocation_gas_consumed.unwrap_or_else(|| {
         validate_invocation_resources
             .total_gas_consumed
@@ -455,7 +430,9 @@ pub(crate) fn map_gateway_trace(
             .l2_gas
             .unwrap_or_default()
     });
-    let l2_gas = validate_invocation_l2_gas + function_invocation_l2_gas + fee_transfer_l2_gas;
+    let l2_gas = validate_invocation_l2_gas
+        .saturating_add(function_invocation_l2_gas)
+        .saturating_add(fee_transfer_l2_gas);
     let execution_resources = pathfinder_executor::types::ExecutionResources {
         computation_resources,
         // These values are not available in the gateway trace.
@@ -570,8 +547,78 @@ pub(crate) fn map_gateway_trace(
     })
 }
 
+/// Sums three attacker-controlled `u64` counters from a gateway trace and
+/// converts the total to `usize`, returning a typed error on overflow instead
+/// of panicking (or silently wrapping in release builds).
+fn sum3_to_usize(values: [u64; 3], field: &str) -> anyhow::Result<usize> {
+    let total = values
+        .into_iter()
+        .try_fold(0u64, |acc, value| acc.checked_add(value))
+        .with_context(|| format!("Overflow summing `{field}` in gateway trace"))?;
+    u64_to_usize(total, field)
+}
+
+/// Converts a `u64` counter from a gateway trace to `usize`, returning a typed
+/// error rather than panicking if it does not fit (e.g. on a 32-bit target).
+fn u64_to_usize(value: u64, field: &str) -> anyhow::Result<usize> {
+    usize::try_from(value)
+        .with_context(|| format!("`{field}` exceeds usize range in gateway trace"))
+}
+
 fn map_gateway_function_invocation(
     invocation: starknet_gateway_types::trace::FunctionInvocation,
+) -> anyhow::Result<pathfinder_executor::types::FunctionInvocation> {
+    // Map the invocation tree iteratively (post-order) rather than recursively.
+    // `internal_calls` comes from an untrusted feeder gateway on the mainnet
+    // fallback path; a recursive mapping would overflow the stack (a SIGSEGV
+    // that the RPC layer's `catch_unwind` cannot recover) on a deeply nested
+    // tree. Deserialisation already bounds the nesting depth
+    // (`MAX_TRACE_CALL_DEPTH`), and this explicit work stack keeps the mapping
+    // safe regardless of that bound.
+    struct Frame {
+        node: starknet_gateway_types::trace::FunctionInvocation,
+        remaining: std::vec::IntoIter<starknet_gateway_types::trace::FunctionInvocation>,
+        mapped_children: Vec<pathfinder_executor::types::FunctionInvocation>,
+    }
+
+    fn into_frame(mut node: starknet_gateway_types::trace::FunctionInvocation) -> Frame {
+        let children = std::mem::take(&mut node.internal_calls);
+        Frame {
+            node,
+            remaining: children.into_iter(),
+            mapped_children: Vec::new(),
+        }
+    }
+
+    let mut stack = vec![into_frame(invocation)];
+    let mut completed: Option<pathfinder_executor::types::FunctionInvocation> = None;
+
+    while let Some(frame) = stack.last_mut() {
+        if let Some(child) = completed.take() {
+            frame.mapped_children.push(child);
+        }
+        match frame.remaining.next() {
+            Some(child) => stack.push(into_frame(child)),
+            None => {
+                let frame = stack
+                    .pop()
+                    .expect("frame present: just obtained via last_mut");
+                completed = Some(map_shallow_invocation(frame.node, frame.mapped_children)?);
+            }
+        }
+    }
+
+    Ok(completed.expect("the root frame always yields a mapped invocation"))
+}
+
+/// Maps a single gateway
+/// [`FunctionInvocation`](starknet_gateway_types::trace::FunctionInvocation)
+/// into its executor counterpart, given its already-mapped `internal_calls`.
+/// Contains no recursion; the tree walk lives in
+/// [`map_gateway_function_invocation`].
+fn map_shallow_invocation(
+    invocation: starknet_gateway_types::trace::FunctionInvocation,
+    internal_calls: Vec<pathfinder_executor::types::FunctionInvocation>,
 ) -> anyhow::Result<pathfinder_executor::types::FunctionInvocation> {
     let gas_consumed = invocation
         .execution_resources
@@ -590,11 +637,7 @@ fn map_gateway_function_invocation(
             }
         }),
         caller_address: invocation.caller_address,
-        internal_calls: invocation
-            .internal_calls
-            .into_iter()
-            .map(map_gateway_function_invocation)
-            .collect::<Result<_, _>>()?,
+        internal_calls,
         class_hash: invocation.class_hash,
         entry_point_type: invocation.entry_point_type.map(
             |entry_point_type| match entry_point_type {
@@ -629,7 +672,7 @@ fn map_gateway_function_invocation(
             })
             .collect(),
         result: invocation.result,
-        computation_resources: map_gateway_computation_resources(invocation.execution_resources),
+        computation_resources: map_gateway_computation_resources(invocation.execution_resources)?,
         execution_resources: InnerCallExecutionResources {
             l1_gas: gas_consumed.l1_gas,
             l2_gas: gas_consumed.l2_gas.unwrap_or_default(),
@@ -640,51 +683,44 @@ fn map_gateway_function_invocation(
 
 fn map_gateway_computation_resources(
     resources: starknet_gateway_types::reply::transaction::ExecutionResources,
-) -> pathfinder_executor::types::ComputationResources {
-    pathfinder_executor::types::ComputationResources {
-        steps: resources.n_steps.try_into().unwrap(),
-        memory_holes: resources.n_memory_holes.try_into().unwrap(),
-        range_check_builtin_applications: resources
-            .builtin_instance_counter
-            .range_check_builtin
-            .try_into()
-            .unwrap(),
-        pedersen_builtin_applications: resources
-            .builtin_instance_counter
-            .pedersen_builtin
-            .try_into()
-            .unwrap(),
-        poseidon_builtin_applications: resources
-            .builtin_instance_counter
-            .poseidon_builtin
-            .try_into()
-            .unwrap(),
-        ec_op_builtin_applications: resources
-            .builtin_instance_counter
-            .ec_op_builtin
-            .try_into()
-            .unwrap(),
-        ecdsa_builtin_applications: resources
-            .builtin_instance_counter
-            .ecdsa_builtin
-            .try_into()
-            .unwrap(),
-        bitwise_builtin_applications: resources
-            .builtin_instance_counter
-            .bitwise_builtin
-            .try_into()
-            .unwrap(),
-        keccak_builtin_applications: resources
-            .builtin_instance_counter
-            .keccak_builtin
-            .try_into()
-            .unwrap(),
-        segment_arena_builtin: resources
-            .builtin_instance_counter
-            .segment_arena_builtin
-            .try_into()
-            .unwrap(),
-    }
+) -> anyhow::Result<pathfinder_executor::types::ComputationResources> {
+    let counter = resources.builtin_instance_counter;
+    Ok(pathfinder_executor::types::ComputationResources {
+        steps: u64_to_usize(resources.n_steps, "steps")?,
+        memory_holes: u64_to_usize(resources.n_memory_holes, "memory_holes")?,
+        range_check_builtin_applications: u64_to_usize(
+            counter.range_check_builtin,
+            "range_check_builtin_applications",
+        )?,
+        pedersen_builtin_applications: u64_to_usize(
+            counter.pedersen_builtin,
+            "pedersen_builtin_applications",
+        )?,
+        poseidon_builtin_applications: u64_to_usize(
+            counter.poseidon_builtin,
+            "poseidon_builtin_applications",
+        )?,
+        ec_op_builtin_applications: u64_to_usize(
+            counter.ec_op_builtin,
+            "ec_op_builtin_applications",
+        )?,
+        ecdsa_builtin_applications: u64_to_usize(
+            counter.ecdsa_builtin,
+            "ecdsa_builtin_applications",
+        )?,
+        bitwise_builtin_applications: u64_to_usize(
+            counter.bitwise_builtin,
+            "bitwise_builtin_applications",
+        )?,
+        keccak_builtin_applications: u64_to_usize(
+            counter.keccak_builtin,
+            "keccak_builtin_applications",
+        )?,
+        segment_arena_builtin: u64_to_usize(
+            counter.segment_arena_builtin,
+            "segment_arena_builtin",
+        )?,
+    })
 }
 
 impl crate::dto::SerializeForVersion for TraceBlockTransactionsOutput {
@@ -2018,5 +2054,85 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
+    }
+
+    mod hardening {
+        use starknet_gateway_types::trace::FunctionInvocation as GatewayInvocation;
+
+        use super::super::{map_gateway_function_invocation, sum3_to_usize, u64_to_usize};
+
+        fn leaf_invocation() -> GatewayInvocation {
+            GatewayInvocation {
+                calldata: vec![],
+                contract_address: pathfinder_common::ContractAddress::ZERO,
+                selector: None,
+                call_type: None,
+                caller_address: pathfinder_crypto::Felt::ZERO,
+                internal_calls: vec![],
+                class_hash: None,
+                entry_point_type: None,
+                events: vec![],
+                messages: vec![],
+                result: vec![],
+                execution_resources: Default::default(),
+                failed: false,
+                gas_consumed: None,
+                cairo_native: false,
+            }
+        }
+
+        /// The iterative mapper must preserve `internal_calls` nesting exactly.
+        #[test]
+        fn iterative_mapping_preserves_nesting() {
+            // A linear chain of `internal_calls`, deep enough that a naive
+            // recursion would be visibly deep but shallow enough that dropping
+            // the resulting tree is safe.
+            const DEPTH: usize = 4_000;
+
+            let mut node = leaf_invocation();
+            for _ in 0..DEPTH {
+                let mut parent = leaf_invocation();
+                parent.internal_calls = vec![node];
+                node = parent;
+            }
+
+            let mapped = map_gateway_function_invocation(node).expect("mapping must succeed");
+
+            // Walk the mapped tree and confirm the depth round-trips.
+            let mut count = 0usize;
+            let mut cursor = &mapped;
+            loop {
+                count += 1;
+                match cursor.internal_calls.first() {
+                    Some(child) => cursor = child,
+                    None => break,
+                }
+            }
+            assert_eq!(count, DEPTH + 1);
+        }
+
+        /// A node with several children must map all of them, in order.
+        #[test]
+        fn iterative_mapping_preserves_fan_out() {
+            let mut root = leaf_invocation();
+            root.internal_calls = (0..8).map(|_| leaf_invocation()).collect();
+
+            let mapped = map_gateway_function_invocation(root).expect("mapping must succeed");
+            assert_eq!(mapped.internal_calls.len(), 8);
+        }
+
+        #[test]
+        fn sum3_to_usize_reports_overflow_instead_of_panicking() {
+            let err = sum3_to_usize([u64::MAX, u64::MAX, 1], "steps")
+                .expect_err("overflowing counters must produce an error, not a panic");
+            assert!(err.to_string().contains("Overflow summing"), "{err}");
+
+            assert_eq!(sum3_to_usize([1, 2, 3], "steps").unwrap(), 6);
+        }
+
+        #[test]
+        fn u64_to_usize_round_trips_in_range_values() {
+            assert_eq!(u64_to_usize(42, "steps").unwrap(), 42);
+        }
     }
 }
