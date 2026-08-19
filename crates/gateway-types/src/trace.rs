@@ -16,10 +16,20 @@ use crate::reply::transaction::ExecutionResources;
 /// exhaust memory or the call stack while deserialising.
 ///
 /// Maximum nesting depth of [`FunctionInvocation::internal_calls`]. Honest
-/// mainnet traces nest only a handful of levels deep; this ceiling is far above
-/// anything legitimate while still preventing unbounded recursion (which would
-/// overflow the stack and `SIGSEGV`, escaping the RPC layer's `catch_unwind`).
-pub const MAX_TRACE_CALL_DEPTH: usize = 128;
+/// mainnet traces nest only a handful of levels deep, so this ceiling is far
+/// above anything legitimate while still preventing unbounded recursion (which
+/// would overflow the stack and `SIGSEGV`, escaping the RPC layer's
+/// `catch_unwind`).
+///
+/// It is deliberately kept below `serde_json`'s built-in recursion limit of
+/// 128. That limit counts every nested JSON container and a single
+/// `internal_calls` level costs two of them (the array plus the child object),
+/// so `serde_json` aborts at roughly 63 levels on the `from_slice`/`from_str`
+/// paths used in production. A cap at or above that point would never fire:
+/// `serde_json` would bail out first with its own generic recursion error.
+/// Keeping it well below that threshold guarantees our explicit, clearly-worded
+/// cap is the one that triggers.
+pub const MAX_TRACE_CALL_DEPTH: usize = 50;
 
 /// Maximum number of elements accepted in a single `Vec<Felt>` field of a trace
 /// (`calldata`, `result`, event `data`/`keys`, message `payload`,
