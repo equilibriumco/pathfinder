@@ -23,9 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A batch request could open more subscriptions than `--rpc.websocket.max-subscriptions` allows, because the requests within a batch are handled concurrently and each of them checked the limit before any of them counted towards it.
 - `starknet_traceTransaction` and `starknet_traceBlockTransactions` requests that fall back to the feeder gateway could hang indefinitely on a slow or unresponsive sequencer (the gateway client retries transport errors with an unbounded exponential backoff), holding RPC tasks and letting a public-network client exhaust the RPC concurrency budget. These requests are now bounded by `--rpc.gateway-trace-timeout` and bail out early on graceful shutdown.
 - Subscriptions are now torn down when their websocket connection closes, instead of when they next try to send.
-
-### Security
-
 - Hardened the feeder-gateway trace fallback path used by `starknet_traceTransaction` and `starknet_traceBlockTransactions` for the mainnet block range where local re-execution is impossible. Any public-network caller can force this path for the affected blocks, so a compromised or byzantine gateway response is untrusted authoritative input. The trace deserialiser now bounds `internal_calls` nesting depth, caps the length of every `Vec<Felt>`/`Vec<Event>`/`Vec<MsgToL1>` field, and rejects unknown fields on `FunctionInvocation`; the trace mapper walks `internal_calls` iteratively instead of recursively (preventing a stack-overflow `SIGSEGV` that escapes the RPC layer's `catch_unwind`); and the resource counters are summed with checked arithmetic instead of `+`/`.unwrap()` (preventing overflow panics). The gateway fallback path is also logged with a `trace_source` marker.
 
 ## [0.23.1] - 2026-08-03
