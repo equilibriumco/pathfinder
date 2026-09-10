@@ -1,4 +1,9 @@
 #! /usr/bin/env bash
+
+# provides rpc_call function, custom endpoint can be set with RPC env var
+# shellcheck source=common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 set -euo pipefail
 
 # starknet_call against the pre_confirmed block.
@@ -14,30 +19,16 @@ set -euo pipefail
 #   contract_address       = the block-poke test contract
 #   entry_point_selector   = starknet_keccak("incr_balance")
 
-# Override with RPC=<url> to target a different node.
-RPC="${RPC:-http://127.0.0.1:9546/rpc/v0_10}"
-
-function rpc_call() {
-     printf "Request:\n${1}\nReply:\n"
-     curl -s -X POST \
-          -H 'Content-Type: application/json' \
-          -d "${1}" \
-          ${2}
-     printf "\n\n"
-}
-
-rpc_call \
-'{
-        "id": 1,
-        "jsonrpc": "2.0",
-        "method": "starknet_call",
-        "params": {
-                "request": {
-                        "contract_address": "0x026161f4a753e6940fc82637bacb02ea62fdff46e7197d02f4768cdc9b3b7428",
-                        "entry_point_selector": "0x5081e27807d3aca1e80c2ea1a743821b452074909f0b650ff7f95e446dfdb2",
-                        "calldata": []
-                },
-                "block_id": "pre_confirmed"
-        }
-}' \
-"${RPC}"
+rpc_call '{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "starknet_call",
+  "params": {
+    "request": {
+      "contract_address": "0x026161f4a753e6940fc82637bacb02ea62fdff46e7197d02f4768cdc9b3b7428",
+      "entry_point_selector": "0x5081e27807d3aca1e80c2ea1a743821b452074909f0b650ff7f95e446dfdb2",
+      "calldata": []
+    },
+    "block_id": "pre_confirmed"
+  }
+}'

@@ -1,4 +1,9 @@
 #! /usr/bin/env bash
+
+# provides rpc_call function, custom endpoint can be set with RPC env var
+# shellcheck source=common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 set -euo pipefail
 
 # starknet_getTransactionByBlockIdAndIndex against the pre_confirmed block.
@@ -12,28 +17,13 @@ set -euo pipefail
 # transactions may have arrived and count-1 is no longer the actual last one.
 # That's fine, the index is still valid.
 
-# Override with RPC=<url> to target a different node.
-RPC="${RPC:-http://127.0.0.1:9546/rpc/v0_10}"
-
-function rpc_call() {
-     printf "Request:\n${1}\nReply:\n"
-     curl -s -X POST \
-          -H 'Content-Type: application/json' \
-          -d "${1}" \
-          ${2}
-     printf "\n\n"
-}
-
 # How many transactions are in the pre_confirmed block right now.
-COUNT=$(curl -s -X POST \
-     -H 'Content-Type: application/json' \
-     -d '{
-        "id": 1,
-        "jsonrpc": "2.0",
-        "method": "starknet_getBlockTransactionCount",
-        "params": {"block_id": "pre_confirmed"}
-     }' \
-     "${RPC}" | jq -r '.result')
+COUNT=$(rpc_call_raw '{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "starknet_getBlockTransactionCount",
+  "params": {"block_id": "pre_confirmed"}
+}' | jq -r '.result')
 
 if ! [[ "${COUNT}" =~ ^[0-9]+$ ]]; then
      echo "Could not fetch pre_confirmed tx count (got: '${COUNT}')" >&2
@@ -46,14 +36,12 @@ fi
 INDEX=$((COUNT - 1))
 echo "pre_confirmed has ${COUNT} transaction(s); querying last index ${INDEX}"
 
-rpc_call \
-'{
-        "id": 1,
-        "jsonrpc": "2.0",
-        "method": "starknet_getTransactionByBlockIdAndIndex",
-        "params": {
-                "block_id": "pre_confirmed",
-                "index": '"${INDEX}"'
-        }
-}' \
-"${RPC}"
+rpc_call '{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "starknet_getTransactionByBlockIdAndIndex",
+  "params": {
+    "block_id": "pre_confirmed",
+    "index": '"${INDEX}"'
+  }
+}'

@@ -1,4 +1,9 @@
 #! /usr/bin/env bash
+
+# provides rpc_call function, custom endpoint can be set with RPC env var
+# shellcheck source=common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 set -euo pipefail
 
 # starknet_getStorageAt against the pre_confirmed block.
@@ -13,27 +18,13 @@ set -euo pipefail
 # An unset/mismatched slot simply reads back 0x0 (getStorageAt does not error),
 # so this still exercises the pre_confirmed read path either way.
 
-# Override with RPC=<url> to target a different node.
-RPC="${RPC:-http://127.0.0.1:9546/rpc/v0_10}"
-
-function rpc_call() {
-     printf "Request:\n${1}\nReply:\n"
-     curl -s -X POST \
-          -H 'Content-Type: application/json' \
-          -d "${1}" \
-          ${2}
-     printf "\n\n"
-}
-
-rpc_call \
-'{
-        "id": 1,
-        "jsonrpc": "2.0",
-        "method": "starknet_getStorageAt",
-        "params": {
-                "contract_address": "0x026161f4a753e6940fc82637bacb02ea62fdff46e7197d02f4768cdc9b3b7428",
-                "key": "0x206f38f7e4f15e87567361213c28f235cccdaa1d7fd34c9db1dfe9489c6a091",
-                "block_id": "pre_confirmed"
-        }
-}' \
-"${RPC}"
+rpc_call '{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "starknet_getStorageAt",
+  "params": {
+    "contract_address": "0x026161f4a753e6940fc82637bacb02ea62fdff46e7197d02f4768cdc9b3b7428",
+    "key": "0x206f38f7e4f15e87567361213c28f235cccdaa1d7fd34c9db1dfe9489c6a091",
+    "block_id": "pre_confirmed"
+  }
+}'

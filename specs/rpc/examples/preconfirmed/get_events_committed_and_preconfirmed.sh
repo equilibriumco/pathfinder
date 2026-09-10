@@ -1,4 +1,9 @@
 #! /usr/bin/env bash
+
+# provides rpc_call function, custom endpoint can be set with RPC env var
+# shellcheck source=common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 set -euo pipefail
 
 # starknet_getEvents spanning the committed head into the pre_confirmed block.
@@ -10,23 +15,8 @@ set -euo pipefail
 #
 # The committed head number is fetched from pathfinder (starknet_blockNumber).
 
-# Override with RPC=<url> to target a different node.
-RPC="${RPC:-http://127.0.0.1:9546/rpc/v0_10}"
-
-function rpc_call() {
-     printf "Request:\n${1}\nReply:\n"
-     curl -s -X POST \
-          -H 'Content-Type: application/json' \
-          -d "${1}" \
-          ${2}
-     printf "\n\n"
-}
-
 # Committed head, then one below it as the range start.
-HEAD=$(curl -s -X POST \
-     -H 'Content-Type: application/json' \
-     -d '{"id": 1, "jsonrpc": "2.0", "method": "starknet_blockNumber"}' \
-     "${RPC}" | jq -r '.result')
+HEAD=$(rpc_call_raw '{"id": 1, "jsonrpc": "2.0", "method": "starknet_blockNumber"}' | jq -r '.result')
 
 if ! [[ "${HEAD}" =~ ^[0-9]+$ ]]; then
      echo "Could not fetch committed head number (got: '${HEAD}')" >&2
@@ -35,17 +25,15 @@ fi
 FROM=$((HEAD - 1))
 echo "Range: from block_number ${FROM} to pre_confirmed (committed head ${HEAD})"
 
-rpc_call \
-'{
-        "id": 1,
-        "jsonrpc": "2.0",
-        "method": "starknet_getEvents",
-        "params": {
-                "filter": {
-                        "from_block": {"block_number": '"${FROM}"'},
-                        "to_block": "pre_confirmed",
-                        "chunk_size": 100
-                }
-        }
-}' \
-"${RPC}"
+rpc_call '{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "starknet_getEvents",
+  "params": {
+    "filter": {
+      "from_block": {"block_number": '"${FROM}"'},
+      "to_block": "pre_confirmed",
+      "chunk_size": 100
+    }
+  }
+}'

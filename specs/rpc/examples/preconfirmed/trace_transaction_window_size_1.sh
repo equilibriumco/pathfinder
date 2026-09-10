@@ -1,4 +1,9 @@
 #! /usr/bin/env bash
+
+# provides rpc_call function, custom endpoint can be set with RPC env var
+# shellcheck source=common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 set -euo pipefail
 
 # starknet_traceTransaction for a tx in a depth-1 pre_confirmed window.
@@ -11,28 +16,12 @@ set -euo pipefail
 # and has at least one tx, then trace that tx. Best-effort: state may shift
 # between the check and the trace call.
 
-# Override with RPC=<url> to target a different node.
-RPC="${RPC:-http://127.0.0.1:9546/rpc/v0_10}"
-
-function rpc_call() {
-     printf "Request:\n${1}\nReply:\n"
-     curl -s -X POST \
-          -H 'Content-Type: application/json' \
-          -d "${1}" \
-          ${2}
-     printf "\n\n"
-}
-
 committed_head() {
-     curl -s -X POST -H 'Content-Type: application/json' \
-          -d '{"id": 1, "jsonrpc": "2.0", "method": "starknet_blockNumber"}' \
-          "${RPC}" | jq -r '.result'
+     rpc_call_raw '{"id": 1, "jsonrpc": "2.0", "method": "starknet_blockNumber"}' | jq -r '.result'
 }
 
 pre_confirmed_block() {
-     curl -s -X POST -H 'Content-Type: application/json' \
-          -d '{"id": 1, "jsonrpc": "2.0", "method": "starknet_getBlockWithTxHashes", "params": {"block_id": "pre_confirmed"}}' \
-          "${RPC}"
+     rpc_call_raw '{"id": 1, "jsonrpc": "2.0", "method": "starknet_getBlockWithTxHashes", "params": {"block_id": "pre_confirmed"}}'
 }
 
 # Wait for a depth-1 tip that carries at least one transaction.
@@ -56,11 +45,9 @@ if [ -z "${TX}" ]; then
 fi
 echo "pre_confirmed tip ${T} is committed + 1; tracing tx ${TX} locally"
 
-rpc_call \
-'{
-        "id": 1,
-        "jsonrpc": "2.0",
-        "method": "starknet_traceTransaction",
-        "params": {"transaction_hash": "'"${TX}"'"}
-}' \
-"${RPC}"
+rpc_call '{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "starknet_traceTransaction",
+  "params": {"transaction_hash": "'"${TX}"'"}
+}'

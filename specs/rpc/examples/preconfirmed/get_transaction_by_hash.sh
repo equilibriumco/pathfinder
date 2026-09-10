@@ -1,4 +1,9 @@
 #! /usr/bin/env bash
+
+# provides rpc_call function, custom endpoint can be set with RPC env var
+# shellcheck source=common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 set -euo pipefail
 
 # starknet_getTransactionByHash for a pre_confirmed transaction.
@@ -12,23 +17,8 @@ set -euo pipefail
 # be committed. It still resolves (getTransactionByHash finds committed txs too),
 # the pre_confirmed lookup path is what we exercise.
 
-# Override with RPC=<url> to target a different node.
-RPC="${RPC:-http://127.0.0.1:9546/rpc/v0_10}"
-
-function rpc_call() {
-     printf "Request:\n${1}\nReply:\n"
-     curl -s -X POST \
-          -H 'Content-Type: application/json' \
-          -d "${1}" \
-          ${2}
-     printf "\n\n"
-}
-
 # Last transaction hash in the current pre_confirmed block.
-TX=$(curl -s -X POST \
-     -H 'Content-Type: application/json' \
-     -d '{"id": 1, "jsonrpc": "2.0", "method": "starknet_getBlockWithTxHashes", "params": {"block_id": "pre_confirmed"}}' \
-     "${RPC}" | jq -r '.result.transactions[-1] // empty')
+TX=$(rpc_call_raw '{"id": 1, "jsonrpc": "2.0", "method": "starknet_getBlockWithTxHashes", "params": {"block_id": "pre_confirmed"}}' | jq -r '.result.transactions[-1] // empty')
 
 if [ -z "${TX}" ]; then
      echo "The pre_confirmed block currently has no transactions; re-run when it does." >&2
@@ -36,11 +26,9 @@ if [ -z "${TX}" ]; then
 fi
 echo "Using pre_confirmed transaction: ${TX}"
 
-rpc_call \
-'{
-        "id": 1,
-        "jsonrpc": "2.0",
-        "method": "starknet_getTransactionByHash",
-        "params": {"transaction_hash": "'"${TX}"'"}
-}' \
-"${RPC}"
+rpc_call '{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "starknet_getTransactionByHash",
+  "params": {"transaction_hash": "'"${TX}"'"}
+}'

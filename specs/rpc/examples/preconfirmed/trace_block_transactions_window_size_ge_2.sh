@@ -1,4 +1,9 @@
 #! /usr/bin/env bash
+
+# provides rpc_call function, custom endpoint can be set with RPC env var
+# shellcheck source=common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 set -euo pipefail
 
 # starknet_traceBlockTransactions against the pre_confirmed block, deep-window
@@ -14,28 +19,12 @@ set -euo pipefail
 # committed head by >= 2 and then trace. Best-effort: the depth may change
 # between the check and the trace call.
 
-# Override with RPC=<url> to target a different node.
-RPC="${RPC:-http://127.0.0.1:9546/rpc/v0_10}"
-
-function rpc_call() {
-     printf "Request:\n${1}\nReply:\n"
-     curl -s -X POST \
-          -H 'Content-Type: application/json' \
-          -d "${1}" \
-          ${2}
-     printf "\n\n"
-}
-
 committed_head() {
-     curl -s -X POST -H 'Content-Type: application/json' \
-          -d '{"id": 1, "jsonrpc": "2.0", "method": "starknet_blockNumber"}' \
-          "${RPC}" | jq -r '.result'
+     rpc_call_raw '{"id": 1, "jsonrpc": "2.0", "method": "starknet_blockNumber"}' | jq -r '.result'
 }
 
 pre_confirmed_tip() {
-     curl -s -X POST -H 'Content-Type: application/json' \
-          -d '{"id": 1, "jsonrpc": "2.0", "method": "starknet_getBlockWithTxHashes", "params": {"block_id": "pre_confirmed"}}' \
-          "${RPC}" | jq -r '.result.block_number'
+     rpc_call_raw '{"id": 1, "jsonrpc": "2.0", "method": "starknet_getBlockWithTxHashes", "params": {"block_id": "pre_confirmed"}}' | jq -r '.result.block_number'
 }
 
 # Wait for the tip to lead the committed head by at least two.
@@ -57,11 +46,9 @@ if [ -z "${DEPTH}" ] || [ "${DEPTH}" -lt 2 ]; then
 fi
 echo "pre_confirmed tip ${T} is committed + ${DEPTH} (committed ${C}); tracing on committed + parents overlay"
 
-rpc_call \
-'{
-        "id": 1,
-        "jsonrpc": "2.0",
-        "method": "starknet_traceBlockTransactions",
-        "params": {"block_id": "pre_confirmed"}
-}' \
-"${RPC}"
+rpc_call '{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "starknet_traceBlockTransactions",
+  "params": {"block_id": "pre_confirmed"}
+}'
