@@ -5,9 +5,7 @@ set -euo pipefail
 #
 # When the pre_confirmed tip is the immediate child of the committed head
 # (tip == committed + 1), a tx in the tip is executed LOCALLY: its block is
-# committed + 1, whose parent state is the committed head in the DB. This is the
-# only case trace_transaction runs locally; anything deeper falls back to the
-# gateway.
+# committed + 1, whose parent state is the committed head in the DB.
 #
 # The window depth isn't controllable, so we poll until the tip is committed + 1
 # and has at least one tx, then trace that tx. Best-effort: state may shift
