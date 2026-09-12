@@ -7,7 +7,7 @@
 A [Starknet](https://www.starknet.io) full node giving you a safe view into Starknet.
 
 For detailed instructions on how to install, run and use Pathfinder please check our
-[documentation site](https://equilibriumco.github.io/pathfinder/).
+[documentation site](https://docs.swmansion.com/pathfinder/).
 
 ## License
 
